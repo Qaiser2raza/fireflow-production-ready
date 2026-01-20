@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Menu Management Hub - Detailed View</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#0d59f2",
+                        "cyber-gold": "#FFD700",
+                        "slate-black": "#020617",
+                        "background-light": "#f5f6f8",
+                        "background-dark": "#020617",
+                    },
+                    fontFamily: {
+                        "display": ["Space Grotesk", "sans-serif"],
+                        "urdu": ["Noto Sans Arabic", "sans-serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                },
+            },
+        }
+    </script>
+<style type="text/tailwindcss">
+        body {
+            font-family: "Space Grotesk", sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .custom-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .neon-glow {
+            box-shadow: 0 0 15px rgba(13, 89, 242, 0.4);
+        }
+        .gold-glow {
+            text-shadow: 0 0 8px rgba(255, 215, 0, 0.3);
+        }
+        .neon-tag {
+            @apply border border-primary/40 text-[9px] px-1.5 py-0.5 rounded text-primary uppercase font-bold;
+            box-shadow: inset 0 0 4px rgba(13, 89, 242, 0.2);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-slate-black text-white min-h-screen">
+<header class="sticky top-0 z-30 bg-slate-black/80 backdrop-blur-md border-b border-slate-800">
+<div class="flex items-center justify-between px-4 py-3">
+<div class="flex items-center gap-3">
+<div class="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+<span class="material-symbols-outlined">dashboard_customize</span>
+</div>
+<div>
+<h1 class="text-lg font-bold leading-none tracking-tight">Menu Hub</h1>
+<p class="text-[10px] uppercase tracking-widest text-primary font-bold">Mission Control</p>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<button class="p-2 text-slate-500">
+<span class="material-symbols-outlined">sync</span>
+</button>
+<div class="size-8 rounded-full bg-slate-800 overflow-hidden border border-slate-700">
+<img alt="CEO" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDd09qpNektWViChRhqdRsfMcNMLi283HPDZVPKIY31pipASHRtxuTtxcoKSjYbi7MR_RvYYBnbWHdovDMBoSfJC0QbxsyG-zbZ3DA0FmaReUFrLBiZyqBI9N0fNjIpgMhVD-5MxUiBentUFC0kyQMjud8yo7x5STzYojZH5ZXpjwyZxFctGJdAyVQjeqQQ_2y1IvLjnMPpmgojMlEfs6fVo12Ga1yznbhXYBdayWM3Za6-8Ou5k_bY6S0LvP68CgQgGHQ5woAMr7U"/>
+</div>
+</div>
+</div>
+</header>
+<main class="pb-24">
+<div class="px-4 py-4 flex gap-2">
+<div class="relative flex-grow group">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">search</span>
+<input class="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 text-xs focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-slate-500" placeholder="Search item..." type="text"/>
+</div>
+<button class="flex items-center justify-center bg-slate-900 border border-slate-800 rounded-xl px-3 text-slate-400">
+<span class="material-symbols-outlined text-xl">filter_list</span>
+</button>
+</div>
+<div class="flex gap-2 px-4 pb-4 overflow-x-auto custom-scrollbar">
+<button class="px-5 py-2 rounded-full bg-primary text-white text-xs font-bold whitespace-nowrap">ALL UNITS</button>
+<button class="px-5 py-2 rounded-full bg-slate-900 border border-slate-800 text-xs font-medium whitespace-nowrap">KITCHEN</button>
+<button class="px-5 py-2 rounded-full bg-slate-900 border border-slate-800 text-xs font-medium whitespace-nowrap">BBQ</button>
+<button class="px-5 py-2 rounded-full bg-slate-900 border border-slate-800 text-xs font-medium whitespace-nowrap">MOCKTAILS</button>
+<button class="px-5 py-2 rounded-full bg-slate-900 border border-slate-800 text-xs font-medium whitespace-nowrap">DESSERTS</button>
+</div>
+<div class="grid grid-cols-2 gap-3 px-4">
+<div class="relative group bg-slate-900 rounded-xl border border-slate-800 overflow-hidden flex flex-col">
+<div class="relative h-28 w-full overflow-hidden">
+<img alt="Chicken Karahi" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAjOSXZI7T8GU1_q84B8A-XEWfX_j563M4xX8tdMNpWvJlhXbYnR24zr1rlNd9TzdW0iizsi6HD72LvlCDjW2ff6EAazko9RbD7ump-9PgMO3y4XWhqxgozZVEh7h1IEk_wld-jj9SpFenOeP6OwkCjM_HIToxaSeVP5Nlp-UjsWOiHtQIA_HpATzb7XYaKGwJmySB1jAOH-zc17nevwOPUQ0-UfWoTfE7vb58DWWJCO5RPnebmsLUMKTl1Sxtgh98uVcFY-qK43T0"/>
+<div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent"></div>
+<div class="absolute top-2 right-2">
+<span class="material-symbols-outlined text-cyber-gold text-lg fill-1">restaurant</span>
+</div>
+</div>
+<div class="p-2.5 flex flex-col flex-grow">
+<div class="flex gap-1 mb-1.5 flex-wrap">
+<span class="neon-tag">KITCHEN</span>
+<span class="neon-tag">MAIN</span>
+</div>
+<h3 class="text-xs font-bold text-cyber-gold gold-glow leading-tight">
+                    Chicken Karahi / <span class="font-urdu">چکن کڑاہی</span>
+</h3>
+<div class="mt-2 flex items-center justify-between">
+<div class="flex flex-col">
+<span class="text-[10px] text-slate-400 line-through decoration-slate-600">C: $12.50</span>
+<span class="text-sm font-bold text-white tracking-tight">$24.00</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer scale-90 origin-right">
+<input checked="" class="sr-only peer" type="checkbox"/>
+<div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary neon-glow"></div>
+</label>
+</div>
+<div class="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between">
+<span class="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Stock: 15/50</span>
+<span class="material-symbols-outlined text-[14px] text-primary" title="Roti Logic Linked">groups</span>
+</div>
+</div>
+</div>
+<div class="relative group bg-slate-900 rounded-xl border border-slate-800 overflow-hidden flex flex-col">
+<div class="relative h-28 w-full overflow-hidden">
+<img alt="Seekh Kebab" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAICXsmL5rh20G337K3Gx5Drqgf7Gl2s8JJJWblxWDtaVPcExqlnVXM-3bQi5BSkVG3aVJXyN-ZRXhubhSIpYaqsmhkCn7YDGgCg1QpAVBdU67uOBtIOTVrClEYn4GlU0uV-UCRUQ6FDHz-4_VQIQb3HdOWDMsqx7Bga26I9YzMeYNGmegxbIb6uQ8-7S0luObN2QCkzcRZI47IEcEsykqefNnqBc_8ZgVDJ1GT9Fhv8rfPATVc_M9OmP-NBUupaNRWB8Y9eUePqgo"/>
+<div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent"></div>
+</div>
+<div class="p-2.5 flex flex-col flex-grow">
+<div class="flex gap-1 mb-1.5 flex-wrap">
+<span class="neon-tag">BBQ</span>
+<span class="neon-tag">APPETIZER</span>
+</div>
+<h3 class="text-xs font-bold text-cyber-gold gold-glow leading-tight">
+                    Seekh Kebab / <span class="font-urdu">سیخ کباب</span>
+</h3>
+<div class="mt-2 flex items-center justify-between">
+<div class="flex flex-col">
+<span class="text-[10px] text-slate-400 line-through decoration-slate-600">C: $4.20</span>
+<span class="text-sm font-bold text-white tracking-tight">$12.00</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer scale-90 origin-right">
+<input checked="" class="sr-only peer" type="checkbox"/>
+<div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary neon-glow"></div>
+</label>
+</div>
+<div class="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between">
+<span class="text-[9px] font-bold text-red-400 uppercase tracking-tighter">Low: 4/100</span>
+<span class="material-symbols-outlined text-[14px] text-primary" title="Roti Logic Linked">groups</span>
+</div>
+</div>
+</div>
+<div class="relative group bg-slate-900 rounded-xl border border-slate-800 overflow-hidden flex flex-col">
+<div class="relative h-28 w-full overflow-hidden">
+<img alt="Garlic Naan" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBfiLD9_kSIQMAERt1tuIpwAKpeeIcVm7Sf4Kys4EcFNoJhtW854-lcSkvNqC5l418uIaaKOmZ4FaxC_fsFw7RaLw34ZauDC59YwOdi9OpB4g-m3eJT775XXTR2jOk1RB-I7oWHhIrmQCHQrC5a-nH9vqLVpeMXeueCkgvQwXpTg1JvEuwfWFvI1w-nwRBI_rS5tcDFxcxUO27iYZVMFGbcCTThiX6J1ZKX1dZaS7O7HTzfKdoupALqckTAbiPg7VcMF-PLT4FboF8"/>
+<div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent"></div>
+</div>
+<div class="p-2.5 flex flex-col flex-grow">
+<div class="flex gap-1 mb-1.5 flex-wrap">
+<span class="neon-tag">TANDOOR</span>
+<span class="neon-tag">BREAD</span>
+</div>
+<h3 class="text-xs font-bold text-cyber-gold gold-glow leading-tight">
+                    Garlic Naan / <span class="font-urdu">لہسن نان</span>
+</h3>
+<div class="mt-2 flex items-center justify-between">
+<div class="flex flex-col">
+<span class="text-[10px] text-slate-400 line-through decoration-slate-600">C: $0.30</span>
+<span class="text-sm font-bold text-white tracking-tight">$3.50</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer scale-90 origin-right">
+<input checked="" class="sr-only peer" type="checkbox"/>
+<div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary neon-glow"></div>
+</label>
+</div>
+<div class="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between">
+<span class="text-[9px] font-bold text-slate-500 uppercase tracking-tighter">No Stock Track</span>
+<span class="material-symbols-outlined text-[14px] text-primary fill-1" title="Guest Linked">groups</span>
+</div>
+</div>
+</div>
+<div class="relative group bg-slate-900 rounded-xl border border-slate-800 overflow-hidden flex flex-col">
+<div class="relative h-28 w-full overflow-hidden">
+<img alt="Mint Margarita" class="w-full h-full object-cover grayscale-[0.5]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCocESxOHkqGV6jBJxFMRDXO4wMFhExD9cqtcPziV7Wpwx0jk-kL_r_V2IY1OV_nEXlG3c45sKYwzuroZ7iFOg9N__6W8SkZ3C9Upbk2x02xouZFPOL2UVEgQr-sWfyHIRttMXKuZ3aSFDn7OlmqB42X1ewUaBlTYXAi9khKDhe1GIKbatNsQza2UXRdkTrUHr6qG_XfEHCwSzXypNrle2oqyGOTmfIN9fN1pqmRdm5rxuLIoSUUafiGNjYQj3At5k8s0asNV8rwcI"/>
+<div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent"></div>
+</div>
+<div class="p-2.5 flex flex-col flex-grow">
+<div class="flex gap-1 mb-1.5 flex-wrap">
+<span class="neon-tag">BAR</span>
+<span class="neon-tag">COLD</span>
+</div>
+<h3 class="text-xs font-bold text-cyber-gold gold-glow leading-tight">
+                    Mint Soda / <span class="font-urdu">پودینہ سوڈا</span>
+</h3>
+<div class="mt-2 flex items-center justify-between">
+<div class="flex flex-col">
+<span class="text-[10px] text-slate-400 line-through decoration-slate-600">C: $1.80</span>
+<span class="text-sm font-bold text-white tracking-tight">$6.50</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer scale-90 origin-right">
+<input class="sr-only peer" type="checkbox"/>
+<div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between">
+<span class="text-[9px] font-bold text-slate-500 uppercase tracking-tighter italic">Out of Season</span>
+<span class="material-symbols-outlined text-[14px] text-slate-600">groups</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+<button class="fixed bottom-24 right-6 z-50 flex items-center justify-center size-14 rounded-full bg-primary text-white shadow-lg neon-glow active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-3xl">add</span>
+</button>
+<nav class="fixed bottom-0 left-0 right-0 z-30 bg-slate-black/80 backdrop-blur-lg border-t border-slate-800 px-6 py-3 flex justify-between items-center">
+<a class="flex flex-col items-center gap-1 text-primary" href="#">
+<span class="material-symbols-outlined">restaurant_menu</span>
+<span class="text-[10px] font-bold">MENU</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-slate-500" href="#">
+<span class="material-symbols-outlined">monitoring</span>
+<span class="text-[10px] font-bold">MARGINS</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-slate-500" href="#">
+<span class="material-symbols-outlined">inventory</span>
+<span class="text-[10px] font-bold">STOCK</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-slate-500" href="#">
+<span class="material-symbols-outlined">tune</span>
+<span class="text-[10px] font-bold">STATIONS</span>
+</a>
+</nav>
+<div class="pointer-events-none fixed inset-0 z-10 opacity-[0.05]" style="background-image: radial-gradient(#0d59f2 0.5px, transparent 0.5px); background-size: 20px 20px;"></div>
+
+</body></html>

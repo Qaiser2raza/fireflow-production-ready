@@ -1,0 +1,100 @@
+Project file tree for fireflow-fixed (generated 2025-12-24)
+
+App.tsx
+index.tsx
+index.html
+index.css
+local-client.ts
+businessLogic.ts
+constants.ts
+types.ts
+RestaurantContext.tsx
+metadata.json
+openapi.json
+openapi_to_sql.cjs
+schema_output.json
+schema_output.txt
+verify_output.txt
+verify_pk.txt
+staff_description.json
+supabase_schema.sql
+supabase.ts
+server.cjs
+electron-main.cjs
+migrate.cjs
+describe_staff.cjs
+check_owner_id.cjs
+check_restaurants_pk.cjs
+check_schema.cjs
+check_staff_pk.cjs
+test_add_column.cjs
+backup_v2.sql
+backup_before_device_migration_manual.sql
+README_QUICK.md
+DEPLOYMENT_README.md
+DEPLOY_NETLIFY.md
+DEPLOY_VERCEL.md
+PRE_DEPLOYMENT_CHECKLIST.md
+TROUBLESHOOTING.md
+FIXES_APPLIED.md
+vercel.json
+netlify.toml
+package.json
+package-lock.json
+tsconfig.json
+vite.config.ts
+.env.example
+.gitignore
+
+components/
+  AURAAssistant.tsx
+  AccountingView.tsx
+  DashboardView.tsx
+  DeviceManagementView.tsx
+  DispatchView.tsx
+  DriverView.tsx
+  FloorPlanView.tsx
+  KDSView.tsx
+  LoginView.tsx
+  MenuView.tsx
+  ActivityLog.tsx
+  PaymentSubmissionView.tsx
+  PaymentView.tsx
+  POSView.tsx
+  QRCodePairing.tsx
+  RegistrationView.tsx
+  RiderManagementView.tsx
+  SettingsView.tsx
+  StaffView.tsx
+  SubscriptionGuard.tsx
+  SuperAdminView.tsx
+  TableManagementView.tsx
+  TransactionsView.tsx
+  menu/
+    CategoryFilter.tsx
+    MenuGrid.tsx
+    MenuItemCard.tsx
+  order/
+    OrderCard.tsx
+    OrderItemsList.tsx
+    OrderStatusBadge.tsx
+    OrderSummary.tsx
+  ui/
+    Badge.tsx
+    Button.tsx
+    Card.tsx
+    Input.tsx
+    Modal.tsx
+
+supabase/
+  migrations/
+    001_add_multi_tenancy.sql
+    001_pre_migration_fix_primary_keys.sql
+    002_device_management.sql
+    002_device_management_fixed.sql
+    003_verification_queries.sql
+    004_device_notifications_trigger.sql
+    rollback_002_device_management.sql
+    safe_rollback_device_management.sql
+
+End of tree

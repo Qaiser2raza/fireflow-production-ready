@@ -1,0 +1,16 @@
+[
+  {
+    "id": "2fcbfeea-f4f4-4af8-a30b-b1fc3f6b348b",
+    "restaurant_id": "0ae11446-bb62-402c-8f58-607a6f2493f2",
+    "name": "Main Hall",
+    "prefix": "H",
+    "priority": 0
+  },
+  {
+    "id": "17c79806-58cb-4521-8cef-58588a858f51",
+    "restaurant_id": "0ae11446-bb62-402c-8f58-607a6f2493f2",
+    "name": "F Hall",
+    "prefix": "F",
+    "priority": 1
+  }
+]

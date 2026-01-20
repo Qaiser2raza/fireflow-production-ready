@@ -1,0 +1,14 @@
+[
+  "delivery_zones",
+  "expenses",
+  "menu_items",
+  "orders",
+  "reservations",
+  "restaurants",
+  "rider_settlements",
+  "sections",
+  "staff",
+  "subscription_payments",
+  "tables",
+  "transactions"
+]

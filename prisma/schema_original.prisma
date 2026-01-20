@@ -1,0 +1,313 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- LOGS & SYSTEM ---
+model audit_logs {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  staff_id      String?      @db.Uuid
+  action_type   String       @db.VarChar(50)
+  entity_type   String       @db.VarChar(50)
+  entity_id     String?      @db.Uuid
+  details       Json?
+  ip_address    String?      @db.Inet
+  created_at    DateTime?    @default(now()) @db.Timestamp(6)
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  staff         staff?       @relation(fields: [staff_id], references: [id], onUpdate: NoAction)
+}
+
+model installation_logs {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  installer_id String?   @db.Uuid
+  device_id    String?   @db.VarChar(100)
+  status       String    @db.VarChar(50)
+  notes        String?
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  staff        staff?    @relation(fields: [installer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model license_keys {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String?      @db.Uuid
+  license_key     String       @unique @db.VarChar(100)
+  is_active       Boolean?     @default(false)
+  activated_at    DateTime?    @db.Timestamp(6)
+  expires_at      DateTime?    @db.Timestamp(6)
+  license_type    String?      @default("STANDARD") @db.VarChar(50)
+  device_limit    Int?         @default(1)
+  last_checked_at DateTime?    @db.Timestamp(6)
+  restaurants     restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model pairing_codes {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  pairing_code  String       @unique @db.VarChar(10)
+  created_at    DateTime?    @default(now()) @db.Timestamp(6)
+  expires_at    DateTime?    @default(dbgenerated("(now() + '00:15:00'::interval)")) @db.Timestamp(6)
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model security_events {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String?   @db.Uuid
+  event_type      String    @db.VarChar(50)
+  severity        String    @db.VarChar(20)
+  description     String?
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  is_resolved     Boolean?  @default(false)
+  acknowledged_by String?   @db.Uuid
+  alert_sent_at   DateTime? @db.Timestamp(6)
+  staff           staff?    @relation(fields: [acknowledged_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// --- CORE BUSINESS LOGIC ---
+
+model menu_items {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?   @db.Uuid
+  name          String    @db.VarChar(100)
+  name_urdu     String?   @db.VarChar(100)
+  description   String?
+  price         Decimal   @db.Decimal(10, 2)
+  category      String    @db.VarChar(50)
+  image_url     String?
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+
+  is_available Boolean? @default(true)
+  station      String?  @default("KITCHEN") @db.VarChar(20)
+  track_stock  Boolean? @default(false)
+  daily_stock  Int?     @default(0)
+
+  restaurants restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model sections {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  name          String       @db.VarChar(50)
+  prefix        String?      @default("T") @db.VarChar(10)
+  priority      Int?         @default(0)
+  type          String       @default("DINING") @db.VarChar(20)
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tables        tables[]
+}
+
+model tables {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String   @db.Uuid
+  name          String
+  section_id    String?  @db.Uuid
+  capacity      Int      @default(4)
+  status        String   @default("AVAILABLE")
+  x_position    Int?
+  y_position    Int?
+  shape         String?
+  merge_id      String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @default(now()) @updatedAt
+
+  orders     orders[]    @relation("TableOrders")
+  restaurant restaurants @relation(fields: [restaurant_id], references: [id])
+  section    sections?   @relation(fields: [section_id], references: [id])
+
+  @@index([restaurant_id])
+  @@index([section_id])
+}
+
+model orders {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String   @db.Uuid
+  status             String
+  type               String
+  total              Decimal  @default(0) @db.Decimal(10, 2)
+  items              Json?
+  table_id           String?  @db.Uuid
+  guest_count        Int?
+  customer_name      String?
+  customer_phone     String?
+  delivery_address   String?
+  assigned_waiter_id String?  @db.Uuid
+  assigned_driver_id String?  @db.Uuid
+  created_at         DateTime @default(now())
+  updated_at         DateTime @default(now()) @updatedAt
+
+  // Financial fields
+  service_charge Decimal? @default(0) @db.Decimal(10, 2)
+  delivery_fee   Decimal? @default(0) @db.Decimal(10, 2)
+  tax            Decimal? @default(0) @db.Decimal(10, 2)
+  discount       Decimal? @default(0) @db.Decimal(10, 2)
+  breakdown      Json?
+
+  // Cancellation fields
+  cancelled_at        DateTime?
+  cancelled_by        String?
+  cancellation_reason String?
+  cancellation_notes  String?
+
+  // Void fields
+  voided_at             DateTime?
+  voided_by             String?
+  void_reason           String?
+  void_notes            String?
+  refund_transaction_id String?
+
+  // Rider cash tracking
+  float_given           Decimal? @default(0) @db.Decimal(10, 2)
+  expected_return       Decimal? @default(0) @db.Decimal(10, 2)
+  is_settled_with_rider Boolean? @default(false)
+
+  // Relations
+  restaurant      restaurants @relation("RestaurantOrders", fields: [restaurant_id], references: [id])
+  table           tables?     @relation("TableOrders", fields: [table_id], references: [id])
+  assigned_waiter staff?      @relation("WaiterOrders", fields: [assigned_waiter_id], references: [id])
+  assigned_driver staff?      @relation("DriverOrders", fields: [assigned_driver_id], references: [id])
+
+  @@index([restaurant_id])
+  @@index([status])
+  @@index([type])
+  @@index([assigned_driver_id])
+  @@index([table_id])
+  @@index([assigned_waiter_id])
+}
+
+model transactions {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String?      @db.Uuid
+  order_id        String?      @db.Uuid
+  amount          Decimal      @db.Decimal(10, 2)
+  payment_method  String       @db.VarChar(50)
+  status          String       @db.VarChar(20)
+  created_at      DateTime?    @default(now()) @db.Timestamp(6)
+  transaction_ref String?      @db.VarChar(100)
+  restaurants     restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model expenses {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  description   String       @db.VarChar(100)
+  amount        Decimal      @db.Decimal(10, 2)
+  category      String       @db.VarChar(50)
+  date          DateTime?    @default(now()) @db.Timestamp(6)
+  staff_id      String?      @db.Uuid
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  staff         staff?       @relation(fields: [staff_id], references: [id], onUpdate: NoAction)
+}
+
+model reservations {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String?      @db.Uuid
+  customer_name    String       @db.VarChar(100)
+  customer_phone   String?      @db.VarChar(20)
+  table_id         String?      @db.VarChar(50)
+  reservation_time DateTime     @db.Timestamp(6)
+  guests           Int?         @default(2)
+  status           String?      @default("PENDING") @db.VarChar(20)
+  created_at       DateTime?    @default(now()) @db.Timestamp(6)
+  restaurants      restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+// --- STAFF & WALLET TRACKING ---
+
+model staff_wallet_logs {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String   @db.Uuid
+  staff_id      String   @db.Uuid
+  amount        Decimal  @db.Decimal(10, 2)
+  action_type   String
+  reference_id  String?  @db.Uuid
+  notes         String?
+  created_by    String?  @db.Uuid
+  created_at    DateTime @default(now())
+
+  staff staff @relation("StaffWalletLogs", fields: [staff_id], references: [id], onDelete: Cascade)
+}
+
+model rider_settlements {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String    @db.Uuid
+  driver_id          String    @db.Uuid
+  start_time         DateTime
+  end_time           DateTime?
+  amount_collected   Decimal   @db.Decimal(10, 2)
+  amount_expected    Decimal   @db.Decimal(10, 2)
+  amount_handed_over Decimal   @db.Decimal(10, 2)
+  shortage           Decimal   @default(0) @db.Decimal(10, 2)
+  status             String    @default("COMPLETED")
+  processed_by       String?   @db.Uuid
+  notes              String?
+  created_at         DateTime  @default(now())
+
+  driver staff @relation("RiderSettlements", fields: [driver_id], references: [id])
+}
+
+// --- STAFF & RESTAURANT ---
+
+model staff {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String    @db.Uuid
+  name             String
+  role             String
+  pin              String
+  image            String?
+  status           String?   @default("active")
+  active_tables    Int?      @default(0)
+  cash_in_hand     Decimal?  @default(0) @db.Decimal(10, 2)
+  last_login       DateTime?
+  created_at       DateTime  @default(now())
+  total_deliveries Int?      @default(0)
+
+  // Relations
+  waiter_orders     orders[]            @relation("WaiterOrders")
+  driver_orders     orders[]            @relation("DriverOrders")
+  audit_logs        audit_logs[]
+  installation_logs installation_logs[]
+  security_events   security_events[]
+  expenses          expenses[]
+  staff_wallet_logs staff_wallet_logs[] @relation("StaffWalletLogs")
+  rider_settlements rider_settlements[] @relation("RiderSettlements")
+
+  restaurant restaurants @relation(fields: [restaurant_id], references: [id])
+
+  @@index([restaurant_id])
+  @@index([pin])
+}
+
+model restaurants {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  slug                String?  @unique
+  owner_id            String?
+  phone               String?
+  address             String?
+  currency            String?  @default("PKR")
+  timezone            String?  @default("Asia/Karachi")
+  is_active           Boolean  @default(true)
+  subscription_status String   @default("trial")
+  subscription_plan   String   @default("BASIC")
+  created_at          DateTime @default(now())
+  updated_at          DateTime @default(now()) @updatedAt
+  monthly_fee         Decimal? @db.Decimal(10, 2)
+
+  // Relations
+  orders        orders[]        @relation("RestaurantOrders")
+  tables        tables[]
+  staff         staff[]
+  sections      sections[]
+  menu_items    menu_items[]
+  audit_logs    audit_logs[]
+  license_keys  license_keys[]
+  pairing_codes pairing_codes[]
+  transactions  transactions[]
+  expenses      expenses[]
+  reservations  reservations[]
+
+  @@index([slug])
+}

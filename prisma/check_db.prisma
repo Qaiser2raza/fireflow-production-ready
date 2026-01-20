@@ -1,0 +1,282 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model audit_logs {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  staff_id      String?      @db.Uuid
+  action_type   String       @db.VarChar(50)
+  entity_type   String       @db.VarChar(50)
+  entity_id     String?      @db.Uuid
+  details       Json?
+  ip_address    String?      @db.Inet
+  created_at    DateTime?    @default(now()) @db.Timestamp(6)
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  staff         staff?       @relation(fields: [staff_id], references: [id], onUpdate: NoAction)
+}
+
+model expenses {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  description   String       @db.VarChar(100)
+  amount        Decimal      @db.Decimal(10, 2)
+  category      String       @db.VarChar(50)
+  date          DateTime?    @default(now()) @db.Timestamp(6)
+  staff_id      String?      @db.Uuid
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  staff         staff?       @relation(fields: [staff_id], references: [id], onUpdate: NoAction)
+}
+
+model installation_logs {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  installer_id String?   @db.Uuid
+  device_id    String?   @db.VarChar(100)
+  status       String    @db.VarChar(50)
+  notes        String?
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  staff        staff?    @relation(fields: [installer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model license_keys {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String?      @db.Uuid
+  license_key     String       @unique @db.VarChar(100)
+  is_active       Boolean?     @default(false)
+  activated_at    DateTime?    @db.Timestamp(6)
+  expires_at      DateTime?    @db.Timestamp(6)
+  license_type    String?      @default("STANDARD") @db.VarChar(50)
+  device_limit    Int?         @default(1)
+  last_checked_at DateTime?    @db.Timestamp(6)
+  restaurants     restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model menu_items {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  name          String       @db.VarChar(100)
+  description   String?
+  price         Decimal      @db.Decimal(10, 2)
+  category      String       @db.VarChar(50)
+  is_available  Boolean?     @default(true)
+  image_url     String?
+  created_at    DateTime?    @default(now()) @db.Timestamp(6)
+  name_urdu     String?      @db.VarChar(100)
+  daily_stock   Int?         @default(0)
+  station       String?      @default("KITCHEN") @db.VarChar(20)
+  track_stock   Boolean?     @default(false)
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model orders {
+  restaurant_id                          String      @db.Uuid
+  table_id                               String?     @db.Uuid
+  status                                 String
+  total                                  Decimal     @default(0) @db.Decimal(10, 2)
+  items                                  Json?
+  created_at                             DateTime    @default(now())
+  updated_at                             DateTime    @default(now())
+  type                                   String
+  customer_name                          String?
+  delivery_address                       String?
+  customer_phone                         String?
+  assigned_driver_id                     String?     @db.Uuid
+  delivery_fee                           Decimal?    @default(0) @db.Decimal(10, 2)
+  assigned_waiter_id                     String?     @db.Uuid
+  breakdown                              Json?
+  cancellation_notes                     String?
+  cancellation_reason                    String?
+  cancelled_at                           DateTime?
+  cancelled_by                           String?
+  discount                               Decimal?    @default(0) @db.Decimal(10, 2)
+  expected_return                        Decimal?    @default(0) @db.Decimal(10, 2)
+  float_given                            Decimal?    @default(0) @db.Decimal(10, 2)
+  guest_count                            Int?
+  is_settled_with_rider                  Boolean?    @default(false)
+  refund_transaction_id                  String?
+  service_charge                         Decimal?    @default(0) @db.Decimal(10, 2)
+  tax                                    Decimal?    @default(0) @db.Decimal(10, 2)
+  void_notes                             String?
+  void_reason                            String?
+  voided_at                              DateTime?
+  voided_by                              String?
+  id                                     String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  staff_orders_assigned_driver_idTostaff staff?      @relation("orders_assigned_driver_idTostaff", fields: [assigned_driver_id], references: [id])
+  staff_orders_assigned_waiter_idTostaff staff?      @relation("orders_assigned_waiter_idTostaff", fields: [assigned_waiter_id], references: [id])
+  restaurants                            restaurants @relation(fields: [restaurant_id], references: [id])
+  tables                                 tables?     @relation(fields: [table_id], references: [id])
+
+  @@index([assigned_driver_id])
+  @@index([assigned_waiter_id])
+  @@index([restaurant_id])
+  @@index([status])
+  @@index([table_id])
+  @@index([type])
+}
+
+model pairing_codes {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  pairing_code  String       @unique @db.VarChar(10)
+  created_at    DateTime?    @default(now()) @db.Timestamp(6)
+  expires_at    DateTime?    @default(dbgenerated("(now() + '00:15:00'::interval)")) @db.Timestamp(6)
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model reservations {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String?      @db.Uuid
+  customer_name    String       @db.VarChar(100)
+  customer_phone   String?      @db.VarChar(20)
+  table_id         String?      @db.VarChar(50)
+  reservation_time DateTime     @db.Timestamp(6)
+  guests           Int?         @default(2)
+  status           String?      @default("PENDING") @db.VarChar(20)
+  created_at       DateTime?    @default(now()) @db.Timestamp(6)
+  restaurants      restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model restaurants {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  slug                String?         @unique
+  phone               String?
+  address             String?
+  is_active           Boolean         @default(true)
+  created_at          DateTime        @default(now())
+  updated_at          DateTime        @default(now())
+  subscription_plan   String          @default("BASIC")
+  subscription_status String          @default("trial")
+  owner_id            String?
+  currency            String?         @default("PKR")
+  timezone            String?         @default("Asia/Karachi")
+  monthly_fee         Decimal?        @db.Decimal(10, 2)
+  audit_logs          audit_logs[]
+  expenses            expenses[]
+  license_keys        license_keys[]
+  menu_items          menu_items[]
+  orders              orders[]
+  pairing_codes       pairing_codes[]
+  reservations        reservations[]
+  sections            sections[]
+  staff               staff[]
+  tables              tables[]
+  transactions        transactions[]
+
+  @@index([slug])
+}
+
+model rider_settlements {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String    @db.Uuid
+  driver_id          String    @db.Uuid
+  start_time         DateTime
+  end_time           DateTime?
+  amount_collected   Decimal   @db.Decimal(10, 2)
+  amount_expected    Decimal   @db.Decimal(10, 2)
+  amount_handed_over Decimal   @db.Decimal(10, 2)
+  shortage           Decimal   @default(0) @db.Decimal(10, 2)
+  status             String    @default("COMPLETED")
+  processed_by       String?   @db.Uuid
+  notes              String?
+  created_at         DateTime  @default(now())
+  staff              staff     @relation(fields: [driver_id], references: [id])
+}
+
+model sections {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String?      @db.Uuid
+  name          String       @db.VarChar(50)
+  priority      Int?         @default(0)
+  prefix        String?      @default("T") @db.VarChar(10)
+  type          String       @default("DINING") @db.VarChar(20)
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tables        tables[]
+}
+
+model security_events {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String?   @db.Uuid
+  event_type      String    @db.VarChar(50)
+  severity        String    @db.VarChar(20)
+  description     String?
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  is_resolved     Boolean?  @default(false)
+  acknowledged_by String?   @db.Uuid
+  alert_sent_at   DateTime? @db.Timestamp(6)
+  staff           staff?    @relation(fields: [acknowledged_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model staff {
+  id                                      String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id                           String              @db.Uuid
+  name                                    String
+  role                                    String
+  pin                                     String
+  image                                   String?
+  status                                  String?             @default("active")
+  active_tables                           Int?                @default(0)
+  cash_in_hand                            Decimal?            @default(0) @db.Decimal(10, 2)
+  total_deliveries                        Int?                @default(0)
+  last_login                              DateTime?
+  created_at                              DateTime            @default(now())
+  audit_logs                              audit_logs[]
+  expenses                                expenses[]
+  installation_logs                       installation_logs[]
+  orders_orders_assigned_driver_idTostaff orders[]            @relation("orders_assigned_driver_idTostaff")
+  orders_orders_assigned_waiter_idTostaff orders[]            @relation("orders_assigned_waiter_idTostaff")
+  rider_settlements                       rider_settlements[]
+  security_events                         security_events[]
+  restaurants                             restaurants         @relation(fields: [restaurant_id], references: [id])
+  staff_wallet_logs                       staff_wallet_logs[]
+
+  @@index([pin])
+  @@index([restaurant_id])
+}
+
+model staff_wallet_logs {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String   @db.Uuid
+  staff_id      String   @db.Uuid
+  amount        Decimal  @db.Decimal(10, 2)
+  action_type   String
+  reference_id  String?  @db.Uuid
+  notes         String?
+  created_by    String?  @db.Uuid
+  created_at    DateTime @default(now())
+  staff         staff    @relation(fields: [staff_id], references: [id], onDelete: Cascade)
+}
+
+model tables {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String      @db.Uuid
+  name          String
+  capacity      Int         @default(4)
+  status        String      @default("AVAILABLE")
+  section_id    String?     @db.Uuid
+  x_position    Int?
+  y_position    Int?
+  shape         String?
+  merge_id      String?
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @default(now())
+  orders        orders[]
+  restaurants   restaurants @relation(fields: [restaurant_id], references: [id])
+  sections      sections?   @relation(fields: [section_id], references: [id])
+
+  @@index([restaurant_id])
+  @@index([section_id])
+}
+
+model transactions {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String?      @db.Uuid
+  order_id        String?      @db.Uuid
+  amount          Decimal      @db.Decimal(10, 2)
+  payment_method  String       @db.VarChar(50)
+  status          String       @db.VarChar(20)
+  created_at      DateTime?    @default(now()) @db.Timestamp(6)
+  transaction_ref String?      @db.VarChar(100)
+  restaurants     restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}

@@ -1,0 +1,54 @@
+[
+  {
+    "column_name": "name",
+    "data_type": "text"
+  },
+  {
+    "column_name": "role",
+    "data_type": "text"
+  },
+  {
+    "column_name": "pin",
+    "data_type": "text"
+  },
+  {
+    "column_name": "active_tables",
+    "data_type": "integer"
+  },
+  {
+    "column_name": "restaurant_id",
+    "data_type": "uuid"
+  },
+  {
+    "column_name": "email",
+    "data_type": "text"
+  },
+  {
+    "column_name": "password",
+    "data_type": "text"
+  },
+  {
+    "column_name": "last_login",
+    "data_type": "text"
+  },
+  {
+    "column_name": "cash_in_hand",
+    "data_type": "integer"
+  },
+  {
+    "column_name": "total_deliveries",
+    "data_type": "integer"
+  },
+  {
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "column_name": "created_at",
+    "data_type": "text"
+  },
+  {
+    "column_name": "id",
+    "data_type": "uuid"
+  }
+]
