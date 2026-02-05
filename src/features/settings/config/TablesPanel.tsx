@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useAppContext } from '../../../client/App';
+import { useAppContext } from '../../../client/contexts/AppContext';
 import { Plus, Trash2, Edit2, Save, X, LayoutTemplate } from 'lucide-react';
 
 export const TablesPanel: React.FC = () => {

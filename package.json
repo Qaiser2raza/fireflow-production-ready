@@ -13,10 +13,12 @@
     "server": "node --import tsx src/api/server.ts",
     "electron": "cross-env NODE_ENV=production node scripts/launch-electron.js",
     "test:integration": "node ./scripts/integration/delivery-test.js",
-    "test:smoke": "node scripts/smoke-test.js",
     "electron:dev": "concurrently \"npm run dev\" \"cross-env NODE_ENV=development node scripts/launch-electron.js\"",
     "electron:build": "npm run build && electron-builder",
-    "migrate:pins": "tsx scripts/migrate-pins-to-bcrypt.ts"
+    "migrate:pins": "tsx scripts/migrate-pins-to-bcrypt.ts",
+    "db:seed": "prisma db seed",
+    "db:reset": "prisma db seed",
+    "db:reset-orders": "tsx scripts/reset_orders.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
@@ -35,8 +37,7 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-router-dom": "^7.11.0",
-    "socket.io": "^4.7.2",
-    "zod": "^4.3.5"
+    "socket.io": "^4.7.2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",

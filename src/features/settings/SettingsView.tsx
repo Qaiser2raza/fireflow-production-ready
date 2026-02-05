@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { useAppContext } from '../../client/App';
-import { Search, ToggleLeft, ToggleRight, DollarSign, Save, Edit2, AlertCircle, Database, RefreshCw, CheckCircle2, XCircle, Settings as SettingsIcon } from 'lucide-react';
+import { useAppContext } from '../../client/contexts/AppContext';
+import { Search, ToggleLeft, ToggleRight, Save, Edit2, AlertCircle, Database, RefreshCw, CheckCircle2, XCircle, Trash2, Settings as SettingsIcon } from 'lucide-react';
 import { OperationsPanel } from './config/OperationsPanel';
 
 import { ZonesPanel } from './config/ZonesPanel';
 import { TablesPanel } from './config/TablesPanel';
 import { VendorsPanel } from './config/VendorsPanel';
+import { FloorPlanConfigView } from './config/FloorPlanConfigView';
+import { StationsPanel } from './config/StationsPanel';
 
 const InventoryPanel: React.FC = () => {
   const { menuItems, toggleItemAvailability, updateItemPrice } = useAppContext();
@@ -109,9 +111,10 @@ const InventoryPanel: React.FC = () => {
 }
 
 export const SettingsView: React.FC = () => {
-  const { currentUser, seedDatabase, connectionStatus } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'OPERATIONS' | 'INVENTORY' | 'ZONES' | 'TABLES' | 'VENDORS'>('OPERATIONS');
+  const { currentUser, connectionStatus } = useAppContext();
+  const [activeTab, setActiveTab] = useState<'OPERATIONS' | 'INVENTORY' | 'ZONES' | 'STATIONS' | 'TABLES' | 'VENDORS' | 'FLOOR'>('OPERATIONS');
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [seedMessage, setSeedMessage] = useState<{ type: 'success' | 'error' | 'info', text: string } | null>(null);
 
   if (currentUser?.role !== 'MANAGER') {
@@ -133,7 +136,7 @@ export const SettingsView: React.FC = () => {
 
     setIsSeeding(true);
     setSeedMessage(null);
-    
+
     try {
       const response = await fetch('/api/system/seed-restaurant', {
         method: 'POST',
@@ -146,11 +149,11 @@ export const SettingsView: React.FC = () => {
       if (data.success) {
         setSeedMessage({
           type: 'success',
-          text: data.alreadySeeded 
-            ? '✅ Already seeded - skipped duplicate (safe & idempotent)' 
+          text: data.alreadySeeded
+            ? '✅ Already seeded - skipped duplicate (safe & idempotent)'
             : '✅ Sample data added successfully (safe & idempotent)'
         });
-        
+
         // Optional: Refresh data if needed
         // setTimeout(() => window.location.reload(), 2000);
       } else {
@@ -167,6 +170,45 @@ export const SettingsView: React.FC = () => {
     } finally {
       setIsSeeding(false);
       // Auto-clear message after 5 seconds
+      setTimeout(() => setSeedMessage(null), 5000);
+    }
+  };
+
+  const handleReset = async () => {
+    if (!window.confirm("FATAL ACTION: This will delete ALL orders, transactions, and expenses.\nThis cannot be undone. \n\nContinue?")) return;
+
+    if (!window.confirm("ARE YOU ABSOLUTELY SURE?\nTesting environment will be wiped clean.")) return;
+
+    setIsResetting(true);
+    setSeedMessage(null);
+
+    try {
+      const response = await fetch('/api/system/reset-environment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restaurantId: currentUser?.restaurant_id })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSeedMessage({
+          type: 'success',
+          text: '✅ Environment Wiped Clean'
+        });
+      } else {
+        setSeedMessage({
+          type: 'error',
+          text: `❌ Reset failed: ${data.error || 'Unknown error'}`
+        });
+      }
+    } catch (err: any) {
+      setSeedMessage({
+        type: 'error',
+        text: `❌ Network error: ${err.message}`
+      });
+    } finally {
+      setIsResetting(false);
       setTimeout(() => setSeedMessage(null), 5000);
     }
   };
@@ -192,11 +234,20 @@ export const SettingsView: React.FC = () => {
 
             <button
               onClick={handleSeed}
-              disabled={isSeeding}
+              disabled={isSeeding || isResetting}
               className="bg-blue-900/20 border border-blue-500/50 text-blue-400 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest hover:bg-blue-900/40 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
             >
               {isSeeding ? <RefreshCw className="animate-spin" size={16} /> : <Database size={16} />}
               {isSeeding ? 'Seeding...' : 'Seed Sample Data'}
+            </button>
+
+            <button
+              onClick={handleReset}
+              disabled={isResetting || isSeeding}
+              className="bg-red-900/20 border border-red-500/50 text-red-400 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+            >
+              {isResetting ? <RefreshCw className="animate-spin" size={16} /> : <Trash2 size={16} />}
+              {isResetting ? 'Resetting...' : 'Factory Reset'}
             </button>
           </div>
         </div>
@@ -207,7 +258,9 @@ export const SettingsView: React.FC = () => {
             { id: 'OPERATIONS', label: 'Operations', icon: SettingsIcon },
             { id: 'INVENTORY', label: 'Inventory' },
             { id: 'ZONES', label: 'Zones' },
+            { id: 'STATIONS', label: 'Stations' },
             { id: 'TABLES', label: 'Tables' },
+            { id: 'FLOOR', label: 'Floor Plan' },
             { id: 'VENDORS', label: 'Vendors' }
           ].map(tab => {
             const Icon = tab.icon;
@@ -229,11 +282,10 @@ export const SettingsView: React.FC = () => {
 
         {/* Seed Status Message */}
         {seedMessage && (
-          <div className={`mt-4 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
-            seedMessage.type === 'success' 
-              ? 'bg-green-900/30 border border-green-500/50 text-green-400' 
-              : 'bg-red-900/30 border border-red-500/50 text-red-400'
-          }`}>
+          <div className={`mt-4 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${seedMessage.type === 'success'
+            ? 'bg-green-900/30 border border-green-500/50 text-green-400'
+            : 'bg-red-900/30 border border-red-500/50 text-red-400'
+            }`}>
             {seedMessage.type === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
             {seedMessage.text}
           </div>
@@ -245,7 +297,9 @@ export const SettingsView: React.FC = () => {
         {activeTab === 'OPERATIONS' && <OperationsPanel />}
         {activeTab === 'INVENTORY' && <InventoryPanel />}
         {activeTab === 'ZONES' && <ZonesPanel />}
+        {activeTab === 'STATIONS' && <StationsPanel />}
         {activeTab === 'TABLES' && <TablesPanel />}
+        {activeTab === 'FLOOR' && <FloorPlanConfigView />}
         {activeTab === 'VENDORS' && <VendorsPanel />}
       </div>
     </div>

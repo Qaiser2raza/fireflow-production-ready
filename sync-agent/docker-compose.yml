@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
+  sync-agent:
+    build: .
+    restart: always
+    depends_on:
+      - redis
+    volumes:
+      - ./.env:/app/.env

@@ -18,8 +18,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
 
       if (/^[0-9]$/.test(e.key)) {
         if (pin.length < 6) {
-           setPin(prev => prev + e.key);
-           setError(false);
+          setPin(prev => prev + e.key);
+          setError(false);
         }
       } else if (e.key === 'Backspace') {
         setPin(prev => prev.slice(0, -1));
@@ -55,7 +55,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
 
   const handleSubmit = async () => {
     if (pin.length < 4 || isProcessing) return;
-    
+
     setIsProcessing(true);
     setError(false);
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -71,7 +71,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
     setTimeout(() => {
       setIsProcessing(false);
       if (error) {
-         setPin('');
+        setPin('');
       }
     }, 2000);
   };
@@ -84,10 +84,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
       <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-center relative z-10">
         <div className="hidden lg:flex flex-col justify-center">
           <div className="mb-8 inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl text-gold-500">
-             <Shield size={40} />
+            <Shield size={40} />
           </div>
           <h1 className="text-5xl font-serif font-bold text-white mb-6 leading-tight">
-            Precision <br/>
+            Precision <br />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-gold-400 to-gold-600">Secure Access</span>
           </h1>
           <p className="text-slate-400 text-lg max-w-md leading-relaxed mb-8">
@@ -105,24 +105,34 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
 
         <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-800 p-6 md:p-8 rounded-3xl shadow-2xl w-full max-w-md mx-auto">
           <div className="text-center mb-6 lg:mb-8">
-             <div className="lg:hidden mb-4 inline-flex items-center justify-center w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 text-gold-500">
-                 <Shield size={24} />
-             </div>
-             <h2 className="text-white text-xl font-bold tracking-wide">Terminal Access</h2>
-             <p className="text-slate-500 text-xs uppercase tracking-widest mt-2">Enter 4-6 Digit Security PIN</p>
+            <div className="lg:hidden mb-4 inline-flex items-center justify-center w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 text-gold-500">
+              <Shield size={24} />
+            </div>
+
+            {/* User Avatar */}
+            <div className="mb-4 flex justify-center">
+              <div className="relative">
+                <div className="w-20 h-20 rounded-full overflow-hidden border-4 border-slate-800 bg-gradient-to-br from-gold-500 to-gold-600 flex items-center justify-center text-white shadow-xl">
+                  <User size={32} />
+                </div>
+                <div className="absolute bottom-0 right-0 w-6 h-6 bg-green-500 rounded-full border-4 border-slate-900 shadow-lg"></div>
+              </div>
+            </div>
+
+            <h2 className="text-white text-xl font-bold tracking-wide">Terminal Access</h2>
+            <p className="text-slate-500 text-xs uppercase tracking-widest mt-2">Enter 4-6 Digit Security PIN</p>
           </div>
 
           <div className="mb-6 lg:mb-8 flex justify-center gap-3 h-12 lg:h-16 items-center">
-             {[...Array(6)].map((_, i) => (
-               <div 
-                 key={i} 
-                 className={`w-3 h-3 lg:w-4 lg:h-4 rounded-full transition-all duration-300 ${
-                    i < pin.length 
-                      ? 'bg-gold-500 shadow-[0_0_15px_rgba(234,179,8,0.5)] scale-110' 
-                      : 'bg-slate-800'
-                 } ${error ? 'bg-red-500 animate-shake' : ''}`}
-               />
-             ))}
+            {[...Array(6)].map((_, i) => (
+              <div
+                key={i}
+                className={`w-3 h-3 lg:w-4 lg:h-4 rounded-full transition-all duration-300 ${i < pin.length
+                  ? 'bg-gold-500 shadow-[0_0_15px_rgba(234,179,8,0.5)] scale-110'
+                  : 'bg-slate-800'
+                  } ${error ? 'bg-red-500 animate-shake' : ''}`}
+              />
+            ))}
           </div>
 
           <div className="grid grid-cols-3 gap-3 md:gap-4 max-w-xs mx-auto mb-6 lg:mb-8">
@@ -136,7 +146,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
               </button>
             ))}
             <div className="flex items-center justify-center">
-               <Shield size={20} className="text-slate-600 opacity-50"/>
+              <Shield size={20} className="text-slate-600 opacity-50" />
             </div>
             <button
               onClick={() => handleNumberClick('0')}
@@ -148,24 +158,23 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
               onClick={handleDelete}
               className="aspect-square w-full rounded-2xl bg-slate-800/50 hover:bg-red-900/30 text-slate-400 hover:text-red-400 transition-all active:scale-95 flex items-center justify-center"
             >
-              <Delete size={20} md:size={24} />
+              <Delete size={24} />
             </button>
           </div>
 
-          <button 
+          <button
             onClick={handleSubmit}
             disabled={pin.length < 4 || isProcessing}
-            className={`w-full py-3 md:py-4 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${
-               pin.length >= 4 
-                 ? 'bg-gold-500 text-slate-950 hover:bg-gold-400 shadow-lg' 
-                 : 'bg-slate-800 text-slate-600 cursor-not-allowed'
-            }`}
+            className={`w-full py-3 md:py-4 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${pin.length >= 4
+              ? 'bg-gold-500 text-slate-950 hover:bg-gold-400 shadow-lg'
+              : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}
           >
             {isProcessing ? 'Verifying...' : <span className="flex items-center gap-2">Authenticate <ArrowRight size={18} /></span>}
           </button>
 
           {onStartPairing && (
-            <button 
+            <button
               onClick={onStartPairing}
               className="w-full py-3 md:py-4 mt-3 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-cyan-400"
             >

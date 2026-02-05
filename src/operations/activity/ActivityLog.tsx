@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App';
 import { OrderStatus, Order, OrderType } from '../../shared/types';
-import { Search, Filter, Clock, Users, Receipt, ArrowRight, ShoppingBag, Truck, Utensils, XCircle, CheckCircle2, History, AlertCircle, FileText } from 'lucide-react';
+import { Search, Clock, Users, Receipt, ArrowRight, ShoppingBag, Truck, Utensils, XCircle, CheckCircle2, History, AlertCircle, FileText } from 'lucide-react';
 
 export const ActivityLog: React.FC = () => {
    const { orders, tables, servers, setOrderToEdit, setActiveView } = useAppContext();
@@ -12,8 +12,8 @@ export const ActivityLog: React.FC = () => {
    const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
 
    // Grouped Statuses for Filter Logic
-   const activeStatuses = [OrderStatus.DRAFT, OrderStatus.NEW, OrderStatus.COOKING, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY];
-   const completedStatuses = [OrderStatus.DELIVERED, OrderStatus.PAID];
+   const activeStatuses = [OrderStatus.DRAFT, OrderStatus.NEW, OrderStatus.FIRED, OrderStatus.PREPARING, OrderStatus.READY, OrderStatus.OUT_FOR_DELIVERY];
+   const completedStatuses = [OrderStatus.DELIVERED, OrderStatus.PAID, OrderStatus.COMPLETED];
    const cancelledStatuses = [OrderStatus.CANCELLED, OrderStatus.VOID];
 
    // Filtering Logic
@@ -29,12 +29,29 @@ export const ActivityLog: React.FC = () => {
          const query = searchQuery.toLowerCase();
          const matchesSearch =
             order.id.toLowerCase().includes(query) ||
-            (order.customerName || '').toLowerCase().includes(query) ||
-            (order.tableId ? tables.find(t => t.id === order.tableId)?.name.toLowerCase().includes(query) : false);
+            (order.customerName || order.customer_name || '').toLowerCase().includes(query) ||
+            (order.table_id ? tables.find(t => t.id === order.table_id)?.name.toLowerCase().includes(query) : false);
 
          return matchesStatus && matchesSearch;
-      }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()); // Newest first
+      }).sort((a, b) => {
+         const timeA = new Date(a.created_at || a.timestamp || 0).getTime();
+         const timeB = new Date(b.created_at || b.timestamp || 0).getTime();
+         return timeB - timeA;
+      }); // Newest first
    }, [orders, filterStatus, searchQuery, tables]);
+
+   const getProgress = (status: OrderStatus) => {
+      if (completedStatuses.includes(status)) return 100;
+      switch (status) {
+         case OrderStatus.READY: return 80;
+         case OrderStatus.PREPARING: return 60;
+         case OrderStatus.FIRED: return 40;
+         case OrderStatus.NEW: return 20;
+         case OrderStatus.DRAFT: return 10;
+         case OrderStatus.OUT_FOR_DELIVERY: return 90;
+         default: return 0;
+      }
+   };
 
    // UI Helper: Get Icon based on Order Type
    const getTypeIcon = (type: OrderType) => {
@@ -54,12 +71,12 @@ export const ActivityLog: React.FC = () => {
       return 'bg-slate-500/20 text-slate-400 border-slate-500/50';
    };
 
-   const formatTime = (date: Date) => {
+   const formatTime = (date: any) => {
+      if (!date) return '--:--';
       return new Date(date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
    };
 
    const handleEditOrder = (order: Order) => {
-      if (completedStatuses.includes(order.status) || cancelledStatuses.includes(order.status)) return;
       setOrderToEdit(order);
       setActiveView('POS');
    };
@@ -113,16 +130,19 @@ export const ActivityLog: React.FC = () => {
                   </div>
                ) : (
                   filteredOrders.map((order) => {
-                     const table = tables.find(t => t.id === order.tableId);
-                     const server = servers.find(s => s.id === order.assignedWaiterId);
+                     const table = tables.find(t => t.id === order.table_id);
+                     const server = servers.find(s => s.id === (order.last_action_by || (order as any).waiter_id));
 
                      return (
                         <div
                            key={order.id}
-                           onClick={() => setSelectedOrder(order)}
+                           onClick={() => {
+                              setSelectedOrder(order);
+                              handleEditOrder(order);
+                           }}
                            className={`group bg-slate-900/50 border border-slate-800/50 hover:bg-slate-900 hover:border-gold-500/30 rounded-2xl p-4 cursor-pointer transition-all duration-200 relative overflow-hidden ${selectedOrder?.id === order.id ? 'border-gold-500 bg-slate-900' : ''}`}
                         >
-                           <div className="flex justify-between items-start">
+                           <div className="flex justify-between items-start relative z-10">
                               <div className="flex items-center gap-4">
                                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center border bg-slate-950 ${selectedOrder?.id === order.id ? 'border-gold-500 text-gold-500' : 'border-slate-800 text-slate-500 group-hover:text-gold-500 group-hover:border-gold-500/50'}`}>
                                     {getTypeIcon(order.type)}
@@ -130,18 +150,18 @@ export const ActivityLog: React.FC = () => {
                                  <div>
                                     <div className="flex items-center gap-2 mb-1">
                                        <span className="font-bold text-white text-lg">
-                                          {order.type === 'DINE_IN' ? (table?.name || 'Table ?') : (order.customerName || 'Walk-in')}
+                                          {order.type === 'DINE_IN' ? (table?.name || 'Table ?') : (order.customerName || order.customer_name || 'Walk-in')}
                                        </span>
                                        <span className="text-[10px] text-slate-500 font-mono">#{order.id.split('-').pop()}</span>
                                     </div>
                                     <div className="flex items-center gap-3 text-xs text-slate-500 font-medium">
-                                       <span className="flex items-center gap-1"><Clock size={12} /> {formatTime(order.timestamp)}</span>
+                                       <span className="flex items-center gap-1"><Clock size={12} /> {formatTime(order.created_at || order.timestamp)}</span>
                                        {server && <span className="flex items-center gap-1"><Users size={12} /> {server.name}</span>}
                                     </div>
                                  </div>
                               </div>
 
-                              <div className="text-right">
+                              <div className="text-right flex flex-col items-end">
                                  <div className={`inline-flex items-center px-2.5 py-1 rounded-lg border text-[9px] font-black uppercase tracking-widest mb-2 ${getStatusColor(order.status)}`}>
                                     {order.status.replace('_', ' ')}
                                  </div>
@@ -149,6 +169,17 @@ export const ActivityLog: React.FC = () => {
                                     Rs. {order.total.toLocaleString()}
                                  </div>
                               </div>
+                           </div>
+
+                           {/* Progress Bar on Card */}
+                           <div className="mt-4 h-1 w-full bg-black/40 rounded-full overflow-hidden">
+                              <div
+                                 className={`h-full transition-all duration-1000 ${completedStatuses.includes(order.status) ? 'bg-green-500' :
+                                    cancelledStatuses.includes(order.status) ? 'bg-red-500' :
+                                       order.status === OrderStatus.READY ? 'bg-yellow-500' : 'bg-blue-500'
+                                    }`}
+                                 style={{ width: `${getProgress(order.status)}%` }}
+                              />
                            </div>
                         </div>
                      );
@@ -186,16 +217,16 @@ export const ActivityLog: React.FC = () => {
                   {/* Items */}
                   <div className="space-y-4 mb-8">
                      <h4 className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em] mb-4">Ordered Items</h4>
-                     {selectedOrder.items.map((item, idx) => (
+                     {(selectedOrder.order_items || (selectedOrder as any).items || []).map((item: any, idx: number) => (
                         <div key={idx} className="flex justify-between items-center py-2 border-b border-slate-800/50 last:border-0">
                            <div className="flex gap-3">
                               <div className="w-6 h-6 rounded bg-slate-800 flex items-center justify-center text-xs font-bold text-white">{item.quantity}</div>
                               <div>
-                                 <div className="text-sm text-slate-300 font-medium">{item.menuItem.name}</div>
-                                 <div className="text-[10px] text-slate-600 uppercase">{item.status}</div>
+                                 <div className="text-sm text-slate-300 font-medium">{item.menu_item?.name || item.item_name || item.menuItem?.name || 'Unknown Item'}</div>
+                                 <div className="text-[10px] text-slate-600 uppercase">{item.item_status || item.status}</div>
                               </div>
                            </div>
-                           <div className="text-sm font-mono text-slate-400">{(item.price * item.quantity).toLocaleString()}</div>
+                           <div className="text-sm font-mono text-slate-400">{(Number(item.unit_price || item.price) * item.quantity).toLocaleString()}</div>
                         </div>
                      ))}
                   </div>
@@ -203,7 +234,7 @@ export const ActivityLog: React.FC = () => {
                   {/* Financials */}
                   <div className="bg-slate-900 rounded-xl p-4 space-y-2 mb-8 border border-slate-800">
                      <div className="flex justify-between text-xs text-slate-400"><span>Subtotal</span><span>Rs. {selectedOrder.breakdown?.subtotal || selectedOrder.total}</span></div>
-                     {selectedOrder.type === 'delivery' && <div className="flex justify-between text-xs text-slate-400"><span>Delivery Fee</span><span>Rs. {selectedOrder.deliveryFee || 0}</span></div>}
+                     {selectedOrder.type === 'DELIVERY' && <div className="flex justify-between text-xs text-slate-400"><span>Delivery Fee</span><span>Rs. {selectedOrder.delivery_fee || 0}</span></div>}
                      <div className="border-t border-slate-800 pt-2 flex justify-between text-lg font-bold text-white font-serif"><span>Total</span><span>Rs. {selectedOrder.total.toLocaleString()}</span></div>
                   </div>
 
@@ -217,18 +248,18 @@ export const ActivityLog: React.FC = () => {
                         </div>
                         <div className="bg-slate-900 p-3 rounded-lg border border-slate-800">
                            <span className="block text-slate-500 mb-1">Date</span>
-                           <span className="text-white font-bold">{new Date(selectedOrder.timestamp).toLocaleDateString()}</span>
+                           <span className="text-white font-bold">{new Date(selectedOrder.created_at || selectedOrder.timestamp || 0).toLocaleDateString()}</span>
                         </div>
-                        {selectedOrder.customerPhone && (
+                        {(selectedOrder.customer_phone || selectedOrder.customerPhone) && (
                            <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 col-span-2">
                               <span className="block text-slate-500 mb-1">Customer Phone</span>
-                              <span className="text-white font-bold font-mono">{selectedOrder.customerPhone}</span>
+                              <span className="text-white font-bold font-mono">{selectedOrder.customer_phone || selectedOrder.customerPhone}</span>
                            </div>
                         )}
-                        {selectedOrder.deliveryAddress && (
+                        {(selectedOrder.delivery_address || (selectedOrder as any).deliveryAddress) && (
                            <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 col-span-2">
                               <span className="block text-slate-500 mb-1">Address</span>
-                              <span className="text-white">{selectedOrder.deliveryAddress}</span>
+                              <span className="text-white">{selectedOrder.delivery_address || (selectedOrder as any).deliveryAddress}</span>
                            </div>
                         )}
                      </div>

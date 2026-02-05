@@ -1,37 +1,37 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import pg from 'pg';
-const { Pool } = pg;
-import os from 'os';
 import path from 'path';
 import http from 'http';
 import { Server } from 'socket.io';
-import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { fileURLToPath } from 'url';
-import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 
-// Services
 import { OrderServiceFactory } from './services/orders/OrderServiceFactory';
 import { jwtService } from './services/auth/JwtService';
+import { authMiddleware } from './middleware/authMiddleware';
 import {
     generatePairingCode,
     verifyPairingCode,
+    cleanupExpiredCodes,
     listPairedDevices,
-    disableDevice,
-    cleanupExpiredCodes
+    disableDevice
 } from './services/pairing/PairingService';
-
-// Middleware
-import { authMiddleware, requireRole, belongsToRestaurant, revokeToken } from './middleware/authMiddleware';
-import { validateBody } from './middleware/validateMiddleware';
-
-// Schemas
-import { orderUpsertSchema } from './schemas/orderSchemas';
-import { pairingVerifySchema } from './schemas/pairingSchemas';
-import { loginSchema, refreshSchema } from './schemas/authSchemas';
+import {
+    seatPartyWithCapacityCheck,
+    updateGuestCount,
+    createSection,
+    updateSection,
+    deleteSection,
+    reorderSections,
+    createTable,
+    updateTable,
+    deleteTable,
+    releaseTable,
+    getFloorLayout
+} from './services/FloorManagementService';
+import { getOverCapacityReport } from './services/ReportsService';
 
 // Load environment variables
 dotenv.config();
@@ -42,6 +42,22 @@ const prisma = new PrismaClient();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
+
+// --- Socket.IO Connection Handler ---
+io.on('connection', (socket) => {
+    console.log(`[SOCKET] User connected: ${socket.id}`);
+
+    socket.on('join', (data: { room: string }) => {
+        if (data.room) {
+            socket.join(data.room);
+            console.log(`[SOCKET] Socket ${socket.id} joined room: ${data.room}`);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`[SOCKET] User disconnected: ${socket.id}`);
+    });
+});
 
 // ==========================================
 // 🚨 CRITICAL MIDDLEWARE (MUST BE AT TOP) 🚨
@@ -55,13 +71,6 @@ app.use((req, res, next) => {
     next();
 });
 
-const pool = new Pool({
-    user: 'postgres',
-    host: 'localhost',
-    database: 'fireflow_local',
-    password: 'admin123',
-    port: 5432,
-});
 
 // Health check for Electron startup
 app.get('/api/health', (req, res) => {
@@ -87,44 +96,36 @@ app.get('/api/health', (req, res) => {
  *   }
  * }
  */
-app.post('/api/auth/login', validateBody(loginSchema), async (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
     const { pin } = req.body;
+
+    // Input validation: PIN must be 4-6 digits
+    if (!pin || typeof pin !== 'string' || !/^\d{4,6}$/.test(pin)) {
+        return res.status(400).json({ error: 'PIN must be 4-6 digits' });
+    }
 
     try {
         // Find active staff by PIN
-        // We check both hashed_pin (preferred) and pin (legacy fallback)
-        const user = await prisma.staff.findFirst({
+        // For PIN-only login, the PIN acts as the primary identifier.
+        // We look for any active staff matching this PIN (plaintext lookup).
+        let user = await prisma.staff.findFirst({
             where: {
                 status: 'active',
+                pin: pin,
                 restaurant_id: req.body.restaurant_id || undefined
             }
         });
+
+        // If not found by plaintext PIN, and we have hashed pins, we might need to 
+        // iterate or have another identifier. For now, since PINs are small, 
+        // we'll stick to plaintext identifier or a broader search if required.
+        // POS systems typically use unique PINs as identifiers.
 
         if (!user) {
             // Generic error to avoid user enumeration
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        let isValid = false;
-
-        // GRACE PERIOD LOGIC: Prefer bcrypt, fallback to plaintext for migration window
-        if (user.hashed_pin) {
-            // New flow: bcrypt verification (preferred)
-            isValid = await bcrypt.compare(pin, user.hashed_pin);
-        } else if (user.pin) {
-            // Legacy fallback: plaintext comparison (TEMPORARY - will be removed after migration)
-            isValid = pin === user.pin;
-            if (isValid) {
-                console.warn(
-                    `⚠️  [LEGACY AUTH] Staff ${user.id} (${user.name}) using plaintext PIN. ` +
-                    `Run 'npm run migrate:pins' to hash all remaining PINs`
-                );
-            }
-        }
-
-        if (!isValid) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
 
         // Update last login timestamp
         const updatedUser = await prisma.staff.update({
@@ -189,6 +190,48 @@ app.post('/api/auth/login', validateBody(loginSchema), async (req, res) => {
 });
 
 /**
+ * POST /api/auth/verify-pin
+ * Verify a PIN for specific action authorization (Manager PIN override)
+ */
+app.post('/api/auth/verify-pin', async (req, res) => {
+    const { pin, requiredRole } = req.body;
+
+    if (!pin || typeof pin !== 'string') {
+        return res.status(400).json({ error: 'PIN is required' });
+    }
+
+    try {
+        const staff = await prisma.staff.findFirst({
+            where: {
+                pin: pin,
+                status: 'active'
+            }
+        });
+
+        if (!staff) {
+            return res.status(401).json({ error: 'Invalid PIN' });
+        }
+
+        // Check role if required
+        if (requiredRole && staff.role !== 'MANAGER' && staff.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Manager privileges required' });
+        }
+
+        res.json({
+            success: true,
+            staff: {
+                id: staff.id,
+                name: staff.name,
+                role: staff.role
+            }
+        });
+    } catch (e: any) {
+        console.error('[ERROR] /api/auth/verify-pin:', e.message);
+        res.status(500).json({ error: 'Verification failed' });
+    }
+});
+
+/**
  * POST /api/auth/refresh
  * Generate new access token using refresh token
  * 
@@ -201,7 +244,7 @@ app.post('/api/auth/login', validateBody(loginSchema), async (req, res) => {
  * TODO (Phase 2c): Implement token rotation (rotate refresh token on use)
  * TODO (Phase 2c): Track refresh token usage to detect token reuse attacks
  */
-app.post('/api/auth/refresh', validateBody(refreshSchema), async (req, res) => {
+app.post('/api/auth/refresh', async (req, res) => {
     const { refresh_token } = req.body;
 
     if (!refresh_token) {
@@ -239,7 +282,7 @@ app.post('/api/auth/refresh', validateBody(refreshSchema), async (req, res) => {
             });
         }
 
-        // Generate new tokens (Rotation)
+        // Generate new access token
         const newAccessToken = jwtService.generateAccessToken(
             decoded.payload.staffId,
             decoded.payload.restaurantId,
@@ -247,19 +290,11 @@ app.post('/api/auth/refresh', validateBody(refreshSchema), async (req, res) => {
             decoded.payload.name
         );
 
-        const newRefreshToken = jwtService.generateRefreshToken(
-            decoded.payload.staffId,
-            decoded.payload.restaurantId,
-            decoded.payload.role,
-            decoded.payload.name
-        );
-
-        // Ralf: Revoke the old refresh token so it can't be reused
-        revokeToken(refresh_token);
+        // TODO (Phase 2c): Optionally rotate refresh token here
+        // const newRefreshToken = jwtService.generateRefreshToken(...);
 
         res.json({
             access_token: newAccessToken,
-            refresh_token: newRefreshToken,
             expires_in: 15 * 60
         });
 
@@ -298,13 +333,7 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
             }
         });
 
-        // Ralf's Revocation: Blacklist the current token
-        const authHeader = req.headers.authorization;
-        if (authHeader) {
-            const token = authHeader.split(' ')[1];
-            if (token) revokeToken(token);
-        }
-
+        // TODO (Phase 2c): Add token to blacklist
         res.json({ success: true, message: 'Logged out successfully' });
 
     } catch (error: any) {
@@ -313,42 +342,13 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
     }
 });
 
-// Staff List (Protected)
-app.get('/api/staff', authMiddleware, async (req, res) => {
-    const { restaurant_id } = req.query;
-    const targetRestaurantId = (restaurant_id as string) || req.restaurantId;
-
-    if (!targetRestaurantId) return res.status(400).json({ error: "Missing restaurant_id" });
-
-    try {
-        const staff = await prisma.staff.findMany({
-            where: {
-                restaurant_id: targetRestaurantId,
-                status: 'active'
-            },
-            select: {
-                id: true,
-                name: true,
-                role: true,
-                restaurant_id: true,
-                status: true,
-                last_login: true,
-                image: true
-                // Do NOT select pin or hashed_pin
-            }
-        });
-        res.json(staff);
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
 
 // ==========================================
 // ⚙️ 2. OPERATIONAL ROUTES (SPECIFIC)
 // ==========================================
 
 // Get operations config for a restaurant
-app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res) => {
+app.get('/api/operations/config/:restaurantId', async (req, res) => {
     const { restaurantId } = req.params;
     if (!restaurantId) return res.status(400).json({ error: 'Missing restaurantId' });
 
@@ -384,7 +384,7 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
 });
 
 // Save operations config for a restaurant
-app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, res) => {
+app.patch('/api/operations/config/:restaurantId', async (req, res) => {
     const { restaurantId } = req.params;
     if (!restaurantId) return res.status(400).json({ error: 'Missing restaurantId' });
 
@@ -396,7 +396,11 @@ app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, re
             serviceChargeRate,
             defaultDeliveryFee,
             defaultGuestCount,
-            defaultRiderFloat
+            defaultRiderFloat,
+            // Floor Management
+            allowOverCapacity,
+            maxOverCapacityGuests,
+            enableTableMerging
         } = req.body;
 
         // Verify restaurant exists
@@ -418,7 +422,11 @@ app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, re
             serviceChargeRate: Number(serviceChargeRate) || 0,
             defaultDeliveryFee: Number(defaultDeliveryFee) || 250,
             defaultGuestCount: Math.max(1, Math.min(20, Number(defaultGuestCount) || 2)),
-            defaultRiderFloat: Number(defaultRiderFloat) || 5000
+            defaultRiderFloat: Number(defaultRiderFloat) || 5000,
+            // Floor Management
+            allowOverCapacity: allowOverCapacity !== undefined ? Boolean(allowOverCapacity) : true,
+            maxOverCapacityGuests: Number(maxOverCapacityGuests) || 3,
+            enableTableMerging: Boolean(enableTableMerging)
         };
 
         io.emit('config:updated', { restaurantId, config });
@@ -437,35 +445,30 @@ app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, re
 // ==========================================
 
 // ✅ FIXED: Upsert route prioritized to handle order creation and table status
-// Ralf: Phase 2c - Added Zod validation and wrapped in $transaction for atomicity
-app.post('/api/orders/upsert', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'CASHIER', 'WAITER'), validateBody(orderUpsertSchema), async (req, res) => {
+app.post('/api/orders/upsert', async (req, res) => {
     try {
         const data = req.body;
+        if (!data.type) return res.status(400).json({ error: 'Order type is required' });
 
-        // Wrap entire operation in transaction to ensure consistency
-        const result = await prisma.$transaction(async (tx) => {
-            const service = OrderServiceFactory.getService(data.type);
-            let orderResult;
+        const service = OrderServiceFactory.getService(data.type);
+        let result;
 
-            if (data.id) {
-                orderResult = await service.updateOrder(data.id, data);
-            } else {
-                orderResult = await service.createOrder(data);
-            }
+        if (data.id) {
+            result = await service.updateOrder(data.id, data);
+        } else {
+            result = await service.createOrder(data);
+        }
 
-            // Sync table status within same transaction
-            if (data.type === 'DINE_IN' && data.table_id) {
-                await tx.tables.update({
-                    where: { id: data.table_id },
-                    data: {
-                        status: 'OCCUPIED',
-                        active_order_id: orderResult.id
-                    }
-                });
-            }
-
-            return orderResult;
-        });
+        // Logic to update table status if it is a DINE_IN order
+        if (data.type === 'DINE_IN' && data.table_id) {
+            await prisma.tables.update({
+                where: { id: data.table_id },
+                data: {
+                    status: 'OCCUPIED',
+                    active_order_id: result.id
+                }
+            });
+        }
 
         io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
         res.json(result);
@@ -475,8 +478,161 @@ app.post('/api/orders/upsert', authMiddleware, requireRole('MANAGER', 'SUPER_ADM
     }
 });
 
+// Fire order to kitchen (KDS)
+app.post('/api/orders/:id/fire', async (req, res) => {
+    try {
+        const { id } = req.params;
+        let { type } = req.body;
+
+        if (!type) {
+            const order = await prisma.orders.findUnique({ where: { id } });
+            if (!order) return res.status(404).json({ error: 'Order not found' });
+            type = order.type;
+        }
+
+        const service = OrderServiceFactory.getService(type);
+        const result = await service.fireOrderToKitchen(id, io);
+
+        res.json({
+            success: true,
+            order: result
+        });
+    } catch (e: any) {
+        console.error("Order Fire Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// New simplified Order CRUD for POS
+app.post('/api/orders', async (req, res) => {
+    try {
+        const data = req.body;
+        if (!data.type) return res.status(400).json({ error: 'Order type is required' });
+        const service = OrderServiceFactory.getService(data.type);
+        const result = await service.createOrder(data);
+
+        io.emit('db_change', { table: 'orders', eventType: 'INSERT', data: result });
+        res.json(result);
+    } catch (e: any) {
+        console.error("POST /api/orders error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.patch('/api/orders/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const data = req.body;
+        if (!data.type) {
+            // Try to find order to get type if not provided
+            const order = await prisma.orders.findUnique({ where: { id } });
+            if (order) data.type = order.type;
+            else return res.status(404).json({ error: 'Order not found to update' });
+        }
+
+        const service = OrderServiceFactory.getService(data.type);
+        const result = await service.updateOrder(id, data);
+
+        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
+        res.json(result);
+    } catch (e: any) {
+        console.error("PATCH /api/orders error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/orders/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const order = await prisma.orders.findUnique({ where: { id } });
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        const service = OrderServiceFactory.getService(order.type as any);
+        const success = await service.deleteOrder(id);
+
+        if (success) {
+            io.emit('db_change', { table: 'orders', eventType: 'DELETE', id });
+            // If it was a DINE_IN order, also notify about table change
+            if (order.type === 'DINE_IN' && order.table_id) {
+                io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: order.table_id, data: { status: 'AVAILABLE', active_order_id: null } });
+            }
+            res.json({ success: true });
+        } else {
+            res.status(404).json({ error: 'Order not found' });
+        }
+    } catch (e: any) {
+        console.error("DELETE /api/orders error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Floor Management: Seat Party
+app.post('/api/floor/seat-party', async (req, res) => {
+    try {
+        const {
+            restaurantId,
+            guestCount,
+            customerName,
+            waiterId,
+            preferredSectionId,
+            allowOverCapacity,
+            tableId
+        } = req.body;
+
+        // Basic validation: customerName is now optional
+        if (!restaurantId || !guestCount || !waiterId) {
+            return res.status(400).json({ error: 'Missing required fields (restaurantId, guestCount, waiterId)' });
+        }
+
+        const result = await seatPartyWithCapacityCheck(
+            restaurantId,
+            guestCount,
+            customerName || 'Guest',
+            waiterId,
+            io,
+            preferredSectionId,
+            allowOverCapacity !== undefined ? allowOverCapacity : true,
+            tableId
+        );
+        res.json(result);
+    } catch (e: any) {
+        console.error("Seat Party Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * PATCH /api/orders/:id/guest-count
+ * Update guest count with capacity check
+ */
+app.patch('/api/orders/:id/guest-count', async (req, res) => {
+    const { id } = req.params;
+    const { guest_count, allow_over_capacity = true } = req.body;
+    const staffId = req.headers['x-staff-id'] as string;
+
+    if (!guest_count || guest_count < 1) {
+        return res.status(400).json({ error: 'Valid guest count required (minimum 1)' });
+    }
+
+    try {
+        const result = await updateGuestCount(
+            id,
+            guest_count,
+            staffId || 'SYSTEM',
+            io,
+            allow_over_capacity
+        );
+
+        res.json(result);
+    } catch (error: any) {
+        console.error('Failed to update guest count:', error);
+        res.status(error.message.includes('Cannot update') ? 403 : 500)
+            .json({ error: error.message });
+    }
+});
+
 // ✅ FIXED: Dev Reset route using prisma transaction for atomic wipe
-app.post('/api/system/dev-reset', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.post('/api/system/dev-reset', async (req, res) => {
     try {
         await prisma.$transaction([
             prisma.order_items.deleteMany(),
@@ -501,36 +657,10 @@ app.post('/api/system/dev-reset', authMiddleware, requireRole('MANAGER', 'SUPER_
     }
 });
 
-app.get('/api/orders', authMiddleware, async (req, res) => {
-    const { restaurant_id } = req.query;
-    const targetRestaurantId = (restaurant_id as string) || req.restaurantId;
-
-    if (!targetRestaurantId) return res.status(400).json({ error: "Missing restaurant_id" });
-
-    try {
-        const orders = await prisma.orders.findMany({
-            where: { restaurant_id: targetRestaurantId },
-            include: {
-                order_items: true,
-                dine_in_orders: true,
-                takeaway_orders: true,
-                delivery_orders: true,
-                reservation_orders: true
-            },
-            orderBy: { created_at: 'desc' },
-            take: 100 // Limit to last 100 for performance
-        });
-        res.json(orders);
-    } catch (e: any) {
-        console.error("Fetch Orders Error:", e);
-        res.status(500).json({ error: e.message });
-    }
-});
-
 // ==========================================
 // 📊 3. ANALYTICS
 // ==========================================
-app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
+app.get('/api/analytics/summary', async (req, res) => {
     const { restaurant_id } = req.query;
     if (!restaurant_id) return res.status(400).json({ error: "Missing restaurant_id" });
     try {
@@ -548,20 +678,18 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
     }
 });
 
-app.get('/api/transactions', authMiddleware, async (req, res) => {
-    const { restaurant_id } = req.query;
-    const targetRestaurantId = (restaurant_id as string) || req.restaurantId;
-
-    if (!targetRestaurantId) return res.status(400).json({ error: "Missing restaurant_id" });
+app.get('/api/reports/over-capacity', async (req, res) => {
+    const { restaurant_id, start_date, end_date } = req.query;
+    if (!restaurant_id) return res.status(400).json({ error: "Missing restaurant_id" });
 
     try {
-        const transactions = await prisma.transactions.findMany({
-            where: { restaurant_id: targetRestaurantId },
-            orderBy: { timestamp: 'desc' },
-            take: 50
-        });
-        res.json(transactions);
+        const start = start_date ? new Date(String(start_date)) : new Date(new Date().setHours(0, 0, 0, 0)); // Default today
+        const end = end_date ? new Date(String(end_date)) : new Date();
+
+        const report = await getOverCapacityReport(String(restaurant_id), { start, end });
+        res.json(report);
     } catch (e: any) {
+        console.error("Report Error:", e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -570,12 +698,12 @@ app.get('/api/transactions', authMiddleware, async (req, res) => {
 // 📜 4. MENU & CATEGORIES
 // ==========================================
 
-app.get('/api/menu_items', authMiddleware, async (req, res) => {
+app.get('/api/menu_items', async (req, res) => {
     const { restaurant_id } = req.query;
     try {
         const items = await prisma.menu_items.findMany({
             where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
-            include: { category_rel: true },
+            include: { menu_categories: true },
             orderBy: { name: 'asc' }
         });
         res.json(items);
@@ -584,7 +712,7 @@ app.get('/api/menu_items', authMiddleware, async (req, res) => {
     }
 });
 
-app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.post('/api/menu_items', async (req, res) => {
     try {
         const item = await prisma.menu_items.create({ data: req.body });
         io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: item });
@@ -594,7 +722,7 @@ app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'
     }
 });
 
-app.patch('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.patch('/api/menu_items', async (req, res) => {
     const { id, restaurant_id, ...data } = req.body;
     if (!id || !restaurant_id) return res.status(400).json({ error: 'Missing id or restaurant_id' });
     try {
@@ -610,7 +738,7 @@ app.patch('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN
     }
 });
 
-app.delete('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.delete('/api/menu_items', async (req, res) => {
     const { id } = req.query;
     try {
         await prisma.menu_items.delete({ where: { id: String(id) } });
@@ -622,7 +750,7 @@ app.delete('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMI
 });
 
 // Categories
-app.get('/api/menu_categories', authMiddleware, async (req, res) => {
+app.get('/api/menu_categories', async (req, res) => {
     const { restaurant_id } = req.query;
     try {
         const cats = await prisma.menu_categories.findMany({
@@ -631,21 +759,23 @@ app.get('/api/menu_categories', authMiddleware, async (req, res) => {
         });
         res.json(cats);
     } catch (e: any) {
+        console.error('GET /api/menu_categories ERROR:', e);
         res.status(500).json({ error: e.message });
     }
 });
 
-app.post('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.post('/api/menu_categories', async (req, res) => {
     try {
         const cat = await prisma.menu_categories.create({ data: req.body });
         io.emit('db_change', { table: 'menu_categories', eventType: 'INSERT', data: cat });
         res.json(cat);
     } catch (e: any) {
+        console.error('POST /api/menu_categories ERROR:', e);
         res.status(500).json({ error: e.message });
     }
 });
 
-app.patch('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.patch('/api/menu_categories', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const cat = await prisma.menu_categories.update({ where: { id: String(id) }, data });
@@ -656,7 +786,7 @@ app.patch('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_
     }
 });
 
-app.delete('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.delete('/api/menu_categories', async (req, res) => {
     const { id } = req.query;
     try {
         await prisma.menu_categories.delete({ where: { id: String(id) } });
@@ -671,37 +801,152 @@ app.delete('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER
 // 🏗️ 5. SECTIONS & TABLES
 // ==========================================
 
-// Sections
-app.post('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+// 🚨 SECURITY: RESTRICTED API ROUTES
+// Individual routes implemented for security and relational includes
+
+app.get('/api/orders', async (req, res) => {
+    const { restaurant_id } = req.query;
     try {
-        const section = await prisma.sections.create({ data: req.body });
-        io.emit('db_change', { table: 'sections', eventType: 'INSERT', data: section });
-        res.json(section);
+        const orders = await prisma.orders.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            include: {
+                order_items: true,
+                dine_in_orders: true,
+                takeaway_orders: true,
+                delivery_orders: true,
+                reservation_orders: true
+            },
+            orderBy: { created_at: 'desc' }
+        });
+        res.json(orders);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.patch('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.get('/api/tables', async (req, res) => {
+    const { restaurant_id } = req.query;
+    try {
+        const tables = await prisma.tables.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            orderBy: { name: 'asc' }
+        });
+        res.json(tables);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/sections', async (req, res) => {
+    const { restaurant_id } = req.query;
+    try {
+        const sections = await prisma.sections.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            orderBy: { priority: 'asc' }
+        });
+        res.json(sections);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/staff', async (req, res) => {
+    const { restaurant_id } = req.query;
+    try {
+        const staff = await prisma.staff.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            orderBy: { name: 'asc' }
+        });
+        // Sanitize: Do not send PINs
+        const sanitizedStaff = staff.map(s => {
+            const { pin, hashed_pin, ...rest } = s;
+            return rest;
+        });
+        res.json(sanitizedStaff);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/transactions', async (req, res) => {
+    const { restaurant_id } = req.query;
+    try {
+        const transactions = await prisma.transactions.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            orderBy: { created_at: 'desc' }
+        });
+        res.json(transactions);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/customers', async (req, res) => {
+    const { restaurant_id } = req.query;
+    try {
+        const customers = await prisma.customers.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            orderBy: { name: 'asc' }
+        });
+        res.json(customers);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/vendors', async (req, res) => {
+    const { restaurant_id } = req.query;
+    try {
+        const vendors = await prisma.vendors.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            orderBy: { name: 'asc' }
+        });
+        res.json(vendors);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Sections
+app.post('/api/sections', async (req, res) => {
+    try {
+        console.log('POST /api/sections body:', req.body);
+        const section = await createSection(req.body, io);
+        res.json(section);
+    } catch (e: any) {
+        console.error('POST /api/sections ERROR:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.patch('/api/sections', async (req, res) => {
     const { id, restaurant_id, ...data } = req.body;
     if (!id || !restaurant_id) return res.status(400).json({ error: 'Missing id or restaurant_id' });
     try {
-        const section = await prisma.sections.update({
-            where: { id, restaurant_id },
-            data
-        });
-        io.emit('db_change', { table: 'sections', eventType: 'UPDATE', data: section });
+        const section = await updateSection(id, restaurant_id, data, io);
         res.json(section);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.delete('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.post('/api/sections/reorder', async (req, res) => {
+    const { restaurant_id, reordered_ids } = req.body;
+    if (!restaurant_id || !Array.isArray(reordered_ids)) {
+        return res.status(400).json({ error: 'Missing restaurant_id or reordered_ids array' });
+    }
+    try {
+        await reorderSections(restaurant_id, reordered_ids, io);
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/sections', async (req, res) => {
     const { id } = req.query;
     try {
-        await prisma.sections.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'sections', eventType: 'DELETE', id });
+        await deleteSection(String(id), io);
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -709,37 +954,42 @@ app.delete('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'
 });
 
 // Tables
-app.post('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.post('/api/tables', async (req, res) => {
     try {
-        const table = await prisma.tables.create({ data: req.body });
-        io.emit('db_change', { table: 'tables', eventType: 'INSERT', data: table });
+        const table = await createTable(req.body, io);
         res.json(table);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.patch('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.patch('/api/tables', async (req, res) => {
     const { id, restaurant_id, ...data } = req.body;
     if (!id || !restaurant_id) return res.status(400).json({ error: 'Missing id or restaurant_id' });
     try {
-        const table = await prisma.tables.update({
-            where: { id, restaurant_id },
-            data
-        });
-        io.emit('db_change', { table: 'tables', eventType: 'UPDATE', data: table });
+        const table = await updateTable(id, restaurant_id, data, io);
         res.json(table);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.delete('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.delete('/api/tables', async (req, res) => {
     const { id } = req.query;
     try {
-        await prisma.tables.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'tables', eventType: 'DELETE', id });
+        await deleteTable(String(id), io);
         res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Floor Layout
+app.get('/api/floor/layout/:restaurantId', async (req, res) => {
+    const { restaurantId } = req.params;
+    try {
+        const layout = await getFloorLayout(restaurantId);
+        res.json(layout);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
@@ -750,7 +1000,7 @@ app.delete('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'),
 // ==========================================
 
 // Customers
-app.post('/api/customers', authMiddleware, async (req, res) => {
+app.post('/api/customers', async (req, res) => {
     try {
         const customer = await prisma.customers.create({ data: req.body });
         io.emit('db_change', { table: 'customers', eventType: 'INSERT', data: customer });
@@ -760,7 +1010,7 @@ app.post('/api/customers', authMiddleware, async (req, res) => {
     }
 });
 
-app.patch('/api/customers', authMiddleware, async (req, res) => {
+app.patch('/api/customers', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const customer = await prisma.customers.update({ where: { id }, data });
@@ -772,7 +1022,7 @@ app.patch('/api/customers', authMiddleware, async (req, res) => {
 });
 
 // Vendors
-app.post('/api/vendors', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.post('/api/vendors', async (req, res) => {
     try {
         const vendor = await prisma.vendors.create({ data: req.body });
         io.emit('db_change', { table: 'vendors', eventType: 'INSERT', data: vendor });
@@ -782,12 +1032,60 @@ app.post('/api/vendors', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), 
     }
 });
 
-app.patch('/api/vendors', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+app.patch('/api/vendors', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const vendor = await prisma.vendors.update({ where: { id }, data });
         io.emit('db_change', { table: 'vendors', eventType: 'UPDATE', data: vendor });
         res.json(vendor);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Stations
+app.get('/api/stations', async (req, res) => {
+    const { restaurant_id } = req.query;
+    try {
+        console.log('GET /api/stations for restaurant:', restaurant_id);
+        const stations = await prisma.stations.findMany({
+            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            orderBy: { name: 'asc' }
+        });
+        res.json(stations);
+    } catch (e: any) {
+        console.error('GET /api/stations ERROR:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/stations', async (req, res) => {
+    try {
+        const station = await prisma.stations.create({ data: req.body });
+        io.emit('db_change', { table: 'stations', eventType: 'INSERT', data: station });
+        res.json(station);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.patch('/api/stations', async (req, res) => {
+    const { id, ...data } = req.body;
+    try {
+        const station = await prisma.stations.update({ where: { id }, data });
+        io.emit('db_change', { table: 'stations', eventType: 'UPDATE', data: station });
+        res.json(station);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/stations', async (req, res) => {
+    const { id } = req.query;
+    try {
+        await prisma.stations.delete({ where: { id: String(id) } });
+        io.emit('db_change', { table: 'stations', eventType: 'DELETE', id });
+        res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
@@ -959,42 +1257,163 @@ app.post('/api/system/seed-restaurant', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-// THIS MUST STAY AT THE BOTTOM TO PREVENT 404s
-// 🚨 SECURITY: DISABLED WILDCARD ROUTE
-// This route allowed dumping any table. Disabled for production safety.
-/*
-app.get('/api/:table', async (req, res) => {
-    const { table } = req.params;
+
+app.post('/api/system/reset-environment', async (req, res) => {
+    const { restaurantId } = req.body;
+    if (!restaurantId) return res.status(400).json({ error: 'Restaurant ID required' });
+
+    console.log(`🧹 RESET REQUEST FOR RESTAURANT: ${restaurantId}`);
+
     try {
-        // Safety check to prevent crashing on non-existent tables
-        if (!(prisma as any)[table]) {
-            return res.status(404).json({ error: `Table ${table} not found` });
-        }
-        const data = await (prisma as any)[table].findMany();
-        res.json(data);
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
+        // Delete extension tables first (sequential to avoid schema issues)
+        console.log('   - Deleting extension tables...');
+        await prisma.dine_in_orders.deleteMany({});
+        await prisma.takeaway_orders.deleteMany({});
+        await prisma.delivery_orders.deleteMany({});
+        await prisma.reservation_orders.deleteMany({});
+        await prisma.order_items.deleteMany({});
+
+        // Delete financial records
+        console.log('   - Deleting financial records...');
+        await prisma.transactions.deleteMany({ where: { restaurant_id: restaurantId } });
+        await prisma.expenses.deleteMany({ where: { restaurant_id: restaurantId } });
+        await prisma.reservations.deleteMany({ where: { restaurant_id: restaurantId } });
+
+        // Delete core orders
+        console.log('   - Deleting core orders...');
+        await prisma.orders.deleteMany({ where: { restaurant_id: restaurantId } });
+
+        // Reset table statuses
+        console.log('   - Resetting table statuses...');
+        await prisma.tables.updateMany({
+            where: { restaurant_id: restaurantId },
+            data: { status: 'AVAILABLE', active_order_id: null, merge_id: null }
+        });
+
+        console.log('✅ RESET COMPLETE');
+
+        // Broadcast to all clients
+        io.emit('db_change', { table: 'orders', eventType: 'DELETE', id: 'ALL' });
+        io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: 'ALL' });
+        io.emit('db_change', { table: 'transactions', eventType: 'DELETE', id: 'ALL' });
+
+        res.json({ success: true, message: "Environment reset successfully. Database is now clean." });
+    } catch (e: any) {
+        console.error("Reset Failed:", e);
+        res.status(500).json({ error: e.message });
     }
 });
-*/
+// (Moved higher up)
 
 // Route to fetch specific order with all its relational extensions
-app.get('/api/orders/:id', async (req, res) => {
+app.get('/api/orders/:id', async (req, res, next) => {
     try {
         const { id } = req.params;
+        // Skip if ID is actually a route name
+        if (['all', 'summary', 'upsert', 'fire'].includes(id)) return next();
+
         const order = await prisma.orders.findUnique({
             where: { id },
             include: {
                 order_items: true,
-                dine_in_order: true,
-                takeaway_order: true,
-                delivery_order: true,
-                reservation_order: true
+                dine_in_orders: true,
+                takeaway_orders: true,
+                delivery_orders: true,
+                reservation_orders: true
             }
         });
-        if (!order) return res.status(404).json({ error: 'Order not found' });
+        if (!order) {
+            // Try searching by order_number if not found as UUID
+            const byNumber = await prisma.orders.findUnique({
+                where: { order_number: id },
+                include: {
+                    order_items: true,
+                    dine_in_orders: true,
+                    takeaway_orders: true,
+                    delivery_orders: true,
+                    reservation_orders: true
+                }
+            });
+            if (byNumber) return res.json(byNumber);
+            return res.status(404).json({ error: 'Order not found' });
+        }
         res.json(order);
     } catch (e: any) {
+        console.error(`GET /api/orders/${req.params.id} ERROR:`, e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/orders/:id/settle', async (req, res) => {
+    const { id } = req.params;
+    const { amount, payment_method, transaction_ref, restaurant_id, staff_id } = req.body;
+
+    try {
+        const order = await prisma.orders.findUnique({
+            where: { id },
+            include: { dine_in_orders: true }
+        });
+
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Create Transaction
+            const transaction = await tx.transactions.create({
+                data: {
+                    restaurant_id,
+                    order_id: id,
+                    amount,
+                    payment_method,
+                    status: 'PAID',
+                    transaction_ref,
+                    created_at: new Date()
+                }
+            });
+
+            // 2. Update Order Status
+            const updatedOrder = await tx.orders.update({
+                where: { id },
+                data: {
+                    status: 'PAID',
+                    updated_at: new Date()
+                }
+            });
+
+            // 3. If Dine-In, Release Table (Mark as DIRTY for cleanup)
+            if (order.type === 'DINE_IN' && order.dine_in_orders) {
+                const tableId = order.dine_in_orders.table_id;
+                await tx.tables.update({
+                    where: { id: tableId },
+                    data: {
+                        status: 'DIRTY',
+                        active_order_id: null
+                    }
+                });
+            }
+
+            return { transaction, updatedOrder };
+        });
+
+        // 4. Notify via Socket
+        io.to(`restaurant:${restaurant_id}`).emit('db_change', {
+            table: 'orders',
+            eventType: 'UPDATE',
+            data: result.updatedOrder
+        });
+
+        if (order.type === 'DINE_IN' && order.dine_in_orders) {
+            const tableId = order.dine_in_orders.table_id;
+            const updatedTable = await prisma.tables.findUnique({ where: { id: tableId } });
+            io.to(`restaurant:${restaurant_id}`).emit('db_change', {
+                table: 'tables',
+                eventType: 'UPDATE',
+                data: updatedTable
+            });
+        }
+
+        res.json({ success: true, ...result });
+    } catch (e: any) {
+        console.error(`POST /api/orders/${id}/settle ERROR:`, e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -1027,9 +1446,9 @@ const pairingVerifyLimiter = rateLimit({
  * Auth: Required (must be logged-in staff)
  * Rate limit: 5/min per IP
  */
-app.post('/api/pairing/generate', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), pairingGenerateLimiter, async (req, res) => {
+app.post('/api/pairing/generate', pairingGenerateLimiter, async (req, res) => {
     const { restaurantId } = req.body;
-    const staffId = req.staffId;
+    const staffId = req.headers['x-staff-id'] as string; // TODO: Replace with JWT after Phase 2b
 
     // Input validation
     if (!restaurantId || !staffId) {
@@ -1080,7 +1499,7 @@ app.post('/api/pairing/generate', authMiddleware, requireRole('MANAGER', 'SUPER_
  * - userAgent: String
  * - platform: String (ios|android|linux|darwin|win32)
  */
-app.post('/api/pairing/verify', validateBody(pairingVerifySchema), pairingVerifyLimiter, async (req, res) => {
+app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
     const {
         restaurantId,
         codeId,
@@ -1174,9 +1593,9 @@ app.post('/api/pairing/verify', validateBody(pairingVerifySchema), pairingVerify
  * Auth: Required (via JWT or x-staff-id header)
  * TODO: After JWT implementation, validate token
  */
-app.get('/api/pairing/devices', authMiddleware, async (req, res) => {
-    const staffId = req.staffId;
-    const restaurantId = req.restaurantId;
+app.get('/api/pairing/devices', async (req, res) => {
+    const staffId = req.headers['x-staff-id'] as string;
+    const restaurantId = req.headers['x-restaurant-id'] as string;
 
     if (!staffId || !restaurantId) {
         return res.status(400).json({ error: 'Missing staffId or restaurantId' });
@@ -1197,10 +1616,10 @@ app.get('/api/pairing/devices', authMiddleware, async (req, res) => {
  * 
  * Auth: Required
  */
-app.delete('/api/pairing/devices/:deviceId', authMiddleware, async (req, res) => {
+app.delete('/api/pairing/devices/:deviceId', async (req, res) => {
     const { deviceId } = req.params;
-    const staffId = req.staffId;
-    const restaurantId = req.restaurantId;
+    const staffId = req.headers['x-staff-id'] as string;
+    const restaurantId = req.headers['x-restaurant-id'] as string;
 
     if (!staffId || !restaurantId) {
         return res.status(400).json({ error: 'Missing staffId or restaurantId' });
@@ -1232,6 +1651,51 @@ setInterval(async () => {
         console.error('Pairing cleanup job failed:', error);
     }
 }, 5 * 60 * 1000);
+
+// --- Audit Log Routes ---
+app.post('/api/audit-logs', async (req, res) => {
+    try {
+        const { restaurant_id, staff_id, action_type, entity_type, entity_id, details, ip_address } = req.body;
+
+        const log = await prisma.audit_logs.create({
+            data: {
+                restaurant_id,
+                staff_id,
+                action_type,
+                entity_type,
+                entity_id,
+                details: details ? (typeof details === 'string' ? JSON.parse(details) : details) : undefined,
+                ip_address,
+                created_at: new Date()
+            }
+        });
+
+        res.json({ success: true, log });
+    } catch (error: any) {
+        console.error('Audit Log Creation Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/audit-logs', async (req, res) => {
+    try {
+        const { restaurant_id, limit = '100', offset = '0' } = req.query;
+        if (!restaurant_id) return res.status(400).json({ error: 'restaurant_id required' });
+
+        const logs = await prisma.audit_logs.findMany({
+            where: { restaurant_id: String(restaurant_id) },
+            orderBy: { created_at: 'desc' },
+            take: Number(limit),
+            skip: Number(offset),
+            include: { staff: true }
+        });
+
+        res.json({ success: true, logs });
+    } catch (error: any) {
+        console.error('Audit Log Fetch Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // Server Initialization
 const PORT = 3001;

@@ -10,17 +10,30 @@ export type OrderType = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'RESERVATION';
 
 export enum OrderStatus {
     DRAFT = 'DRAFT',
-    NEW = 'NEW',
-    COOKING = 'COOKING',
+    CONFIRMED = 'CONFIRMED',
+    NEW = 'CONFIRMED', // Mapping NEW to CONFIRMED for backward compatibility
+    FIRED = 'FIRED',
+    PREPARING = 'PREPARING',
     READY = 'READY',
-    SERVED = 'SERVED', // Added for Dine-In
+    SERVED = 'SERVED',
+    BILL_REQUESTED = 'BILL_REQUESTED',
     OUT_FOR_DELIVERY = 'OUT_FOR_DELIVERY',
     DELIVERED = 'DELIVERED',
-    BILL_REQUESTED = 'BILL_REQUESTED',
+    COMPLETED = 'COMPLETED',
     PAID = 'PAID',
     CANCELLED = 'CANCELLED',
     VOID = 'VOID',
+    VOIDED = 'VOIDED',
     FAILED_DELIVERY = 'FAILED_DELIVERY'
+}
+
+export enum ItemStatus {
+    PENDING = 'PENDING',
+    DRAFT = 'DRAFT',
+    FIRED = 'FIRED',
+    PREPARING = 'PREPARING',
+    READY = 'READY',
+    SERVED = 'SERVED'
 }
 
 export enum TableStatus {
@@ -55,6 +68,14 @@ export interface Vendor {
     name: string;
     phone?: string;
     category: string;
+    created_at?: Date | string;
+}
+
+export interface Station {
+    id: string;
+    restaurant_id: string;
+    name: string;
+    is_active: boolean;
     created_at?: Date | string;
 }
 
@@ -100,6 +121,8 @@ export interface Section {
     type: SectionType;
     prefix?: string;
     priority?: number;
+    is_active?: boolean;
+    color_code?: string;
     // legacy fixture fields
     totalCapacity?: number;
     isFamilyOnly?: boolean;
@@ -115,11 +138,26 @@ export interface Table {
     // alias used in fixtures
     sectionId?: string;
     capacity: number;
+    min_capacity?: number;
+    max_capacity?: number;
     status: TableStatus;
     x_position?: number;
     y_position?: number;
-    shape?: 'RECT' | 'CIRCLE' | 'BOOTH';
+    width?: number;
+    height?: number;
+    rotation?: number;
+    shape?: 'SQUARE' | 'RECT' | 'ROUND' | 'OVAL' | 'BOOTH';
     active_order_id?: string;
+    merge_id?: string;
+    is_virtual?: boolean;
+    virtual_type?: string;
+    parent_tables?: any;
+    qr_code_url?: string;
+    is_active?: boolean;
+    notes?: string;
+    tags?: string[];
+    last_cleaned_at?: Date | string;
+    last_cleaned_by?: string;
     last_status_change?: Date;
     serverId?: string;
 }
@@ -132,6 +170,8 @@ export interface MenuItem {
     cost_price?: number;
     category: string;
     station: string;
+    station_id?: string;
+    requires_prep?: boolean;
     available: boolean;
     image?: string;
     name_urdu?: string;
@@ -148,6 +188,7 @@ export interface MenuItem {
     category_id?: string;
     // Included relation
     category_rel?: MenuCategory;
+    station_rel?: Station;
 }
 
 export interface MenuCategory {
@@ -165,13 +206,16 @@ export interface OrderItem {
     quantity: number;
     unit_price: number;
     total_price: number;
-    item_status: OrderStatus; // DB: item_status
+    item_status: string; // DB: item_status
     station?: string;
+    station_id?: string;
     modifications?: any;
     item_name?: string;
     category?: string;
+    special_instructions?: string;
     // helpers for UI if needed, but DB is source of truth
     menu_item?: MenuItem; // Optional, if included in fetch
+    station_rel?: Station;
 }
 
 export interface DineInOrder {
@@ -187,9 +231,14 @@ export interface TakeawayOrder {
     id: string;
     order_id: string;
     token_number: string;
+    token_date?: string;  // Date string for daily reset (YYYY-MM-DD)
     customer_name?: string;
+    customerName?: string;
     customer_phone?: string;
+    customerPhone?: string;
     pickup_time?: Date | string;
+    actual_pickup_time?: Date | string;  // When customer actually picked up
+    is_picked_up?: boolean;  // Handoff confirmation
     customer_id?: string;
     customer?: Customer;
 }
@@ -198,12 +247,18 @@ export interface DeliveryOrder {
     id: string;
     order_id: string;
     customer_name?: string;
+    customerName?: string;
     customer_phone: string;
+    customerPhone?: string;
     delivery_address?: string;
+    deliveryAddress?: string;
     customer_id?: string;
     customer?: Customer;
     driver_id?: string;
     dispatched_at?: Date | string;
+    is_settled_with_rider?: boolean;
+    float_given?: number;
+    expected_return?: number;
 }
 
 export interface ReservationOrder {
@@ -219,12 +274,22 @@ export interface ReservationOrder {
 
 export interface Order {
     id: string;
+    order_number?: string;
     restaurant_id: string;
     status: OrderStatus;
     type: OrderType;
     total: number;
     created_at: string | Date;
     updated_at: string | Date;
+    guest_count?: number;
+    customer_name?: string;
+    customer_phone?: string;
+    last_action_by?: string;
+    last_action_desc?: string;
+    last_action_at?: Date | string;
+    delivery_address?: string;
+    deliveryAddress?: string;
+    is_settled_with_rider?: boolean;
 
     // New Relation Fields
     table_id?: string;
@@ -248,6 +313,15 @@ export interface Order {
     tax?: number;
     discount?: number;
     breakdown?: any;
+
+    // Virtual fields for convenience (populated in App.tsx)
+    assigned_driver_id?: string;
+    // delivery_address?: string; (removed duplicate)
+    customerName?: string;
+    customerPhone?: string;
+    guestCount?: number;
+    tableId?: string | null;
+    timestamp?: Date;
 }
 
 export interface PaymentBreakdown {
@@ -416,5 +490,12 @@ export interface AppContextType {
     addVendor: (v: any) => Promise<void>;
     updateVendor: (v: any) => Promise<void>;
     deleteVendor: (id: string) => Promise<void>;
+
+    // Stations
+    stations: Station[];
+    addStation: (s: any) => Promise<void>;
+    updateStation: (s: any) => Promise<void>;
+    deleteStation: (id: string) => Promise<void>;
+
     socket?: any; // Socket.IO instance
 }

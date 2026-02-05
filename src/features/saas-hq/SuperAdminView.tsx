@@ -23,7 +23,7 @@ import {
   Lock as LockIcon,
   DollarSign
 } from 'lucide-react';
-import { useAppContext } from '../../client/App';
+import { useAppContext } from '../../client/contexts/AppContext';
 
 interface Restaurant {
   id: string;

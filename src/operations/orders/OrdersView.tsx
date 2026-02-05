@@ -1,10 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App';
-import { 
-  OrderStatus, 
-  OrderType, 
-  ItemStatus 
-} from '@prisma/client'; // Syncing with your Prisma Enums
+import {
+  OrderStatus,
+  OrderType
+} from '../../shared/types';
 import {
   Search,
   ClipboardList,
@@ -18,42 +17,50 @@ import {
   Edit2,
   MapPin,
   User,
-  ArrowUpRight
+  Ban,
+  Lock,
+  FileText
 } from 'lucide-react';
 
 // Custom components from your UI library
 import { Modal } from '../../shared/ui/Modal';
 import { Button } from '../../shared/ui/Button';
 
-export const ActivityLog: React.FC = () => {
+export const OrdersView: React.FC = () => {
   const {
     orders,
-    setOrderToEdit,
+    sections,
     setActiveView,
-    cancelOrder,
-    tables,
-    sections
+    setOrderToEdit,
+    currentUser,
+    voidOrder,
+    cancelOrder
   } = useAppContext();
 
   const [viewMode, setViewMode] = useState<'TICKETS' | 'COLLECTIONS'>('TICKETS');
   const [searchQuery, setSearchQuery] = useState('');
   const [cancellingOrder, setCancellingOrder] = useState<any | null>(null);
-  const [cancellationReason, setCancellationReason] = useState('');
+  const [cancellationReason, setCancellationReason] = useState('Customer changed mind');
+  const [isVoiding, setIsVoiding] = useState(false);
+  const [managerPin, setManagerPin] = useState('');
+  const [showPinEntry, setShowPinEntry] = useState(false);
+  const [pendingAction, setPendingAction] = useState<() => void>(() => { });
 
   // --- LOGIC: PROGRESS CALCULATOR ---
   const getProgressStats = (status: OrderStatus) => {
     const map = {
       [OrderStatus.DRAFT]: { width: '10%', color: 'bg-slate-700' },
       [OrderStatus.CONFIRMED]: { width: '25%', color: 'bg-blue-500' },
+      [OrderStatus.FIRED]: { width: '35%', color: 'bg-orange-600' },
       [OrderStatus.PREPARING]: { width: '50%', color: 'bg-gold-500' },
-      [OrderStatus.READY]: { width: '75%', color: 'bg-orange-500' },
+      [OrderStatus.READY]: { width: '75%', color: 'bg-green-500' },
       [OrderStatus.SERVED]: { width: '90%', color: 'bg-indigo-500' },
-      [OrderStatus.COMPLETED]: { width: '100%', color: 'bg-green-500' },
+      [OrderStatus.COMPLETED]: { width: '100%', color: 'bg-emerald-600' },
       [OrderStatus.CANCELLED]: { width: '100%', color: 'bg-red-600' },
       [OrderStatus.VOIDED]: { width: '100%', color: 'bg-red-800' },
       [OrderStatus.BILL_REQUESTED]: { width: '85%', color: 'bg-purple-500' },
     };
-    return map[status] || { width: '0%', color: 'bg-slate-500' };
+    return (map as any)[status] || { width: '0%', color: 'bg-slate-500' };
   };
 
   // --- LOGIC: ADVANCED FILTERING ---
@@ -61,17 +68,16 @@ export const ActivityLog: React.FC = () => {
     return orders.filter(order => {
       // 1. View Mode Filter
       if (viewMode === 'COLLECTIONS') {
-        // Only show Delivery/Takeaway that isn't settled yet
-        const isDelivery = order.type === OrderType.DELIVERY;
-        const needsSettlement = order.delivery_order?.is_settled_with_rider === false;
+        const isDelivery = order.type === 'DELIVERY';
+        const needsSettlement = order.is_settled_with_rider === false;
         return isDelivery && needsSettlement;
       }
 
       // 2. Search Filter (Search Table Name, Customer, or ID)
-      const searchLower = searchQuery.toLowerCase();
+      const searchLower = (searchQuery || '').toLowerCase();
       const tableName = order.table?.name || '';
       const sectionName = sections.find(s => s.id === order.table?.section_id)?.name || '';
-      const customerName = order.customer_name || order.takeaway_order?.customer_name || order.delivery_order?.customer_name || '';
+      const customerName = order.customer_name || order.takeaway_orders?.[0]?.customer_name || order.delivery_orders?.[0]?.customer_name || '';
       const orderId = order.id.split('-').pop() || '';
 
       return (
@@ -84,7 +90,7 @@ export const ActivityLog: React.FC = () => {
   }, [orders, searchQuery, viewMode, sections]);
 
   const handleOrderClick = (order: any) => {
-    if (order.type === OrderType.DELIVERY && [OrderStatus.READY, OrderStatus.COMPLETED].includes(order.status)) {
+    if (order.type === 'DELIVERY' && [OrderStatus.READY, OrderStatus.COMPLETED].includes(order.status)) {
       setActiveView('dispatch');
     } else {
       setOrderToEdit(order);
@@ -94,15 +100,15 @@ export const ActivityLog: React.FC = () => {
 
   return (
     <div className="flex h-full w-full bg-slate-950 flex-col overflow-hidden font-sans">
-      
+
       {/* Header Area */}
       <div className="h-20 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-8 shrink-0">
         <div className="flex items-center gap-6">
           <div className="space-y-1">
-             <h1 className="text-xl font-bold text-white tracking-tight">CONTROL HUB</h1>
-             <p className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em]">Operational Stream</p>
+            <h1 className="text-xl font-bold text-white tracking-tight">CONTROL HUB</h1>
+            <p className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em]">Operational Stream</p>
           </div>
-          
+
           <div className="flex p-1 bg-slate-950 rounded-xl border border-slate-800 ml-4">
             <button
               onClick={() => setViewMode('TICKETS')}
@@ -158,9 +164,9 @@ export const ActivityLog: React.FC = () => {
               {filteredOrders.map(order => {
                 const stats = getProgressStats(order.status as OrderStatus);
                 const section = sections.find(s => s.id === order.table?.section_id);
-                
+
                 return (
-                  <tr 
+                  <tr
                     key={order.id}
                     onClick={() => handleOrderClick(order)}
                     className="bg-slate-900/40 hover:bg-slate-900/80 border border-slate-800 rounded-xl transition-all cursor-pointer group shadow-sm"
@@ -182,9 +188,9 @@ export const ActivityLog: React.FC = () => {
                     <td className="py-5 border-y border-slate-800/50 group-hover:border-slate-700">
                       <div className="flex items-center gap-3">
                         <div className={`p-2 rounded-lg bg-slate-950 border border-slate-800`}>
-                          {order.type === OrderType.DINE_IN && <Utensils size={14} className="text-blue-400" />}
-                          {order.type === OrderType.TAKEAWAY && <ShoppingBag size={14} className="text-yellow-400" />}
-                          {order.type === OrderType.DELIVERY && <Truck size={14} className="text-green-400" />}
+                          {order.type === 'DINE_IN' && <Utensils size={14} className="text-blue-400" />}
+                          {order.type === 'TAKEAWAY' && <ShoppingBag size={14} className="text-yellow-400" />}
+                          {order.type === 'DELIVERY' && <Truck size={14} className="text-green-400" />}
                         </div>
                         <div className="flex flex-col">
                           <span className="text-white font-mono font-bold text-sm tracking-tighter">
@@ -199,8 +205,29 @@ export const ActivityLog: React.FC = () => {
                     <td className="py-5 border-y border-slate-800/50 group-hover:border-slate-700">
                       <div className="flex flex-col">
                         <span className="text-sm font-bold text-white uppercase tracking-tight">
-                          {order.table?.name || order.takeaway_order?.token_number || order.customer_name || 'Walk-in'}
+                          {order.customer_name || 'Walk-in'}
                         </span>
+                        {order.type === 'TAKEAWAY' ? (
+                          <div className="flex items-center gap-1.5 bg-green-500/10 text-green-500 px-2 py-1 rounded-md text-[10px] font-black uppercase border border-green-500/20">
+                            <ShoppingBag size={12} />
+                            Token {order.takeaway_orders?.[0]?.token_number}
+                          </div>
+                        ) : order.type === 'DELIVERY' ? (
+                          <div className="flex items-center gap-1.5 bg-blue-500/10 text-blue-500 px-2 py-1 rounded-md text-[10px] font-black uppercase border border-blue-500/20">
+                            <Truck size={12} />
+                            Rider {order.delivery_orders?.[0]?.driver_id?.split('-').pop() || 'Unassigned'}
+                          </div>
+                        ) : order.type === 'DINE_IN' ? (
+                          <div className="flex items-center gap-1.5 bg-slate-800 text-slate-400 px-2 py-1 rounded-md text-[10px] font-black uppercase border border-slate-700">
+                            <Utensils size={12} />
+                            Table {order.table?.name || 'Walk-in'}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 bg-slate-800 text-slate-400 px-2 py-1 rounded-md text-[10px] font-black uppercase border border-slate-700">
+                            <FileText size={12} />
+                            {order.type}
+                          </div>
+                        )}
                         <div className="flex items-center gap-1 text-slate-500">
                           <MapPin size={10} />
                           <span className="text-[10px] uppercase font-bold">{section?.name || 'Main Hall'}</span>
@@ -210,13 +237,18 @@ export const ActivityLog: React.FC = () => {
 
                     {/* Assignment */}
                     <td className="py-5 border-y border-slate-800/50 group-hover:border-slate-700">
-                      <div className="flex items-center gap-2">
-                        <div className="h-7 w-7 rounded-full bg-slate-800 flex items-center justify-center border border-slate-700">
-                          <User size={12} className="text-slate-400" />
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500">
+                          <User size={16} />
                         </div>
-                        <span className="text-xs text-slate-300 font-medium">
-                          {order.assigned_waiter?.name || order.assigned_driver?.name || 'Waiting...'}
-                        </span>
+                        <div>
+                          <p className="text-xs font-black text-white uppercase tracking-tight">
+                            {order.dine_in_orders?.[0]?.waiter_id ? 'Waiter Assigned' : order.delivery_orders?.[0]?.driver_id ? 'Rider Assigned' : 'System'}
+                          </p>
+                          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
+                            Auto Assigned
+                          </p>
+                        </div>
                       </div>
                     </td>
 
@@ -245,21 +277,42 @@ export const ActivityLog: React.FC = () => {
                           Rs. {Number(order.total).toLocaleString()}
                         </span>
                         {viewMode === 'COLLECTIONS' && (
-                           <span className="text-[9px] text-orange-500 font-black uppercase">
-                             Float: Rs. {Number(order.delivery_order?.float_given || 0)}
-                           </span>
+                          <span className="text-[9px] text-orange-500 font-black uppercase">
+                            Float: Rs. {Number(order.delivery_orders?.[0]?.float_given || 0)}
+                          </span>
                         )}
                       </div>
                     </td>
 
                     {/* Actions */}
                     <td className="py-5 text-right pr-4 last:rounded-r-2xl border-y border-r border-slate-800/50 group-hover:border-slate-700">
-                      <div className="flex justify-end gap-2">
-                        <button className="h-8 w-8 flex items-center justify-center bg-slate-800 text-slate-400 hover:text-gold-500 hover:bg-slate-700 rounded-lg transition-all">
-                          <Edit2 size={14} />
+                      <div className="flex justify-end gap-2 px-2">
+                        <button
+                          title="View/Edit"
+                          onClick={(e) => { e.stopPropagation(); handleOrderClick(order); }}
+                          className="h-9 w-9 flex items-center justify-center bg-slate-800 text-slate-400 hover:text-gold-500 hover:bg-slate-700 rounded-xl transition-all shadow-lg active:scale-90"
+                        >
+                          <Edit2 size={16} />
                         </button>
-                        <button className="h-8 w-8 flex items-center justify-center bg-slate-800/50 text-slate-600 hover:text-white hover:bg-slate-800 rounded-lg">
-                          <ArrowUpRight size={14} />
+
+                        <button
+                          title="Void Order"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const action = () => {
+                              setCancellingOrder(order);
+                              setIsVoiding(true);
+                            };
+                            if (currentUser?.role === 'MANAGER' || currentUser?.role === 'SUPER_ADMIN') {
+                              action();
+                            } else {
+                              setPendingAction(() => action);
+                              setShowPinEntry(true);
+                            }
+                          }}
+                          className="h-9 w-9 flex items-center justify-center bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white rounded-xl transition-all shadow-lg active:scale-90 border border-red-500/20"
+                        >
+                          <Ban size={16} />
                         </button>
                       </div>
                     </td>
@@ -271,9 +324,134 @@ export const ActivityLog: React.FC = () => {
         )}
       </div>
 
-      {/* RETAINED: CANCELLATION MODAL LOGIC (Hidden for brevity) */}
-      <Modal isOpen={!!cancellingOrder} onClose={() => setCancellingOrder(null)} title="Void Log Sequence" size="sm">
-         {/* ... (Your existing cancellation reason logic) ... */}
+      {/* Cancellation/Void Modal */}
+      <Modal
+        isOpen={!!cancellingOrder}
+        onClose={() => { setCancellingOrder(null); setIsVoiding(false); setCancellationReason('Customer changed mind'); }}
+        title={isVoiding ? "SECURITY: VOID TRANSACTION" : "CANCEL ORDER"}
+        size="sm"
+      >
+        <div className="p-6 space-y-6">
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-start gap-4">
+            <AlertCircle className="text-red-500 mt-1" size={20} />
+            <div>
+              <p className="text-sm font-black text-white uppercase tracking-tight">Warning: Destructive Action</p>
+              <p className="text-[10px] text-slate-400 font-bold uppercase mt-1 leading-relaxed">
+                {isVoiding
+                  ? "Voiding will reverse financials and release any locked assets. This action is permanently logged."
+                  : "Cancelling will stop production and release associated table/token."}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Reason for {isVoiding ? 'Void' : 'Cancellation'}</label>
+            <select
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white font-bold focus:border-gold-500 transition-all outline-none"
+              value={cancellationReason}
+              onChange={(e) => setCancellationReason(e.target.value)}
+            >
+              <option>Customer changed mind</option>
+              <option>Kitchen mistake</option>
+              <option>Wrong table selection</option>
+              <option>Payment failed</option>
+              <option>Duplicate order</option>
+              <option>Test order</option>
+              <option>Other (Manual Entry)</option>
+            </select>
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <Button
+              className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black uppercase tracking-widest text-[10px] py-4 rounded-xl"
+              onClick={() => setCancellingOrder(null)}
+            >
+              Back
+            </Button>
+            <Button
+              className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black uppercase tracking-widest text-[10px] py-4 rounded-xl shadow-xl shadow-red-900/40"
+              onClick={async () => {
+                if (isVoiding) {
+                  await voidOrder(cancellingOrder.id, cancellationReason, 'Direct Void from Hub', 'N/A', managerPin);
+                } else {
+                  await cancelOrder(cancellingOrder.id, cancellationReason);
+                }
+                setCancellingOrder(null);
+                setIsVoiding(false);
+                setManagerPin('');
+              }}
+            >
+              Confirm {isVoiding ? 'Void' : 'Cancel'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Manager PIN Entry Modal */}
+      <Modal
+        isOpen={showPinEntry}
+        onClose={() => { setShowPinEntry(false); setManagerPin(''); }}
+        title="MANAGER AUTHORIZATION"
+        size="sm"
+      >
+        <div className="p-8 text-center space-y-6">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gold-500/10 border border-gold-500/20 text-gold-500 mb-2">
+            <Lock size={40} />
+          </div>
+          <div>
+            <h3 className="text-xl font-black text-white uppercase tracking-tight">Security Override</h3>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Enter Manager Security PIN</p>
+          </div>
+
+          <input
+            type="password"
+            autoFocus
+            maxLength={6}
+            className="w-full bg-black/40 border-2 border-slate-800 rounded-2xl px-6 py-4 text-3xl text-center font-black tracking-[0.5em] text-gold-500 focus:border-gold-500 transition-all outline-none"
+            value={managerPin}
+            onChange={(e) => {
+              const val = e.target.value.replace(/\D/g, '');
+              setManagerPin(val);
+              if (val.length === 6 || val.length === 4) {
+                // Potential auto-submit? Let's keep manual for safety
+              }
+            }}
+          />
+
+          <div className="flex gap-3">
+            <Button
+              className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black"
+              onClick={() => setShowPinEntry(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={managerPin.length < 4}
+              className="flex-1 bg-gold-500 hover:bg-gold-400 text-black font-black uppercase tracking-widest"
+              onClick={async () => {
+                // Verify PIN
+                try {
+                  const res = await fetch('/api/auth/verify-pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin: managerPin, requiredRole: 'MANAGER' })
+                  });
+                  if (res.ok) {
+                    setShowPinEntry(false);
+                    pendingAction();
+                  } else {
+                    alert('Invalid Manager PIN');
+                    setManagerPin('');
+                  }
+                } catch (e) {
+                  alert('Verification failed');
+                }
+              }}
+            >
+              Authorize
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

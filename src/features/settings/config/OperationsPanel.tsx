@@ -5,7 +5,7 @@
 // Fixed: Import paths + TypeScript types
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAppContext } from '../../../client/App';
+import { useAppContext } from '../../../client/contexts/AppContext';
 import { Save, DollarSign, Percent, Users, Truck, Loader2, WifiOff } from 'lucide-react';
 
 // Import from src/lib/ (NOT src/shared/lib/)
@@ -24,6 +24,10 @@ interface OperationsConfig {
   defaultDeliveryFee: number;
   defaultGuestCount: number;
   defaultRiderFloat: number;
+  // Floor Management
+  allowOverCapacity: boolean;
+  maxOverCapacityGuests: number;
+  enableTableMerging: boolean;
 }
 
 // API response types
@@ -47,6 +51,9 @@ const DEFAULT_CONFIG: OperationsConfig = {
   defaultDeliveryFee: 250,
   defaultGuestCount: 2,
   defaultRiderFloat: 5000,
+  allowOverCapacity: true,
+  maxOverCapacityGuests: 3,
+  enableTableMerging: false
 };
 
 /**
@@ -61,6 +68,9 @@ function parseConfigFromAPI(data: any): OperationsConfig {
     defaultDeliveryFee: Number(data.defaultDeliveryFee) || 250,
     defaultGuestCount: Math.max(1, Math.min(20, Number(data.defaultGuestCount) || 2)),
     defaultRiderFloat: Number(data.defaultRiderFloat) || 5000,
+    allowOverCapacity: data.allowOverCapacity !== undefined ? Boolean(data.allowOverCapacity) : true,
+    maxOverCapacityGuests: Number(data.maxOverCapacityGuests) || 3,
+    enableTableMerging: Boolean(data.enableTableMerging)
   };
 }
 
@@ -109,7 +119,21 @@ export const OperationsPanel: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Try cache first if offline
+      // Check localStorage first (primary source until backend persistence is implemented)
+      const storageKey = `fireflow_operations_config_${restaurantId}`;
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          setConfig(parseConfigFromAPI(parsed));
+          setIsLoading(false);
+          return;
+        } catch (parseError) {
+          console.warn('Failed to parse stored config, falling back to API');
+        }
+      }
+
+      // Try cache if offline
       if (!isOnline()) {
         const cached = await cacheGet<OperationsConfig>('configs', cacheKey);
         if (cached) {
@@ -120,7 +144,7 @@ export const OperationsPanel: React.FC = () => {
         }
       }
 
-      // Fetch with retry (exponential backoff)
+      // Fetch from API (will return defaults)
       const data = await fetchJSONWithRetry<ConfigResponse>(
         `${API_BASE_URL}/operations/config/${restaurantId}`,
         undefined,
@@ -144,7 +168,7 @@ export const OperationsPanel: React.FC = () => {
 
     } catch (error) {
       console.error('Failed to load operations config:', error);
-      
+
       // Try cache as fallback
       const cached = await cacheGet<OperationsConfig>('configs', cacheKey);
       if (cached) {
@@ -194,45 +218,48 @@ export const OperationsPanel: React.FC = () => {
     setIsSaving(true);
 
     try {
-      // Save with retry
-      const data = await fetchJSONWithRetry<SaveResponse>(
-        `${API_BASE_URL}/operations/config/${restaurantId}`,
-        {
+      // Save to localStorage immediately (since backend doesn't persist yet)
+      const storageKey = `fireflow_operations_config_${restaurantId}`;
+      localStorage.setItem(storageKey, JSON.stringify(config));
+
+      // Also save individual keys for legacy compatibility (App.tsx calculateOrderTotal)
+      localStorage.setItem('service_charge_enabled', config.serviceChargeEnabled.toString());
+      localStorage.setItem('service_charge_rate', (config.serviceChargeRate / 100).toString());
+      localStorage.setItem('tax_enabled', config.taxEnabled.toString());
+      localStorage.setItem('tax_rate', (config.taxRate / 100).toString());
+      localStorage.setItem('default_delivery_fee', config.defaultDeliveryFee.toString());
+      localStorage.setItem('default_guest_count', config.defaultGuestCount.toString());
+
+      // Update cache (7-day TTL)
+      await cacheSet('configs', cacheKey, config, 7);
+
+      setHasChanges(false);
+
+      // Try to notify backend (best effort, don't fail if it errors)
+      try {
+        await fetch(`${API_BASE_URL}/operations/config/${restaurantId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ...config,
             staffId: currentUser.id
           })
-        },
-        {
-          retries: 3,
-          onRetry: (attempt) => {
-            addNotification('info', `Retrying save (attempt ${attempt})...`);
-          }
-        }
-      );
-
-      if (!data.success) {
-        throw new Error(data.error || 'Save failed');
+        });
+      } catch (apiError) {
+        console.warn('Backend notification failed (non-critical):', apiError);
       }
 
-      setHasChanges(false);
-      
-      // Update cache (7-day TTL)
-      await cacheSet('configs', cacheKey, config, 7);
-      
-      // Create audit log
-      await createAuditLog({
+      // Create audit log (best effort)
+      createAuditLog({
         restaurant_id: restaurantId,
         staff_id: currentUser.id,
         action_type: 'CONFIG_UPDATE',
         entity_type: 'RESTAURANT',
         entity_id: restaurantId,
         details: config
-      });
+      }).catch(err => console.warn('Audit log failed (non-critical):', err));
 
-      addNotification('success', data.message || 'Configuration saved successfully');
+      addNotification('success', 'Configuration saved successfully');
 
     } catch (error) {
       console.error('Save operations config error:', error);
@@ -298,15 +325,13 @@ export const OperationsPanel: React.FC = () => {
               <button
                 id="tax-enabled"
                 onClick={() => updateConfig('taxEnabled', !config.taxEnabled)}
-                className={`w-14 h-7 rounded-full transition-colors ${
-                  config.taxEnabled ? 'bg-green-600' : 'bg-slate-700'
-                }`}
+                className={`w-14 h-7 rounded-full transition-colors ${config.taxEnabled ? 'bg-green-600' : 'bg-slate-700'
+                  }`}
                 aria-label={`Tax is ${config.taxEnabled ? 'enabled' : 'disabled'}`}
               >
                 <div
-                  className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                    config.taxEnabled ? 'translate-x-8' : 'translate-x-1'
-                  }`}
+                  className={`w-5 h-5 rounded-full bg-white transition-transform ${config.taxEnabled ? 'translate-x-8' : 'translate-x-1'
+                    }`}
                 />
               </button>
             </div>
@@ -356,15 +381,13 @@ export const OperationsPanel: React.FC = () => {
               <button
                 id="service-charge-enabled"
                 onClick={() => updateConfig('serviceChargeEnabled', !config.serviceChargeEnabled)}
-                className={`w-14 h-7 rounded-full transition-colors ${
-                  config.serviceChargeEnabled ? 'bg-blue-600' : 'bg-slate-700'
-                }`}
+                className={`w-14 h-7 rounded-full transition-colors ${config.serviceChargeEnabled ? 'bg-blue-600' : 'bg-slate-700'
+                  }`}
                 aria-label={`Service charge is ${config.serviceChargeEnabled ? 'enabled' : 'disabled'}`}
               >
                 <div
-                  className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                    config.serviceChargeEnabled ? 'translate-x-8' : 'translate-x-1'
-                  }`}
+                  className={`w-5 h-5 rounded-full bg-white transition-transform ${config.serviceChargeEnabled ? 'translate-x-8' : 'translate-x-1'
+                    }`}
                 />
               </button>
             </div>
@@ -479,6 +502,76 @@ export const OperationsPanel: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1">
               Pre-filled when seating guests at a table
             </p>
+          </div>
+        </div>
+
+        {/* Floor Management Settings */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center text-orange-500">
+              <Users size={20} />
+            </div>
+            <div>
+              <h4 className="font-bold text-white">Floor Management</h4>
+              <p className="text-xs text-slate-500">Seating rules and capacity</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {/* Allow Over-Capacity */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label htmlFor="allow-over-capacity" className="text-sm text-slate-300 font-medium">Allow Over-Capacity Seating</label>
+                <p className="text-xs text-slate-500">Permit seating more guests than table capacity (logs warning)</p>
+              </div>
+              <button
+                id="allow-over-capacity"
+                onClick={() => updateConfig('allowOverCapacity', !config.allowOverCapacity)}
+                className={`w-14 h-7 rounded-full transition-colors ${config.allowOverCapacity ? 'bg-orange-600' : 'bg-slate-700'
+                  }`}
+              >
+                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${config.allowOverCapacity ? 'translate-x-8' : 'translate-x-1'
+                  }`} />
+              </button>
+            </div>
+
+            {/* Max Over Capacity */}
+            {config.allowOverCapacity && (
+              <div>
+                <label htmlFor="max-over" className="text-xs text-slate-500 mb-2 block uppercase font-bold">
+                  Maximum Extra Guests
+                </label>
+                <div className="relative">
+                  <input
+                    id="max-over"
+                    type="number"
+                    className="w-full bg-black border border-slate-700 rounded px-3 py-2 text-white outline-none focus:border-gold-500"
+                    value={config.maxOverCapacityGuests}
+                    onChange={e => updateConfig('maxOverCapacityGuests', Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+                    min="1"
+                    max="10"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">Guests</span>
+                </div>
+              </div>
+            )}
+
+            {/* Table Merging */}
+            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+              <div>
+                <label htmlFor="merge-tables" className="text-sm text-slate-300 font-medium">Enable Table Merging</label>
+                <p className="text-xs text-slate-500">Allow combining tables for large parties (Experimental)</p>
+              </div>
+              <button
+                id="merge-tables"
+                onClick={() => updateConfig('enableTableMerging', !config.enableTableMerging)}
+                className={`w-14 h-7 rounded-full transition-colors ${config.enableTableMerging ? 'bg-blue-600' : 'bg-slate-700'
+                  }`}
+              >
+                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${config.enableTableMerging ? 'translate-x-8' : 'translate-x-1'
+                  }`} />
+              </button>
+            </div>
           </div>
         </div>
 

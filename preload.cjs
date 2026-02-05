@@ -1,5 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+contextBridge.exposeInMainWorld('electronAPI', {
+  printDeliverySlip: (data) => ipcRenderer.send('PRINT_DELIVERY_SLIP', data)
+});
+
 contextBridge.exposeInMainWorld('electron', {
   ipcRenderer: {
     send: (channel, data) => ipcRenderer.send(channel, data),

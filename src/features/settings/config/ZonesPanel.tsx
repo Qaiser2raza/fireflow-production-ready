@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAppContext } from '../../../client/App';
+import { useAppContext } from '../../../client/contexts/AppContext';
 import { Plus, Trash2, Edit2, Save, X } from 'lucide-react';
 
 export const ZonesPanel: React.FC = () => {

@@ -1,0 +1,19 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { Staff, Order, Table, Section, MenuItem, MenuCategory, AppContextType, Notification, OrderItem, OrderType, OrderStatus, TableStatus, PaymentBreakdown, Customer, Vendor, Station, ItemStatus } from '../shared/types';
+import { Layout, Grid, LogOut, Settings, Users, Coffee, Bike, ShoppingBag, CreditCard, Utensils, Shield, RefreshCw } from 'lucide-react';
+import { LoginPage as LoginView } from '../auth/views/LoginPage';
+import { POSView } from '../operations/pos/POSView';
+import { ActivityLog } from '../operations/activity/ActivityLog';
+import { FloorManagementView } from '../operations/dashboard/FloorManagementView';
+import { LogisticsHub } from '../operations/logistics/LogisticsHub';
+import { RegisterHub } from '../operations/finance/RegisterHub';
+import { StaffManagementView } from '../operations/staff/StaffManagementView';
+import { MenuLabView } from '../features/menu/MenuLabView';
+import { SettingsHub } from '../features/settings/SettingsHub';
+import { KDSView } from '../operations/kds/KDSView';
+import { OrderCommandHub } from '../operations/dashboard/OrderCommandHub';
+import { SuperAdminView } from '../features/saas-hq/SuperAdminView';
+import { tableService } from '../shared/lib/tableService';
+import { socketIO } from '../shared/lib/socketClient';
+
+const AppContext = createContext<AppContextType | undefined>(undefined);

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useAppContext } from '../../client/App';
+import { useAppContext } from '../../client/contexts/AppContext';
 import { Staff } from '../../shared/types';
 import {
   Users, Shield, ChefHat, Bike, User,

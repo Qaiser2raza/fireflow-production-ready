@@ -16,25 +16,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { jwtService } from '../services/auth/JwtService';
-
-// --- Ralf's Revocation Registry ---
-// Simple in-memory revocation list (production: use Redis or DB)
-const revokedTokens = new Set<string>();
-
-/**
- * Add a token to the revocation list
- */
-export function revokeToken(token: string): void {
-  revokedTokens.add(token);
-}
-
-/**
- * Check if a token has been revoked
- */
-export function isTokenRevoked(token: string): boolean {
-  return revokedTokens.has(token);
-}
+import { jwtService, JwtPayload } from '../services/auth/JwtService';
 
 // ==========================================
 // TYPE EXTENSIONS
@@ -82,7 +64,9 @@ export async function authMiddleware(
   try {
     // 1. Extract token from Authorization header
     const authHeader = req.headers.authorization;
-    const token = extractTokenFromHeaderLocal(authHeader);
+    const token = jwtService.constructor.prototype.constructor.name === 'JwtService' 
+      ? require('../services/auth/JwtService').JwtService.extractTokenFromHeader(authHeader)
+      : extractTokenFromHeaderLocal(authHeader);
 
     if (!token) {
       res.status(401).json({
@@ -92,25 +76,15 @@ export async function authMiddleware(
       return;
     }
 
-    // --- Ralf's Revocation Check ---
-    if (isTokenRevoked(token)) {
-      console.warn(`[AUTH] Attempted use of revoked token: ${token.substring(0, 10)}...`);
-      res.status(401).json({
-        error: 'Token has been revoked',
-        code: 'TOKEN_REVOKED'
-      });
-      return;
-    }
-
     // 2. Verify token
     const decoded = jwtService.verifyToken(token);
 
     if (!decoded.valid || !decoded.payload) {
       console.warn(`[AUTH] Token verification failed: ${decoded.error}`);
-
+      
       // 410 Gone for expired tokens (client should refresh)
       const statusCode = decoded.error?.includes('expired') ? 410 : 401;
-
+      
       res.status(statusCode).json({
         error: decoded.error || 'Token verification failed',
         code: statusCode === 410 ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN'
@@ -157,7 +131,7 @@ export async function authMiddleware(
  */
 function extractTokenFromHeaderLocal(authHeader?: string): string | null {
   if (!authHeader) return null;
-
+  
   const parts = authHeader.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
     return null;

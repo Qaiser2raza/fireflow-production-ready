@@ -12,13 +12,14 @@ class SocketIOClient {
     private listeners: Record<string, Function[]> = {};
 
     connect() {
-        if (this.socket?.connected) return;
+        if (this.socket) return; // Already connecting or connected
 
         this.socket = io(SOCKET_URL, {
+            transports: ['websocket', 'polling'], // Prefer websockets
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
-            reconnectionAttempts: 10
+            reconnectionAttempts: Infinity // Keep trying
         });
 
         this.socket.on('connect', () => {
@@ -84,7 +85,7 @@ class SocketIOClient {
     subscribeToTableChanges(table: string, filter: Record<string, any>, callback: (payload: any) => void) {
         const eventName = `table_change_${table}`;
 
-        this.on(eventName, (data) => {
+        this.on(eventName, (data: any) => {
             // Apply filter if provided
             if (filter && Object.keys(filter).length > 0) {
                 let matches = true;
@@ -112,7 +113,7 @@ class SocketIOClient {
     // Helper for Supabase-compatible interface
     channel(name: string) {
         return {
-            on: (event: string, filter: any, callback: Function) => {
+            on: (event: string, _filter: any, callback: Function) => {
                 const eventName = `${name}_${event}`;
                 this.on(eventName, callback);
                 return this;
