@@ -2,38 +2,28 @@
 
 // --- 1. CORE ENUMS & TYPES ---
 
-export type UserRole = 'SUPER_ADMIN' | 'MANAGER' | 'CASHIER' | 'WAITER' | 'CHEF' | 'RIDER' | 'DRIVER';
+export type UserRole = 'ADMIN' | 'SUPER_ADMIN' | 'MANAGER' | 'CASHIER' | 'WAITER' | 'CHEF' | 'RIDER' | 'DRIVER';
 
 export type SectionType = 'DINING' | 'DELIVERY' | 'TAKEAWAY' | 'HIDDEN';
 
 export type OrderType = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'RESERVATION';
 
 export enum OrderStatus {
-    DRAFT = 'DRAFT',
-    CONFIRMED = 'CONFIRMED',
-    NEW = 'CONFIRMED', // Mapping NEW to CONFIRMED for backward compatibility
-    FIRED = 'FIRED',
-    PREPARING = 'PREPARING',
+    ACTIVE = 'ACTIVE',
     READY = 'READY',
-    SERVED = 'SERVED',
-    BILL_REQUESTED = 'BILL_REQUESTED',
-    OUT_FOR_DELIVERY = 'OUT_FOR_DELIVERY',
     DELIVERED = 'DELIVERED',
-    COMPLETED = 'COMPLETED',
-    PAID = 'PAID',
+    CLOSED = 'CLOSED',
     CANCELLED = 'CANCELLED',
-    VOID = 'VOID',
-    VOIDED = 'VOIDED',
-    FAILED_DELIVERY = 'FAILED_DELIVERY'
+    VOIDED = 'VOIDED'
 }
 
 export enum ItemStatus {
-    PENDING = 'PENDING',
     DRAFT = 'DRAFT',
-    FIRED = 'FIRED',
+    PENDING = 'PENDING',
     PREPARING = 'PREPARING',
-    READY = 'READY',
-    SERVED = 'SERVED'
+    DONE = 'DONE',
+    SERVED = 'SERVED',
+    SKIPPED = 'SKIPPED'
 }
 
 export enum TableStatus {
@@ -48,6 +38,7 @@ export enum TableStatus {
 export enum PaymentStatus {
     UNPAID = 'UNPAID',
     PAID = 'PAID',
+    PARTIALLY_PAID = 'PARTIALLY_PAID',
     REFUNDED = 'REFUNDED'
 }
 
@@ -92,10 +83,15 @@ export interface Restaurant {
     trialEndsAt?: Date;
     createdAt: Date;
     serviceChargeEnabled?: boolean;
+    service_charge_enabled?: boolean;
     serviceChargeRate?: number;
+    service_charge_rate?: number;
     taxEnabled?: boolean;
+    tax_enabled?: boolean;
     taxRate?: number;
+    tax_rate?: number;
     defaultDeliveryFee?: number;
+    default_delivery_fee?: number;
 }
 
 export interface Staff {
@@ -107,10 +103,27 @@ export interface Staff {
     role: UserRole;
     pin: string;
     image?: string | null;
-    status?: 'AVAILABLE' | 'BUSY' | 'OFFLINE';
+    status: string;
     active_tables?: number;
-    cashInHand?: number;
     totalDeliveries?: number;
+    total_deliveries?: number; // DB alias
+    active_shift?: RiderShift | null;
+}
+
+export interface RiderShift {
+    id: string;
+    restaurant_id: string;
+    rider_id: string;
+    opened_by: string;
+    closed_by?: string;
+    opened_at: string | Date;
+    closed_at?: string | Date;
+    opening_float: number;
+    closing_cash_received?: number;
+    expected_cash?: number;
+    cash_difference?: number;
+    status: 'OPEN' | 'CLOSED';
+    notes?: string;
 }
 
 export interface Section {
@@ -213,6 +226,7 @@ export interface OrderItem {
     item_name?: string;
     category?: string;
     special_instructions?: string;
+    notes?: string; // Add alias for notes
     // helpers for UI if needed, but DB is source of truth
     menu_item?: MenuItem; // Optional, if included in fetch
     station_rel?: Station;
@@ -256,9 +270,7 @@ export interface DeliveryOrder {
     customer?: Customer;
     driver_id?: string;
     dispatched_at?: Date | string;
-    is_settled_with_rider?: boolean;
-    float_given?: number;
-    expected_return?: number;
+    delivered_at?: Date | string;
 }
 
 export interface ReservationOrder {
@@ -277,6 +289,7 @@ export interface Order {
     order_number?: string;
     restaurant_id: string;
     status: OrderStatus;
+    payment_status: PaymentStatus; // v3.0: Added this field
     type: OrderType;
     total: number;
     created_at: string | Date;
@@ -289,11 +302,16 @@ export interface Order {
     last_action_at?: Date | string;
     delivery_address?: string;
     deliveryAddress?: string;
-    is_settled_with_rider?: boolean;
+    rider_shift_id?: string;
+    customer_id?: string;
+    closed_at?: Date | string;
+    completed_at?: Date | string;
 
     // New Relation Fields
     table_id?: string;
     table?: Table;
+    assigned_driver_id?: string;
+    assigned_waiter_id?: string;
     order_items?: OrderItem[];
     dine_in_orders?: DineInOrder[]; // Array due to Prisma definition, effectively 1
     takeaway_orders?: TakeawayOrder[];
@@ -313,15 +331,41 @@ export interface Order {
     tax?: number;
     discount?: number;
     breakdown?: any;
+    restaurants?: Restaurant; // Add restaurant relation
+    payment_method?: string; // Add payment method
+    notes?: string; // Global order notes
 
     // Virtual fields for convenience (populated in App.tsx)
-    assigned_driver_id?: string;
     // delivery_address?: string; (removed duplicate)
     customerName?: string;
     customerPhone?: string;
     guestCount?: number;
     tableId?: string | null;
     timestamp?: Date;
+}
+
+export interface Customer {
+    id: string;
+    restaurant_id: string;
+    name?: string;
+    phone: string;
+    address?: string;
+    notes?: string;
+    created_at?: string | Date;
+    updated_at?: string | Date;
+    addresses?: CustomerAddress[];
+    total_orders?: number;
+    last_order_at?: string | Date;
+}
+
+export interface CustomerAddress {
+    id: string;
+    customer_id: string;
+    label: string;
+    full_address: string;
+    landmarks?: string;
+    is_default: boolean;
+    created_at?: string | Date;
 }
 
 export interface PaymentBreakdown {
@@ -367,14 +411,20 @@ export interface ValidationResult {
 
 export interface Transaction {
     id: string;
-    orderId: string;
+    orderId?: string;
+    order_id?: string;
     amount: number;
-    method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET';
+    payment_method: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET';
+    method?: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET'; // Deprecated alias
+    status: 'PAID' | 'REFUNDED' | 'VOIDED';
+    transaction_ref?: string;
     type?: 'PAYMENT' | 'REFUND';
     timestamp: Date;
+    created_at?: Date | string;
     processedBy: string;
     tenderedAmount?: number;
     changeGiven?: number;
+    staff?: { id: string, name: string };
 }
 
 export interface RiderSettlement {
@@ -397,6 +447,19 @@ export interface Expense {
     category: 'inventory' | 'salary' | 'rent' | 'utilities' | 'marketing' | 'other';
     description: string;
     processedBy: string;
+}
+
+export interface LedgerEntry {
+    id: string;
+    restaurant_id: string;
+    account_id?: string | null; // Null = System/Cash/Revenue
+    transaction_type: 'DEBIT' | 'CREDIT';
+    amount: number;
+    reference_type: 'ORDER' | 'SETTLEMENT' | 'PAYOUT' | 'STOCK_IN' | 'OPENING_BALANCE';
+    reference_id?: string;
+    description?: string;
+    processed_by?: string;
+    created_at: Date | string;
 }
 
 export interface Notification {
@@ -439,8 +502,8 @@ export interface AppContextType {
     addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string) => void;
     removeNotification: (id: string) => void;
     fetchInitialData: () => Promise<void>;
-    addOrder: (order: Partial<Order>) => Promise<boolean>;
-    updateOrder: (order: Partial<Order>) => Promise<boolean>;
+    addOrder: (order: Partial<Order>) => Promise<any>;
+    updateOrder: (order: Partial<Order>) => Promise<any>;
     cancelOrder: (id: string, reason: string, notes?: string) => Promise<boolean>;
     voidOrder: (id: string, reason: string, notes: string, refundMethod: string, managerPin: string) => Promise<boolean>;
     updateOrderStatus: (id: string, status: OrderStatus) => Promise<void>;
@@ -486,6 +549,7 @@ export interface AppContextType {
 
     addCustomer: (c: any) => Promise<void>;
     updateCustomer: (c: any) => Promise<void>;
+    deleteCustomer: (id: string) => Promise<void>;
 
     addVendor: (v: any) => Promise<void>;
     updateVendor: (v: any) => Promise<void>;

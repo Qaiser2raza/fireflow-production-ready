@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import http from 'http';
@@ -9,8 +9,15 @@ import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 
 import { OrderServiceFactory } from './services/orders/OrderServiceFactory';
+import { AccountingService } from './services/AccountingService';
+import deliveryRoutes from './routes/deliveryRoutes';
+import accountingRoutes from './routes/accountingRoutes';
+import customerRoutes from './routes/customerRoutes';
+import reportRoutes from './routes/reportRoutes';
 import { jwtService } from './services/auth/JwtService';
 import { authMiddleware } from './middleware/authMiddleware';
+
+const accounting = new AccountingService();
 import {
     generatePairingCode,
     verifyPairingCode,
@@ -31,7 +38,6 @@ import {
     releaseTable,
     getFloorLayout
 } from './services/FloorManagementService';
-import { getOverCapacityReport } from './services/ReportsService';
 
 // Load environment variables
 dotenv.config();
@@ -110,7 +116,6 @@ app.post('/api/auth/login', async (req, res) => {
         // We look for any active staff matching this PIN (plaintext lookup).
         let user = await prisma.staff.findFirst({
             where: {
-                status: 'active',
                 pin: pin,
                 restaurant_id: req.body.restaurant_id || undefined
             }
@@ -450,6 +455,11 @@ app.post('/api/orders/upsert', async (req, res) => {
         const data = req.body;
         if (!data.type) return res.status(400).json({ error: 'Order type is required' });
 
+        // Map restaurantId to restaurant_id if needed
+        if (!data.restaurant_id && data.restaurantId) {
+            data.restaurant_id = data.restaurantId;
+        }
+
         const service = OrderServiceFactory.getService(data.type);
         let result;
 
@@ -508,6 +518,12 @@ app.post('/api/orders', async (req, res) => {
     try {
         const data = req.body;
         if (!data.type) return res.status(400).json({ error: 'Order type is required' });
+
+        // Map restaurantId to restaurant_id if needed
+        if (!data.restaurant_id && data.restaurantId) {
+            data.restaurant_id = data.restaurantId;
+        }
+
         const service = OrderServiceFactory.getService(data.type);
         const result = await service.createOrder(data);
 
@@ -566,6 +582,90 @@ app.delete('/api/orders/:id', async (req, res) => {
     }
 });
 
+// Settle Order (Payment)
+app.post('/api/orders/:id/settle', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { amount, paymentMethod, payment_method, ...rest } = req.body;
+        const method = paymentMethod || payment_method || 'CASH';
+        const receivedAmount = Number(amount);
+        const staffId = req.headers['x-staff-id'] as string; // Ideally pass in body
+
+        if (!receivedAmount || receivedAmount <= 0) {
+            return res.status(400).json({ error: 'Valid amount required' });
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+            const order = await tx.orders.findUnique({ where: { id } });
+            if (!order) throw new Error('Order not found');
+
+            // 1. Update Order
+            const updatedOrder = await tx.orders.update({
+                where: { id },
+                data: {
+                    status: 'CLOSED',
+                    payment_status: 'PAID',
+                    // payment_method: method, // Assuming this field might not exist on all schemas, rely on transactions/ledger
+                    closed_at: new Date()
+                }
+            });
+
+            // 2. Create Transaction
+            await tx.transactions.create({
+                data: {
+                    restaurant_id: order.restaurant_id,
+                    order_id: order.id,
+                    amount: receivedAmount,
+                    payment_method: method,
+                    status: 'PAID',
+                    transaction_ref: `POS-${Date.now()}`
+                }
+            });
+
+            // 3. Clear Table (if Dine-In)
+            if (order.type === 'DINE_IN' && order.table_id) {
+                await tx.tables.update({
+                    where: { id: order.table_id },
+                    data: {
+                        status: 'AVAILABLE',
+                        active_order_id: null
+                    }
+                });
+            }
+
+            // 4. Accounting Entry
+            if (order.type === 'DELIVERY' && order.status === 'DELIVERED') {
+                // For already delivered orders, revenue was already recorded.
+                // We only need to clear the rider's liability and record cash receipt.
+                await accounting.recordRiderSettlement({
+                    restaurantId: order.restaurant_id,
+                    riderId: order.assigned_driver_id!,
+                    amountReceived: receivedAmount,
+                    orderIds: [order.id],
+                    processedBy: staffId || order.last_action_by || 'SYSTEM',
+                    settlementId: `POS-${order.id}`
+                }, tx);
+            } else {
+                // For normal sales (Dine-In/Takeaway/Direct Delivery Settle)
+                await accounting.recordOrderSale(order.id, tx);
+            }
+
+            return updatedOrder;
+        });
+
+        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id });
+        io.emit('db_change', { table: 'transactions', eventType: 'INSERT' });
+        if (result.type === 'DINE_IN' && result.table_id) {
+            io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: result.table_id });
+        }
+
+        res.json({ success: true, order: result });
+    } catch (e: any) {
+        console.error("Order Settle Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Floor Management: Seat Party
 app.post('/api/floor/seat-party', async (req, res) => {
     try {
@@ -600,6 +700,12 @@ app.post('/api/floor/seat-party', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
+// Mount delivery/rider routes (mount at /api so paths like /orders/... and /riders/... work)
+app.use('/api', deliveryRoutes);
+app.use('/api', customerRoutes);
+app.use('/api/accounting', accountingRoutes);
+app.use('/api/reports', reportRoutes);
 
 /**
  * PATCH /api/orders/:id/guest-count
@@ -669,30 +775,67 @@ app.get('/api/analytics/summary', async (req, res) => {
             _sum: { amount: true },
             _count: { id: true }
         });
+
+        // v3.0 analytics logic
+        const activeOrdersCount = await prisma.orders.count({
+            where: {
+                restaurant_id: String(restaurant_id),
+                status: 'ACTIVE'
+            }
+        });
+
+        // --- NEW: LOGISTICS ANALYTICS ---
+        const onRoadCount = await prisma.orders.count({
+            where: {
+                restaurant_id: String(restaurant_id),
+                status: 'READY' // In our flow, READY means out for delivery
+            }
+        });
+
+        const activeShiftsCount = await prisma.rider_shifts.count({
+            where: {
+                restaurant_id: String(restaurant_id),
+                status: 'OPEN'
+            }
+        });
+
+        const deliveredTodayCount = await prisma.orders.count({
+            where: {
+                restaurant_id: String(restaurant_id),
+                status: 'DELIVERED',
+                created_at: {
+                    gte: new Date(new Date().setHours(0, 0, 0, 0))
+                }
+            }
+        });
+
+        const kitchenQueueCount = await (prisma.order_items as any).count({
+            where: {
+                orders: {
+                    restaurant_id: String(restaurant_id),
+                    status: 'ACTIVE'
+                },
+                item_status: 'PENDING' // Items waiting for chef
+            }
+        });
+
         res.json({
             totalSales: Number(salesAgg._sum.amount || 0),
-            totalTransactions: salesAgg._count.id || 0
+            totalTransactions: salesAgg._count.id || 0,
+            unitAverage: salesAgg._count.id > 0 ? Math.round(Number(salesAgg._sum.amount || 0) / salesAgg._count.id) : 0,
+            activeOrders: activeOrdersCount,
+            kitchenQueue: kitchenQueueCount,
+            logistics: {
+                onRoad: onRoadCount,
+                activeShifts: activeShiftsCount,
+                deliveredToday: deliveredTodayCount
+            }
         });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.get('/api/reports/over-capacity', async (req, res) => {
-    const { restaurant_id, start_date, end_date } = req.query;
-    if (!restaurant_id) return res.status(400).json({ error: "Missing restaurant_id" });
-
-    try {
-        const start = start_date ? new Date(String(start_date)) : new Date(new Date().setHours(0, 0, 0, 0)); // Default today
-        const end = end_date ? new Date(String(end_date)) : new Date();
-
-        const report = await getOverCapacityReport(String(restaurant_id), { start, end });
-        res.json(report);
-    } catch (e: any) {
-        console.error("Report Error:", e);
-        res.status(500).json({ error: e.message });
-    }
-});
 
 // ==========================================
 // 📜 4. MENU & CATEGORIES
@@ -854,13 +997,26 @@ app.get('/api/staff', async (req, res) => {
     const { restaurant_id } = req.query;
     try {
         const staff = await prisma.staff.findMany({
-            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
+            where: {
+                ...(restaurant_id ? { restaurant_id: String(restaurant_id) } : {}),
+                status: 'active'
+            },
+            include: {
+                rider_shifts: {
+                    where: { status: 'OPEN' },
+                    take: 1
+                }
+            },
             orderBy: { name: 'asc' }
         });
+
         // Sanitize: Do not send PINs
         const sanitizedStaff = staff.map(s => {
             const { pin, hashed_pin, ...rest } = s;
-            return rest;
+            return {
+                ...rest,
+                active_shift: (s as any).rider_shifts?.[0] || null
+            };
         });
         res.json(sanitizedStaff);
     } catch (e: any) {
@@ -883,11 +1039,9 @@ app.get('/api/transactions', async (req, res) => {
 
 app.get('/api/customers', async (req, res) => {
     const { restaurant_id } = req.query;
+    if (!restaurant_id) return res.status(400).json({ error: 'restaurant_id required' });
     try {
-        const customers = await prisma.customers.findMany({
-            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
-            orderBy: { name: 'asc' }
-        });
+        const customers = await accounting.getCustomerIntelligence(String(restaurant_id));
         res.json(customers);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -1195,9 +1349,30 @@ app.post('/api/system/seed-restaurant', async (req, res) => {
 
         // 5. Menu Items (upsert allows safe re-runs with optional price updates)
         const menuItems = [
-            { name: 'Chicken Wings', category: catStarters, price: 450, station: 'KITCHEN' },
-            { name: 'Beef Burger', category: catMains, price: 850, station: 'KITCHEN' },
-            { name: 'Soda', category: catMains, price: 100, station: 'BAR' }
+            {
+                name: 'Chicken Wings',
+                name_urdu: 'چکن ونگز',
+                category: catStarters,
+                price: 450,
+                station: 'KITCHEN',
+                image_url: 'https://images.unsplash.com/photo-1567620905732-2d1ec7bb7445?auto=format&fit=crop&w=400&q=80'
+            },
+            {
+                name: 'Beef Burger',
+                name_urdu: 'بیف برگر',
+                category: catMains,
+                price: 850,
+                station: 'KITCHEN',
+                image_url: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=400&q=80'
+            },
+            {
+                name: 'Soda',
+                name_urdu: 'سوڈا',
+                category: catMains,
+                price: 100,
+                station: 'BAR',
+                image_url: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?auto=format&fit=crop&w=400&q=80'
+            }
         ];
 
         for (const item of menuItems) {
@@ -1217,8 +1392,10 @@ app.post('/api/system/seed-restaurant', async (req, res) => {
                         category_id: item.category.id,
                         category: item.category.name,
                         name: item.name,
+                        name_urdu: item.name_urdu,
                         price: item.price,
-                        station: item.station
+                        station: item.station,
+                        image_url: item.image_url
                     }
                 });
             }
@@ -1370,18 +1547,23 @@ app.post('/api/orders/:id/settle', async (req, res) => {
                 }
             });
 
-            // 2. Update Order Status
-            const updatedOrder = await tx.orders.update({
+            // 2. Update Order Status, Total, and Audit Trail (v3.0: CLOSED + PAID)
+            const updatedOrder = await (tx.orders as any).update({
                 where: { id },
                 data: {
-                    status: 'PAID',
+                    status: 'CLOSED', // v3.0: PAID is no longer a status, use CLOSED
+                    payment_status: 'PAID', // v3.0: Explicit payment status
+                    total: amount,
+                    last_action_by: staff_id,
+                    last_action_desc: `Settle: ${payment_method} - Rs. ${amount}`,
                     updated_at: new Date()
                 }
             });
 
             // 3. If Dine-In, Release Table (Mark as DIRTY for cleanup)
-            if (order.type === 'DINE_IN' && order.dine_in_orders) {
-                const tableId = order.dine_in_orders.table_id;
+            const dineIn = order.dine_in_orders; // v3.0: Corrected from array to object access
+            if (order.type === 'DINE_IN' && dineIn) {
+                const tableId = (dineIn as any).table_id;
                 await tx.tables.update({
                     where: { id: tableId },
                     data: {
@@ -1391,6 +1573,9 @@ app.post('/api/orders/:id/settle', async (req, res) => {
                 });
             }
 
+            // 4. Record in Financial Ledger
+            await accounting.recordOrderSale(id, tx);
+
             return { transaction, updatedOrder };
         });
 
@@ -1399,6 +1584,12 @@ app.post('/api/orders/:id/settle', async (req, res) => {
             table: 'orders',
             eventType: 'UPDATE',
             data: result.updatedOrder
+        });
+
+        io.to(`restaurant:${restaurant_id}`).emit('db_change', {
+            table: 'transactions',
+            eventType: 'INSERT',
+            data: result.transaction
         });
 
         if (order.type === 'DINE_IN' && order.dine_in_orders) {

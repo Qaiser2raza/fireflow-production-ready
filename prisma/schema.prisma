@@ -22,37 +22,52 @@ model audit_logs {
 }
 
 model customers {
-  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id   String            @db.Uuid
-  name            String?           @db.VarChar(100)
-  phone           String            @db.VarChar(20)
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String               @db.Uuid
+  name            String?              @db.VarChar(100)
+  phone           String               @db.VarChar(20)
   address         String?
   notes           String?
-  created_at      DateTime?         @default(now()) @db.Timestamp(6)
-  updated_at      DateTime?         @default(now()) @db.Timestamp(6)
-  restaurants     restaurants       @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  created_at      DateTime?            @default(now()) @db.Timestamp(6)
+  updated_at      DateTime?            @default(now()) @db.Timestamp(6)
+  restaurants     restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   delivery_orders delivery_orders[]
   orders          orders[]
   takeaway_orders takeaway_orders[]
+  addresses       customer_addresses[]
 
   @@unique([restaurant_id, phone])
 }
 
+model customer_addresses {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customer_id  String    @db.Uuid
+  label        String    @db.VarChar(50) // "Home", "Office", etc.
+  full_address String
+  landmarks    String?
+  is_default   Boolean   @default(false)
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  customers    customers @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+}
+
 model delivery_orders {
-  id                    String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  order_id              String     @unique @db.Uuid
-  customer_name         String?
-  customer_phone        String
-  delivery_address      String?
-  customer_id           String?    @db.Uuid
-  driver_id             String?    @db.Uuid
-  dispatched_at         DateTime?
-  float_given           Decimal?   @default(0) @db.Decimal(10, 2)
-  expected_return       Decimal?   @default(0) @db.Decimal(10, 2)
-  is_settled_with_rider Boolean?   @default(false)
-  customers             customers? @relation(fields: [customer_id], references: [id])
-  staff                 staff?     @relation(fields: [driver_id], references: [id])
-  orders                orders     @relation(fields: [order_id], references: [id])
+  id                        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                  String     @unique @db.Uuid
+  customer_name             String?
+  customer_phone            String
+  delivery_address          String?
+  customer_id               String?    @db.Uuid
+  driver_id                 String?    @db.Uuid
+  dispatched_at             DateTime?
+  current_lat               Decimal?   @db.Decimal(10, 8)
+  current_lng               Decimal?   @db.Decimal(11, 8)
+  delivered_at              DateTime?
+  delivery_duration_minutes Int?
+  failed_reason             String?
+  last_location_update      DateTime?
+  customers                 customers? @relation(fields: [customer_id], references: [id])
+  staff                     staff?     @relation(fields: [driver_id], references: [id])
+  orders                    orders     @relation(fields: [order_id], references: [id])
 }
 
 model dine_in_orders {
@@ -141,14 +156,13 @@ model menu_items {
 }
 
 model order_items {
-  id                   String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  order_id             String     @db.Uuid
-  menu_item_id         String     @db.Uuid
+  id                   String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id             String      @db.Uuid
+  menu_item_id         String      @db.Uuid
   quantity             Int
-  unit_cost            Decimal?   @db.Decimal(10, 2)
-  unit_price           Decimal    @db.Decimal(10, 2)
-  total_price          Decimal    @db.Decimal(10, 2)
-  item_status          ItemStatus @default(PENDING)
+  unit_cost            Decimal?    @db.Decimal(10, 2)
+  unit_price           Decimal     @db.Decimal(10, 2)
+  total_price          Decimal     @db.Decimal(10, 2)
   station              String?
   started_at           DateTime?
   completed_at         DateTime?
@@ -157,18 +171,20 @@ model order_items {
   modifications        Json?
   item_name            String?
   category             String?
-  created_at           DateTime   @default(now())
-  station_id           String?    @db.Uuid
-  menu_items           menu_items @relation(fields: [menu_item_id], references: [id])
-  orders               orders     @relation(fields: [order_id], references: [id])
-  stations             stations?  @relation(fields: [station_id], references: [id])
+  created_at           DateTime    @default(now())
+  station_id           String?     @db.Uuid
+  predicted_ready_time DateTime?
+  force_ready_at       DateTime?
+  force_ready_by       String?     @db.Uuid
+  item_status          ItemStatus? @default(PENDING)
+  menu_items           menu_items  @relation(fields: [menu_item_id], references: [id])
+  orders               orders      @relation(fields: [order_id], references: [id])
+  stations             stations?   @relation(fields: [station_id], references: [id])
 }
 
 model orders {
   id                                     String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id                          String              @db.Uuid
-  status                                 String
-  type                                   String
   total                                  Decimal             @default(0) @db.Decimal(10, 2)
   items                                  Json?
   table_id                               String?             @db.Uuid
@@ -198,15 +214,24 @@ model orders {
   void_reason                            String?
   void_notes                             String?
   refund_transaction_id                  String?
-  float_given                            Decimal?            @default(0) @db.Decimal(10, 2)
-  expected_return                        Decimal?            @default(0) @db.Decimal(10, 2)
-  is_settled_with_rider                  Boolean?            @default(false)
+  rider_shift_id                         String?             @db.Uuid
   sync_status                            String              @default("PENDING")
   customer_id                            String?             @db.Uuid
   order_number                           String?             @unique @db.VarChar(20)
+  payment_status                         PaymentStatus?      @default(UNPAID)
+  predicted_complete_time                DateTime?
+  bottleneck_detected                    Boolean             @default(false)
+  force_settled_at                       DateTime?
+  force_settled_by                       String?             @db.Uuid
+  status                                 OrderStatus?        @default(ACTIVE)
+  type                                   OrderType
+  closed_at                              DateTime?
+  completed_at                           DateTime?
   delivery_orders                        delivery_orders?
   dine_in_orders                         dine_in_orders?
+  order_intelligence                     order_intelligence?
   order_items                            order_items[]
+  rider_shift                            rider_shifts?       @relation(fields: [rider_shift_id], references: [id])
   staff_orders_assigned_driver_idTostaff staff?              @relation("orders_assigned_driver_idTostaff", fields: [assigned_driver_id], references: [id])
   staff_orders_assigned_waiter_idTostaff staff?              @relation("orders_assigned_waiter_idTostaff", fields: [assigned_waiter_id], references: [id])
   customers                              customers?          @relation(fields: [customer_id], references: [id])
@@ -214,13 +239,24 @@ model orders {
   tables                                 tables?             @relation(fields: [table_id], references: [id])
   reservation_orders                     reservation_orders?
   takeaway_orders                        takeaway_orders?
+  transactions                           transactions[]
 
   @@index([assigned_driver_id])
   @@index([assigned_waiter_id])
   @@index([restaurant_id])
-  @@index([status])
   @@index([table_id])
-  @@index([type])
+}
+
+model order_intelligence {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                String    @unique @db.Uuid
+  predicted_complete_time DateTime?
+  bottleneck_detected     Boolean   @default(false) @map(" bottleneck_detected")
+  force_settled_at        DateTime?
+  force_settled_by        String?   @db.Uuid
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @default(now())
+  orders                  orders    @relation(fields: [order_id], references: [id], onDelete: Cascade)
 }
 
 model pairing_codes {
@@ -330,6 +366,10 @@ model restaurants {
   tables                 tables[]
   transactions           transactions[]
   vendors                vendors[]
+  ledger_entries         ledger_entries[]
+  payouts                payouts[]
+  cash_sessions          cash_sessions[]
+  rider_shifts           rider_shifts[]
 
   @@index([slug])
 }
@@ -349,6 +389,25 @@ model rider_settlements {
   notes              String?
   created_at         DateTime  @default(now())
   staff              staff     @relation(fields: [driver_id], references: [id])
+}
+
+model rider_shifts {
+  id                    String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id         String      @db.Uuid
+  rider_id              String      @db.Uuid
+  opened_by             String      @db.Uuid
+  closed_by             String?     @db.Uuid
+  opened_at             DateTime    @default(now()) @db.Timestamp(6)
+  closed_at             DateTime?   @db.Timestamp(6)
+  opening_float         Decimal     @default(0) @db.Decimal(10, 2)
+  closing_cash_received Decimal?    @db.Decimal(10, 2)
+  expected_cash         Decimal?    @db.Decimal(10, 2) // Opening Float + ∑ Deliveries
+  cash_difference       Decimal?    @db.Decimal(10, 2)
+  status                String      @default("OPEN") @db.VarChar(20)
+  notes                 String?
+  orders                orders[]
+  restaurants           restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  rider                 staff       @relation("rider_shifts", fields: [rider_id], references: [id])
 }
 
 model sections {
@@ -388,10 +447,13 @@ model staff {
   image                                   String?
   status                                  String?              @default("active")
   active_tables                           Int?                 @default(0)
-  cash_in_hand                            Decimal?             @default(0) @db.Decimal(10, 2)
   last_login                              DateTime?
   created_at                              DateTime             @default(now())
   total_deliveries                        Int?                 @default(0)
+  average_delivery_time_minutes           Int?
+  current_lat                             Decimal?             @db.Decimal(10, 8)
+  current_lng                             Decimal?             @db.Decimal(11, 8)
+  is_available                            Boolean?             @default(true)
   audit_logs                              audit_logs[]
   delivery_orders                         delivery_orders[]
   dine_in_orders                          dine_in_orders[]
@@ -401,6 +463,7 @@ model staff {
   orders_orders_assigned_waiter_idTostaff orders[]             @relation("orders_assigned_waiter_idTostaff")
   registered_devices                      registered_devices[]
   rider_settlements                       rider_settlements[]
+  rider_shifts                            rider_shifts[]       @relation("rider_shifts")
   security_events                         security_events[]
   restaurants                             restaurants          @relation(fields: [restaurant_id], references: [id])
   staff_wallet_logs                       staff_wallet_logs[]
@@ -464,18 +527,18 @@ model tables {
 }
 
 model takeaway_orders {
-  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  order_id       String     @unique @db.Uuid
-  token_number   String     // Format: T###
-  token_date     String?    // Date string for daily reset (YYYY-MM-DD)
-  customer_name  String?    // Optional (default: "Walk-in Customer")
-  customer_phone String?    // Optional
-  pickup_time    DateTime?  // Estimated ready time
-  actual_pickup_time DateTime?  // When customer actually picked up
-  is_picked_up   Boolean?   @default(false) // Handoff confirmation
-  customer_id    String?    @db.Uuid
-  customers      customers? @relation(fields: [customer_id], references: [id])
-  orders         orders     @relation(fields: [order_id], references: [id])
+  id                 String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id           String     @unique @db.Uuid
+  token_number       String
+  customer_name      String?
+  customer_phone     String?
+  pickup_time        DateTime?
+  customer_id        String?    @db.Uuid
+  actual_pickup_time DateTime?
+  is_picked_up       Boolean?   @default(false)
+  token_date         String?
+  customers          customers? @relation(fields: [customer_id], references: [id])
+  orders             orders     @relation(fields: [order_id], references: [id])
 
   @@unique([order_id, token_number])
 }
@@ -490,6 +553,7 @@ model transactions {
   created_at      DateTime?    @default(now()) @db.Timestamp(6)
   transaction_ref String?      @db.VarChar(100)
   restaurants     restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  orders          orders?      @relation(fields: [order_id], references: [id], onUpdate: NoAction)
 }
 
 model vendors {
@@ -503,25 +567,21 @@ model vendors {
 }
 
 enum ItemStatus {
+  DRAFT
   PENDING
   PREPARING
-  READY
+  DONE
   SERVED
-  FIRED
-  DRAFT
+  SKIPPED
 }
 
 enum OrderStatus {
-  DRAFT
-  CONFIRMED
-  PREPARING
+  ACTIVE
   READY
-  SERVED
-  BILL_REQUESTED
-  COMPLETED
+  DELIVERED  // New status: Order delivered, awaiting cash settlement
+  CLOSED
   CANCELLED
   VOIDED
-  FIRED
 }
 
 enum OrderType {
@@ -532,12 +592,10 @@ enum OrderType {
 }
 
 enum PaymentStatus {
-  PENDING
-  PROCESSING
+  UNPAID
   PAID
   PARTIALLY_PAID
   REFUNDED
-  FAILED
 }
 
 enum TableStatus {
@@ -547,4 +605,46 @@ enum TableStatus {
   CLEANING
   RESERVED
   OUT_OF_SERVICE
+}
+
+model ledger_entries {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String   @db.Uuid
+  account_id       String?  @db.Uuid
+  transaction_type String   @db.VarChar(10)
+  amount           Decimal  @db.Decimal(10, 2)
+  reference_type   String   @db.VarChar(50)
+  reference_id     String?  @db.Uuid
+  description      String?
+  processed_by     String?  @db.Uuid
+  created_at       DateTime @default(now()) @db.Timestamp(6)
+  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
+model payouts {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String   @db.Uuid
+  amount           Decimal  @db.Decimal(10, 2)
+  category         String   @db.VarChar(50)
+  reference_id     String?  @db.Uuid
+  notes            String?
+  processed_by     String   @db.Uuid
+  created_at       DateTime @default(now()) @db.Timestamp(6)
+  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
+model cash_sessions {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String    @db.Uuid
+  opened_by        String    @db.Uuid
+  closed_by        String?   @db.Uuid
+  opened_at        DateTime  @default(now()) @db.Timestamp(6)
+  closed_at        DateTime? @db.Timestamp(6)
+  opening_balance  Decimal   @default(0) @db.Decimal(10, 2)
+  expected_balance Decimal?  @db.Decimal(10, 2)
+  actual_balance   Decimal?  @db.Decimal(10, 2)
+  variance         Decimal?  @db.Decimal(10, 2)
+  status           String    @default("OPEN") @db.VarChar(20)
+  notes            String?
+  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }

@@ -12,20 +12,24 @@ export abstract class BaseOrderService implements IOrderService {
 
             const order = await tx.orders.create({
                 data: {
-                    restaurant_id: data.restaurant_id,
+                    restaurants: {
+                        connect: { id: data.restaurant_id }
+                    },
                     order_number: order_number,
                     type: data.type,
-                    status: data.status || 'DRAFT',
+                    status: (data.status || 'ACTIVE') as any,
+                    payment_status: 'UNPAID',
                     total: data.total || 0,
-                    table_id: data.table_id,
-                    guest_count: data.guest_count,
+                    guest_count: data.guest_count ? Number(data.guest_count) : undefined,
                     customer_name: data.customer_name,
                     customer_phone: data.customer_phone,
                     delivery_address: data.delivery_address,
-                    assigned_waiter_id: data.waiter_id || data.assigned_waiter_id,
+                    // Standard Prisma connections for relations
+                    tables: data.table_id ? { connect: { id: data.table_id } } : undefined,
+                    staff_orders_assigned_waiter_idTostaff: (data.waiter_id || data.assigned_waiter_id) ? { connect: { id: data.waiter_id || data.assigned_waiter_id } } : undefined,
                     created_at: timestamp,
                     updated_at: timestamp
-                } as any
+                }
             });
 
             // 2. Create Order Items (Common for all)
@@ -41,7 +45,7 @@ export abstract class BaseOrderService implements IOrderService {
                         item_name: item.item_name || item.name || item.menu_item?.name,
                         category: item.category || item.menu_item?.category,
                         station: item.station || item.menu_item?.station,
-                        station_id: item.station_id || item.menu_item?.station_id,
+                        station_id: item.station_id || item.menu_item?.station_id || undefined,
                         item_status: item.item_status || 'DRAFT',
                         modifications: item.modifications ? JSON.stringify(item.modifications) : undefined
                     }))
@@ -51,7 +55,20 @@ export abstract class BaseOrderService implements IOrderService {
             // 3. Delegate to specific implementation
             await this.createExtension(tx, order.id, data);
 
-            return order;
+            // 4. Calculate final totals (Tax, SC, etc)
+            await this.recalculateTotals(tx, order.id);
+
+            // 5. Return full order with items for frontend sync
+            return await tx.orders.findUnique({
+                where: { id: order.id },
+                include: {
+                    order_items: true,
+                    dine_in_orders: true,
+                    takeaway_orders: true,
+                    delivery_orders: true,
+                    reservation_orders: true
+                }
+            }) as orders;
         });
     }
 
@@ -104,18 +121,18 @@ export abstract class BaseOrderService implements IOrderService {
                 }
             }
 
-            const order = await tx.orders.update({
+            await tx.orders.update({
                 where: { id },
                 data: {
                     type: data.type, // Explicitly update type
                     status: data.status,
                     total: data.total,
-                    table_id: data.table_id,
+                    table_id: data.table_id || undefined,
                     guest_count: data.guest_count,
                     customer_name: data.customer_name,
                     customer_phone: data.customer_phone,
                     delivery_address: data.delivery_address,
-                    assigned_waiter_id: data.waiter_id || data.assigned_waiter_id,
+                    assigned_waiter_id: data.waiter_id || data.assigned_waiter_id || undefined,
                     updated_at: new Date()
                 } as any
             });
@@ -137,8 +154,8 @@ export abstract class BaseOrderService implements IOrderService {
                             item_name: item.item_name || item.name || item.menu_item?.name,
                             category: item.category || item.menu_item?.category,
                             station: item.station || item.menu_item?.station,
-                            station_id: item.station_id || item.menu_item?.station_id,
-                            item_status: item.item_status || 'DRAFT',
+                            station_id: item.station_id || item.menu_item?.station_id || undefined,
+                            item_status: item.item_status || 'PENDING', // v3.0: Changed from DRAFT
                             modifications: item.modifications ? JSON.stringify(item.modifications) : undefined
                         }))
                     });
@@ -162,7 +179,21 @@ export abstract class BaseOrderService implements IOrderService {
             }
 
             await this.updateExtension(tx, id, data);
-            return order;
+
+            // 4. Recalculate Totals (in case items or type changed)
+            await this.recalculateTotals(tx, id);
+
+            // 5. Return full order with items for frontend sync
+            return await tx.orders.findUnique({
+                where: { id },
+                include: {
+                    order_items: true,
+                    dine_in_orders: true,
+                    takeaway_orders: true,
+                    delivery_orders: true,
+                    reservation_orders: true
+                }
+            }) as orders;
         });
     }
 
@@ -196,6 +227,71 @@ export abstract class BaseOrderService implements IOrderService {
 
     protected abstract updateExtension(tx: Prisma.TransactionClient, orderId: string, data: UpdateOrderDTO): Promise<void>;
 
+    /**
+     * Centralized logic to calculate order financials (Tax, SC, Delivery Fee)
+     * This follows the rule: 
+     * - DINE_IN: +Tax, +Service Charge
+     * - TAKEAWAY: +Tax
+     * - DELIVERY: +Tax, +Delivery Fee
+     */
+    protected async recalculateTotals(tx: Prisma.TransactionClient, orderId: string): Promise<void> {
+        // 1. Fetch Order with Items and Restaurant Config
+        const order = await tx.orders.findUnique({
+            where: { id: orderId },
+            include: {
+                order_items: true,
+                restaurants: true
+            }
+        });
+
+        if (!order || !order.restaurants) return;
+
+        const config = order.restaurants;
+        const subtotal = order.order_items.reduce((sum, item) => sum + Number(item.total_price), 0);
+
+        // 2. Calculate Components
+        let tax = 0;
+        let serviceCharge = 0;
+        let deliveryFee = 0;
+        const discount = Number(order.discount || 0);
+
+        // Tax (Universal if enabled)
+        if (config.tax_enabled) {
+            tax = (subtotal * Number(config.tax_rate)) / 100;
+        }
+
+        // Service Charge (Dine-In ONLY)
+        if (order.type === 'DINE_IN' && config.service_charge_enabled) {
+            serviceCharge = (subtotal * Number(config.service_charge_rate)) / 100;
+        }
+
+        // Delivery Fee (Delivery ONLY)
+        if (order.type === 'DELIVERY') {
+            deliveryFee = Number(config.default_delivery_fee);
+        }
+
+        const grandTotal = subtotal + tax + serviceCharge + deliveryFee - discount;
+
+        // 3. Update Order Record
+        await tx.orders.update({
+            where: { id: orderId },
+            data: {
+                tax: tax,
+                service_charge: serviceCharge,
+                delivery_fee: deliveryFee,
+                total: grandTotal,
+                breakdown: {
+                    subtotal,
+                    tax,
+                    serviceCharge,
+                    deliveryFee,
+                    discount,
+                    grandTotal
+                } as any
+            }
+        });
+    }
+
     async fireOrderToKitchen(orderId: string, io: any): Promise<orders> {
         // 1. Validation before Firing
         const currentOrder = await this.getOrderDetails(orderId);
@@ -203,9 +299,10 @@ export abstract class BaseOrderService implements IOrderService {
 
         const validation = this.validateOrder({
             ...currentOrder,
+            status: currentOrder.status || 'ACTIVE',
             type: currentOrder.type as any,
             items: (currentOrder as any).order_items
-        }, 'FIRE');
+        } as any, 'FIRE');
 
         if (!validation.valid) {
             throw new Error(`Validation failed for firing: ${validation.errors.join(', ')}`);
@@ -220,30 +317,31 @@ export abstract class BaseOrderService implements IOrderService {
 
             const updatedItems = [];
 
-            // 2. Status Splitting: FIRED for items requiring prep, READY for others
+            // 2. Status Splitting: PENDING for items requiring prep, DONE for others
             for (const item of items) {
                 const shouldFire = item.menu_items?.requires_prep ?? true;
-                const newStatus = shouldFire ? 'FIRED' : 'READY';
+                const newStatus = shouldFire ? 'PENDING' : 'DONE';  // v3.0: Use PENDING and DONE
 
                 const updatedItem = await tx.order_items.update({
                     where: { id: item.id },
                     data: {
                         item_status: newStatus as any,
+                        started_at: new Date(),  // v3.0: Track when fired
                         // Snapshot station_id if not already set (Phase 1 requirement)
                         station_id: item.station_id || item.menu_items?.station_id
                     }
                 });
 
-                if (newStatus === 'FIRED') {
+                if (newStatus === 'PENDING') {
                     updatedItems.push(updatedItem);
                 }
             }
 
-            // 3. Update Overall Order Status to CONFIRMED
+            // 3. Update Overall Order Status to ACTIVE (v3.0: confirmed and in progress)
             const order = await tx.orders.update({
                 where: { id: orderId },
                 data: {
-                    status: 'CONFIRMED',
+                    status: 'ACTIVE',  // v3.0: Keep as ACTIVE (not CONFIRMED)
                     updated_at: new Date(),
                     last_action_at: new Date(),
                     last_action_desc: 'Order fired to kitchen'
