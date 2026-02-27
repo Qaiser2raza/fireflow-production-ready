@@ -73,7 +73,7 @@ export const TokenComponentPreview: React.FC = () => {
                             matchedCustomers={matchedCustomers}
                             onSelectCustomer={(customer) => {
                                 setCustomerPhone(customer.phone);
-                                setCustomerName(customer.name);
+                                setCustomerName(customer.name || '');
                             }}
                         />
                         <div className="mt-4 p-4 bg-slate-950 border border-slate-800 rounded-xl">

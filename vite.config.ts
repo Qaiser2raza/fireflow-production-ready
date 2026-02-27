@@ -5,7 +5,10 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const isHQ = mode === 'hq';
+
   return {
+    // ── Dev server (POS only — HQ runs on Vercel) ──
     server: {
       port: 3000,
       host: '0.0.0.0',
@@ -20,11 +23,31 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
     ],
-    base: './', // <--- THIS IS THE MAGIC FIX. (Forces relative paths)
+
+    // ── Separate entry points ──
+    // Default: POS app  →  dist/
+    // HQ mode:           →  dist-hq/
+    root: '.',
+    build: isHQ
+      ? {
+        outDir: 'dist-hq',
+        emptyOutDir: true,
+        rollupOptions: {
+          input: { hq: path.resolve(__dirname, 'hq.html') },
+        },
+      }
+      : {
+        outDir: 'dist',
+        emptyOutDir: true,
+        rollupOptions: {
+          input: { main: path.resolve(__dirname, 'index.html') },
+        },
+      },
+
+    base: './',
     define: {
-      // Support both old and new env variable names for backward compatibility
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY)
+      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY),
     },
     resolve: {
       alias: {
@@ -38,8 +61,8 @@ export default defineConfig(({ mode }) => {
         '@/types': path.resolve(__dirname, './src/shared/types.ts'),
         '@/utils': path.resolve(__dirname, './src/shared/utils'),
         '@/ui': path.resolve(__dirname, './src/shared/ui'),
-        '@/db': path.resolve(__dirname, './src/lib/supabase.ts')
-      }
-    }
+        '@/db': path.resolve(__dirname, './src/lib/supabase.ts'),
+      },
+    },
   };
 });

@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from '../../../client/contexts/AppContext';
-import { Save, DollarSign, Percent, Users, Truck, Loader2, WifiOff } from 'lucide-react';
+import { Save, Banknote, Percent, Users, Truck, Loader2, WifiOff } from 'lucide-react';
 
 // Import from src/lib/ (NOT src/shared/lib/)
 import { cacheSet, cacheGet, isOnline, getOperationsConfigKey, initializeCache } from '../../../lib/offlineCache';
@@ -34,12 +34,6 @@ interface OperationsConfig {
 interface ConfigResponse {
   success: boolean;
   config?: any;
-  error?: string;
-}
-
-interface SaveResponse {
-  success: boolean;
-  message?: string;
   error?: string;
 }
 
@@ -367,7 +361,7 @@ export const OperationsPanel: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center text-blue-500">
-              <DollarSign size={20} />
+              <Banknote size={20} />
             </div>
             <div>
               <h4 className="font-bold text-white">Service Charge</h4>
@@ -574,6 +568,29 @@ export const OperationsPanel: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* DANGER ZONE - Admins & Managers */}
+        {(currentUser?.role === 'ADMIN' || currentUser?.role === 'MANAGER') && (
+          <div className="bg-red-900/10 border border-red-900/40 rounded-xl p-6">
+            <h4 className="font-bold text-red-500 mb-2">Danger Zone</h4>
+            <p className="text-xs text-slate-400 mb-4">Irreversible system actions</p>
+            <button
+              onClick={async () => {
+                if (confirm('Are you ABSOLUTELY SURE? This will WIPE ALL DATA (Orders, Customers, Sales). This cannot be undone.')) {
+                  try {
+                    await fetch(`${API_BASE_URL}/system/dev-reset`, { method: 'POST' });
+                    window.location.reload();
+                  } catch (e) {
+                    alert('Reset failed');
+                  }
+                }
+              }}
+              className="bg-red-600 text-white px-4 py-2 rounded text-xs font-bold uppercase hover:bg-red-700 transition-all"
+            >
+              Factory Reset System
+            </button>
+          </div>
+        )}
 
         {/* Save Button (sticky bottom) */}
         {hasChanges && (

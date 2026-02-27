@@ -7,8 +7,6 @@ import {
     Wifi,
     WifiOff,
     Shield,
-    AlertTriangle,
-    Plus,
     RefreshCw,
     QrCode,
     Lock,
@@ -38,12 +36,10 @@ interface RegisteredDevice {
 }
 
 export const DeviceManagementView: React.FC = () => {
-    const { currentUser, socket } = useAppContext();
+    const { socket } = useAppContext();
     const { currentRestaurant } = useRestaurant();
     const [devices, setDevices] = useState<RegisteredDevice[]>([]);
     const [loading, setLoading] = useState(true);
-    const [showAddDialog, setShowAddDialog] = useState(false);
-    const [selectedDevice, setSelectedDevice] = useState<RegisteredDevice | null>(null);
 
     useEffect(() => {
         fetchDevices();
@@ -169,7 +165,7 @@ export const DeviceManagementView: React.FC = () => {
                         Refresh
                     </button>
                     <button
-                        onClick={() => setShowAddDialog(true)}
+                        onClick={() => alert('Pairing feature coming soon. Please contact system administrator.')}
                         className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg transition-all flex items-center gap-2 shadow-lg shadow-cyan-500/20"
                     >
                         <QrCode className="w-4 h-4" />
@@ -272,8 +268,8 @@ export const DeviceManagementView: React.FC = () => {
                                             <button
                                                 onClick={() => toggleDeviceAuthorization(device.id, device.authorized)}
                                                 className={`p-2 rounded-lg transition-all ${device.authorized
-                                                        ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400'
-                                                        : 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
+                                                    ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400'
+                                                    : 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
                                                     }`}
                                                 title={device.authorized ? 'Block Device' : 'Authorize Device'}
                                             >

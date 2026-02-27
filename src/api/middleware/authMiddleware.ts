@@ -16,7 +16,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { jwtService, JwtPayload } from '../services/auth/JwtService';
+import { jwtService } from '../services/auth/JwtService';
 
 // ==========================================
 // TYPE EXTENSIONS
@@ -64,9 +64,7 @@ export async function authMiddleware(
   try {
     // 1. Extract token from Authorization header
     const authHeader = req.headers.authorization;
-    const token = jwtService.constructor.prototype.constructor.name === 'JwtService' 
-      ? require('../services/auth/JwtService').JwtService.extractTokenFromHeader(authHeader)
-      : extractTokenFromHeaderLocal(authHeader);
+    const token = extractTokenFromHeaderLocal(authHeader);
 
     if (!token) {
       res.status(401).json({
@@ -81,10 +79,10 @@ export async function authMiddleware(
 
     if (!decoded.valid || !decoded.payload) {
       console.warn(`[AUTH] Token verification failed: ${decoded.error}`);
-      
+
       // 410 Gone for expired tokens (client should refresh)
       const statusCode = decoded.error?.includes('expired') ? 410 : 401;
-      
+
       res.status(statusCode).json({
         error: decoded.error || 'Token verification failed',
         code: statusCode === 410 ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN'
@@ -131,7 +129,7 @@ export async function authMiddleware(
  */
 function extractTokenFromHeaderLocal(authHeader?: string): string | null {
   if (!authHeader) return null;
-  
+
   const parts = authHeader.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
     return null;

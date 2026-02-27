@@ -46,7 +46,7 @@ export class TableOperations {
 
         // Lock Rule
         if (table.status === 'OCCUPIED' || table.status === 'DIRTY' || table.status === 'CLEANING') {
-            const hasActiveOrder = orders.some(o => o.table_id === table.id && o.status !== 'PAID' && o.status !== 'VOID' && o.status !== 'CANCELLED');
+            const hasActiveOrder = orders.some(o => o.table_id === table.id && o.status !== OrderStatus.CLOSED && o.status !== OrderStatus.VOIDED && o.status !== OrderStatus.CANCELLED);
             if (hasActiveOrder) {
                 errors.push('Table is currently locked (active order exists). Settle first.');
             }

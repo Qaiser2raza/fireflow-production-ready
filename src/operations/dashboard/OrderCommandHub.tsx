@@ -10,7 +10,7 @@ import { RecallModal } from './components/RecallModal';
 import { Order, OrderStatus } from '../../shared/types';
 
 export const OrderCommandHub: React.FC = () => {
-  const { tables, orders, sections, setActiveView, seatGuests, setOrderToEdit, updateOrderStatus, cancelOrder, voidOrder, currentUser } = useAppContext();
+  const { tables, orders, sections, setActiveView, seatGuests, setOrderToEdit, updateOrderStatus, cancelOrder, currentUser } = useAppContext();
   const [activeZone, setActiveZone] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'GRID' | 'FLOOR'>('GRID');
   const [showRecallModal, setShowRecallModal] = useState(false);
@@ -23,16 +23,16 @@ export const OrderCommandHub: React.FC = () => {
 
   // Get dine-in orders
   const dineInOrders = useMemo(() => {
-    return orders.filter(o => o.type === 'DINE_IN' && o.status !== OrderStatus.PAID && o.status !== OrderStatus.CANCELLED);
+    return orders.filter(o => o.type === 'DINE_IN' && o.status !== OrderStatus.CLOSED && o.status !== OrderStatus.CANCELLED);
   }, [orders]);
 
   // Get takeaway/delivery orders for pulse feed
   const pulseOrders = useMemo(() => {
     return orders.filter(o =>
       (o.type === 'TAKEAWAY' || o.type === 'DELIVERY') &&
-      o.status !== OrderStatus.PAID &&
+      o.status !== OrderStatus.CLOSED &&
       o.status !== OrderStatus.CANCELLED
-    ).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    ).sort((a, b) => new Date(b.created_at || b.timestamp || 0).getTime() - new Date(a.created_at || a.timestamp || 0).getTime());
   }, [orders]);
 
   // Sort tables by urgency
@@ -47,11 +47,9 @@ export const OrderCommandHub: React.FC = () => {
 
         const elapsed = Math.floor((Date.now() - new Date(order.created_at || order.timestamp || 0).getTime()) / 60000);
 
-        if (order.status === OrderStatus.BILL_REQUESTED) return 1000; // Highest priority
-        if (elapsed > 60) return 900; // Overdue
         if (order.status === OrderStatus.READY) return 800; // Ready to serve
         if (elapsed > 45) return 700; // Slow
-        if (order.status === OrderStatus.PREPARING || order.status === OrderStatus.FIRED) return 600;
+        if (order.status === OrderStatus.ACTIVE) return 600;
         return 500; // Other occupied
       };
 
@@ -60,7 +58,7 @@ export const OrderCommandHub: React.FC = () => {
   }, [filteredTables, dineInOrders]);
 
   const handleOrderClick = (order: Order) => {
-    if (order.type === 'DELIVERY' && [OrderStatus.READY, OrderStatus.COMPLETED].includes(order.status)) {
+    if (order.type === 'DELIVERY' && order.status === OrderStatus.READY) {
       setActiveView('dispatch');
     } else {
       setOrderToEdit(order);
@@ -160,10 +158,10 @@ export const OrderCommandHub: React.FC = () => {
                         setActiveView('POS');
                       }}
                       onMarkServed={async (orderId) => {
-                        await updateOrderStatus(orderId, OrderStatus.SERVED);
+                        await updateOrderStatus(orderId, OrderStatus.READY);
                       }}
                       onRequestBill={async (orderId) => {
-                        await updateOrderStatus(orderId, OrderStatus.BILL_REQUESTED);
+                        await updateOrderStatus(orderId, OrderStatus.READY); // Use READY or keep ACTIVE
                       }}
                     />
                   );
@@ -177,7 +175,7 @@ export const OrderCommandHub: React.FC = () => {
               activeZoneId={activeZone}
               orders={dineInOrders}
               onSeat={(id, count) => seatGuests(id, count)}
-              onTableClick={(table, order) => {
+              onTableClick={(_table, order) => {
                 if (order) {
                   setOrderToEdit(order);
                   setActiveView('POS');
@@ -232,16 +230,22 @@ export const OrderCommandHub: React.FC = () => {
 
 const PulseCard: React.FC<{ order: any }> = ({ order }) => {
   const getStatusColor = () => {
-    if (order.status === 'READY') return 'text-yellow-500';
+    if (order.status === 'READY') {
+      return (order.type === 'DELIVERY' && (order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id))
+        ? 'text-green-500' // Out for delivery
+        : 'text-yellow-500'; // Just ready
+    }
     if (order.status === 'PREPARING') return 'text-blue-500';
-    if (order.status === 'OUT_FOR_DELIVERY') return 'text-green-500';
     return 'text-slate-500';
   };
 
   const getStatusIcon = () => {
-    if (order.status === 'READY') return CheckCircle2;
+    if (order.status === 'READY') {
+      return (order.type === 'DELIVERY' && (order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id))
+        ? Bike
+        : CheckCircle2;
+    }
     if (order.status === 'PREPARING') return Loader2;
-    if (order.status === 'OUT_FOR_DELIVERY') return Bike;
     return Circle;
   };
 
@@ -263,7 +267,11 @@ const PulseCard: React.FC<{ order: any }> = ({ order }) => {
       <div className="flex items-center justify-between">
         <div className={`flex items-center gap-1 text-xs ${getStatusColor()}`}>
           <StatusIcon size={14} className={order.status === 'PREPARING' ? 'animate-spin' : ''} />
-          <span className="uppercase tracking-wider font-bold">{order.status}</span>
+          <span className="uppercase tracking-wider font-bold">
+            {(order.status === 'READY' && order.type === 'DELIVERY' && (order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id))
+              ? 'Out for Delivery'
+              : order.status}
+          </span>
         </div>
         <div className="text-sm font-black text-white">Rs. {order.total?.toLocaleString()}</div>
       </div>
@@ -272,14 +280,12 @@ const PulseCard: React.FC<{ order: any }> = ({ order }) => {
       <div className="mt-2">
         <div className="h-1 bg-black/40 rounded-full overflow-hidden">
           <div
-            className={`h-full transition-all duration-1000 ${order.status === 'READY' || order.status === 'SERVED' || order.status === 'PAID' ? 'bg-green-500' :
-              order.status === 'PREPARING' ? 'bg-blue-500' :
-                order.status === 'OUT_FOR_DELIVERY' ? 'bg-gold-500' : 'bg-slate-700'
+            className={`h-full transition-all duration-1000 ${order.status === 'READY' || order.status === 'CLOSED' ? 'bg-green-500' :
+              order.status === 'ACTIVE' ? 'bg-blue-500' : 'bg-slate-700'
               }`}
             style={{
-              width: `${order.status === 'READY' || order.status === 'SERVED' || order.status === 'PAID' ? 100 :
-                order.status === 'PREPARING' ? 60 :
-                  order.status === 'OUT_FOR_DELIVERY' ? 80 : 20
+              width: `${order.status === 'READY' || order.status === 'CLOSED' ? 100 :
+                order.status === 'ACTIVE' ? 60 : 20
                 }%`
             }}
           />

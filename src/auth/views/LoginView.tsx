@@ -7,7 +7,7 @@ interface LoginViewProps {
   onStartPairing?: () => void;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, onStartRegistration }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -173,16 +173,39 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing })
             {isProcessing ? 'Verifying...' : <span className="flex items-center gap-2">Authenticate <ArrowRight size={18} /></span>}
           </button>
 
+          {onStartRegistration && (
+            <button
+              onClick={onStartRegistration}
+              className="w-full py-3 md:py-4 mt-3 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-gold-400"
+            >
+              <Smartphone size={18} />
+              Register New Restaurant
+            </button>
+          )}
+
           {onStartPairing && (
             <button
               onClick={onStartPairing}
-              className="w-full py-3 md:py-4 mt-3 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-cyan-400"
+              className="w-full py-2 mt-2 rounded-xl font-bold uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all text-slate-600 hover:text-cyan-400 text-[10px]"
             >
-              <Smartphone size={18} />
               Pair Device
             </button>
           )}
 
+        </div>
+      </div>
+
+      {/* Subtle Cravex Branding at the bottom */}
+      <div className="absolute bottom-6 left-0 w-full flex flex-col items-center pointer-events-none opacity-40">
+        <div className="flex flex-col items-center gap-1">
+          <div className="flex items-center gap-2 grayscale brightness-200">
+            <span className="text-[10px] font-black tracking-[0.2em] text-slate-500 uppercase">Powered By</span>
+            <span className="text-sm font-black tracking-widest text-gold-500">CRAVEX SOLUTIONS PAKISTAN</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <span className="text-[9px] text-slate-500 font-bold tracking-wider">© 2026 Cravex Solutions. All rights reserved.</span>
+            <span className="text-[8px] text-slate-600 font-mono mt-1">SECURE TERMINAL V2.5.0-CRAVEX</span>
+          </div>
         </div>
       </div>
     </div>

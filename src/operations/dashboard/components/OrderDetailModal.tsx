@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
-import { Order, Table, OrderStatus } from '../../../shared/types';
-import { X, Clock, Users, TrendingUp, Receipt, Edit2, CheckCircle2, FileText } from 'lucide-react';
+import { Order, Table } from '../../../shared/types';
+import { X, Clock, Users, Receipt, Edit2, CheckCircle2, FileText } from 'lucide-react';
 
 interface OrderDetailModalProps {
     isOpen: boolean;
@@ -27,34 +27,33 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
 
     const getStatusColor = (status: string) => {
         switch (status) {
-            case 'BILL_REQUESTED': return 'text-red-500 bg-red-500/10 border-red-500/20';
             case 'READY': return 'text-gold-500 bg-gold-500/10 border-gold-500/20';
-            case 'SERVED': return 'text-green-500 bg-green-500/10 border-green-500/20';
-            case 'PREPARING': return 'text-blue-500 bg-blue-500/10 border-blue-500/20';
-            case 'FIRED': return 'text-orange-500 bg-orange-500/10 border-orange-500/20';
-            case 'PAID': return 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20';
+            case 'ACTIVE': return 'text-blue-500 bg-blue-500/10 border-blue-500/20';
+            case 'CLOSED': return 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20';
+            case 'CANCELLED': return 'text-rose-500 bg-rose-500/10 border-rose-500/20';
+            case 'VOIDED': return 'text-slate-600 bg-slate-600/10 border-slate-600/20';
             default: return 'text-slate-500 bg-slate-500/10 border-slate-500/20';
         }
     };
 
     const getItemStatusIcon = (itemStatus: string) => {
-        if (itemStatus === 'READY' || itemStatus === 'SERVED') return '✓';
+        if (itemStatus === 'DONE' || itemStatus === 'SERVED') return '✓';
         if (itemStatus === 'PREPARING') return '⏱';
-        if (itemStatus === 'FIRED') return '🔥';
+        if (itemStatus === 'PENDING') return '🔥';
         return '○';
     };
 
     const getItemStatusColor = (itemStatus: string) => {
-        if (itemStatus === 'READY' || itemStatus === 'SERVED') return 'text-green-500';
+        if (itemStatus === 'DONE' || itemStatus === 'SERVED') return 'text-green-500';
         if (itemStatus === 'PREPARING') return 'text-blue-500';
-        if (itemStatus === 'FIRED') return 'text-orange-500';
+        if (itemStatus === 'PENDING') return 'text-orange-500';
         return 'text-slate-500';
     };
 
     if (!isOpen) return null;
 
     const items = order.order_items || [];
-    const readyItems = items.filter(i => i.item_status === 'READY' || i.item_status === 'SERVED');
+    const readyItems = items.filter(i => i.item_status === 'DONE' || i.item_status === 'SERVED');
     const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
 
     return (
@@ -176,30 +175,21 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                             </p>
                                         </div>
                                     </div>
-                                    {order.status !== 'DRAFT' && (
+                                    {['ACTIVE', 'READY', 'CLOSED'].includes(order.status as any) && (
                                         <div className="flex items-start gap-2">
                                             <div className="w-2 h-2 rounded-full bg-orange-500 mt-1.5" />
                                             <div>
-                                                <p className="text-xs text-white font-bold">Fired to Kitchen</p>
+                                                <p className="text-xs text-white font-bold">Sent to Kitchen</p>
                                                 <p className="text-[10px] text-slate-500">~{elapsedMinutes - 2}m ago</p>
                                             </div>
                                         </div>
                                     )}
-                                    {(order.status === 'READY' || order.status === 'SERVED' || order.status === 'BILL_REQUESTED' || order.status === 'PAID') && (
+                                    {['READY', 'CLOSED'].includes(order.status as any) && (
                                         <div className="flex items-start gap-2">
                                             <div className="w-2 h-2 rounded-full bg-green-500 mt-1.5" />
                                             <div>
-                                                <p className="text-xs text-white font-bold">Items Ready</p>
+                                                <p className="text-xs text-white font-bold">Ready to Serve</p>
                                                 <p className="text-[10px] text-slate-500">~{Math.max(0, elapsedMinutes - 5)}m ago</p>
-                                            </div>
-                                        </div>
-                                    )}
-                                    {(order.status === 'SERVED' || order.status === 'BILL_REQUESTED' || order.status === 'PAID') && (
-                                        <div className="flex items-start gap-2">
-                                            <div className="w-2 h-2 rounded-full bg-gold-500 mt-1.5" />
-                                            <div>
-                                                <p className="text-xs text-white font-bold">Food Served</p>
-                                                <p className="text-[10px] text-slate-500">Recently</p>
                                             </div>
                                         </div>
                                     )}
@@ -278,7 +268,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                 Mark as Served
                             </button>
                         )}
-                        {(order.status === 'SERVED' || order.status === 'READY') && (
+                        {order.status === 'READY' && (
                             <button
                                 onClick={async () => {
                                     await onRequestBill();

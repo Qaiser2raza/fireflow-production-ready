@@ -55,11 +55,32 @@ export async function seatPartyWithCapacityCheck(
         });
     }
 
+    if (!table) {
+        // Fallback: Find ANY available table if preference failed
+        table = await prisma.tables.findFirst({
+            where: {
+                restaurant_id: restaurantId,
+                status: TableStatus.AVAILABLE
+            },
+            orderBy: { capacity: 'desc' },
+            include: { sections: true }
+        });
+    }
+
     if (!table) throw new Error('No suitable tables available');
     const isOverCapacity = guestCount > table.capacity;
 
     if (isOverCapacity && !allowOverCapacity) {
         throw new Error(`Guest count (${guestCount}) exceeds table capacity (${table.capacity})`);
+    }
+
+    // Validate Waiter (Self-Healing for Stale IDs)
+    let finalWaiterId = waiterId;
+    const waiterCount = await prisma.staff.count({ where: { id: waiterId } });
+    if (waiterCount === 0) {
+        console.warn(`[FloorService] Stale Waiter ID ${waiterId} detected. Auto-healing...`);
+        const fallbackStaff = await prisma.staff.findFirst({ where: { restaurant_id: restaurantId } });
+        if (fallbackStaff) finalWaiterId = fallbackStaff.id;
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -71,12 +92,13 @@ export async function seatPartyWithCapacityCheck(
                 restaurant_id: restaurantId,
                 order_number,
                 type: 'DINE_IN',
-                status: 'CONFIRMED',
+                status: 'ACTIVE', // v3.0: Changed from CONFIRMED
+                payment_status: 'UNPAID', // v3.0: Added explicit payment status
                 guest_count: guestCount,
                 customer_name: customerName,
-                assigned_waiter_id: waiterId,
+                assigned_waiter_id: finalWaiterId,
                 table_id: table!.id,
-                last_action_by: waiterId,
+                last_action_by: finalWaiterId,
                 last_action_desc: isOverCapacity
                     ? `Party seated (${guestCount} guests, table capacity ${table!.capacity})`
                     : 'Party seated'
@@ -96,14 +118,14 @@ export async function seatPartyWithCapacityCheck(
                 order_id: order.id,
                 table_id: table!.id,
                 guest_count: guestCount,
-                waiter_id: waiterId,
+                waiter_id: finalWaiterId,
                 guest_count_history: isOverCapacity
                     ? JSON.stringify([{
                         count: guestCount,
                         timestamp: new Date(),
                         capacity: table!.capacity,
                         over_capacity: true,
-                        staff_id: waiterId
+                        staff_id: finalWaiterId
                     }])
                     : Prisma.JsonNull
             }
@@ -182,8 +204,8 @@ export async function updateGuestCount(
         throw new Error('Order not found');
     }
 
-    const closedStatuses = ['COMPLETED', 'PAID', 'CANCELLED', 'VOIDED'];
-    if (closedStatuses.includes(order.status)) {
+    const closedStatuses: string[] = ['CLOSED', 'CANCELLED', 'VOIDED'];
+    if (closedStatuses.includes(order.status || '') || order.payment_status === 'PAID') {
         throw new Error(`Cannot update guest count - order status is ${order.status}`);
     }
 

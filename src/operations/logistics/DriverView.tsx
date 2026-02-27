@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../client/App';
 import { OrderStatus, Order } from '../../shared/types';
-import { Phone, MapPin, Navigation, CheckCircle2, User, LogOut, Package, ArrowLeft, Clock, DollarSign } from 'lucide-react';
+import { Phone, MapPin, Navigation, CheckCircle2, User, LogOut, Package, ArrowLeft, Banknote } from 'lucide-react';
 
 export const DriverView: React.FC = () => {
    const { currentUser, orders, completeDelivery, logout } = useAppContext();
@@ -10,12 +10,16 @@ export const DriverView: React.FC = () => {
 
    // Filter orders for this driver
    const myOrders = orders.filter(o =>
-      o.assignedDriverId === currentUser?.id &&
-      (o.status === OrderStatus.OUT_FOR_DELIVERY || o.status === OrderStatus.DELIVERED)
-   ).sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      (o.assigned_driver_id === currentUser?.id || o.delivery_orders?.[0]?.driver_id === currentUser?.id) &&
+      (o.status === OrderStatus.READY || o.status === OrderStatus.CLOSED)
+   ).sort((a, b) => new Date(b.created_at || b.timestamp || 0).getTime() - new Date(a.created_at || a.timestamp || 0).getTime());
 
-   const activeOrders = myOrders.filter(o => o.status === OrderStatus.OUT_FOR_DELIVERY);
-   const completedOrders = myOrders.filter(o => o.status === OrderStatus.DELIVERED || o.status === OrderStatus.PAID);
+   const activeOrders = myOrders.filter(o =>
+      o.status === OrderStatus.READY && !o.delivery_orders?.[0]?.delivered_at
+   );
+   const completedOrders = myOrders.filter(o =>
+      o.delivery_orders?.[0]?.delivered_at || o.status === OrderStatus.CLOSED
+   );
 
    const handleComplete = (order: Order) => {
       if (window.confirm(`Confirm collection of Rs. ${(order.total ?? 0).toLocaleString()} from customer?`)) {
@@ -66,15 +70,15 @@ export const DriverView: React.FC = () => {
                <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
                   <div className="text-xs text-slate-500 font-bold uppercase tracking-widest mb-4">Order Items</div>
                   <div className="space-y-4">
-                     {selectedOrder.items.map((item, idx) => (
+                     {(selectedOrder.order_items || []).map((item: any, idx: number) => (
                         <div key={idx} className="flex justify-between items-center border-b border-slate-800 pb-3 last:border-0 last:pb-0">
                            <div className="flex gap-3 items-center">
                               <div className="bg-slate-800 text-white font-bold w-8 h-8 rounded flex items-center justify-center text-sm">
                                  {item.quantity}
                               </div>
-                              <div className="text-slate-200">{item.menuItem.name}</div>
+                              <div className="text-slate-200">{item.item_name || 'Item'}</div>
                            </div>
-                           <div className="text-slate-500 text-sm">Rs. {Number((item.menuItem.price ?? 0) * (item.quantity ?? 0)).toLocaleString()}</div>
+                           <div className="text-slate-500 text-sm">Rs. {Number(item.total_price || 0).toLocaleString()}</div>
                         </div>
                      ))}
                   </div>
@@ -87,12 +91,12 @@ export const DriverView: React.FC = () => {
 
             {/* Fixed Bottom Action */}
             <div className="absolute bottom-0 left-0 right-0 p-6 bg-slate-900/90 backdrop-blur border-t border-slate-800">
-               {selectedOrder.status === OrderStatus.OUT_FOR_DELIVERY ? (
+               {!selectedOrder.delivery_orders?.[0]?.delivered_at && selectedOrder.status === OrderStatus.READY ? (
                   <button
                      onClick={() => handleComplete(selectedOrder)}
                      className="w-full bg-green-600 hover:bg-green-500 text-white py-4 rounded-2xl font-bold text-lg uppercase tracking-widest shadow-xl shadow-green-900/30 flex items-center justify-center gap-3 animate-pulse"
                   >
-                     <DollarSign size={24} /> Confirm Rs. {(selectedOrder.total ?? 0).toLocaleString()} Collected
+                     <Banknote size={24} /> Confirm Rs. {(selectedOrder.total ?? 0).toLocaleString()} Collected
                   </button>
                ) : (
                   <div className="w-full bg-slate-800 text-slate-500 py-4 rounded-2xl font-bold text-center border border-slate-700 flex items-center justify-center gap-2">
@@ -155,14 +159,14 @@ export const DriverView: React.FC = () => {
                >
                   <div className="flex justify-between items-start mb-3">
                      <div className="bg-gold-500 text-black text-xs font-bold px-2 py-1 rounded">ACTIVE</div>
-                     <div className="text-slate-400 font-mono text-xs">{new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                     <div className="text-slate-400 font-mono text-xs">{new Date(order.created_at || order.timestamp || 0).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                   </div>
                   <div className="text-white font-bold text-lg mb-1">{order.customerName}</div>
                   <div className="text-slate-400 text-sm leading-tight mb-4">{order.deliveryAddress}</div>
 
                   <div className="flex justify-between items-center border-t border-slate-800 pt-3">
                      <div className="flex items-center gap-1 text-slate-500 text-xs">
-                        <Package size={14} /> {order.items.length} Items
+                        <Package size={14} /> {(order.order_items || []).length} Items
                      </div>
                      <div className="text-gold-500 font-mono font-bold">Rs. {order.total.toLocaleString()}</div>
                   </div>

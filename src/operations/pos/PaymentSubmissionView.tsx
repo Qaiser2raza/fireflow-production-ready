@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useRestaurant } from '../../client/RestaurantContext';
 import { useAppContext } from '../../client/App';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '../../shared/lib/apiClient';
 import { Upload, CreditCard, Building2, CheckCircle2, AlertCircle, X, Loader2, LogOut } from 'lucide-react';
 
 interface PaymentSubmissionViewProps {
@@ -10,9 +10,9 @@ interface PaymentSubmissionViewProps {
   isModal?: boolean;
 }
 
-export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({ 
-  onClose, 
-  isModal = false 
+export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
+  onClose,
+  isModal = false
 }) => {
   const { currentRestaurant, refreshPendingStatus } = useRestaurant();
   const { logout } = useAppContext();
@@ -64,7 +64,7 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
 
     try {
       const reader = new FileReader();
-      
+
       reader.onloadend = async () => {
         const base64Image = reader.result as string;
 
@@ -81,7 +81,7 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
 
         if (dbError) {
           console.error('Submission error FULL DETAILS:', JSON.stringify(dbError, null, 2));
-          
+
           let errorMsg = 'Database connection failed.';
           if (dbError.message) errorMsg = dbError.message;
           else if (typeof dbError === 'string') errorMsg = dbError;
@@ -94,7 +94,7 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
 
         // Successfully submitted - update context state
         await refreshPendingStatus();
-        
+
         setSubmitSuccess(true);
         setIsSubmitting(false);
 
@@ -130,17 +130,17 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
         <p className="text-slate-400 max-w-md mb-8">
           Your payment proof has been submitted for verification. You will be notified once approved (usually within 24 hours).
         </p>
-        
+
         <div className="flex flex-col sm:flex-row gap-4 w-full max-w-sm">
           {isModal && onClose && (
-            <button 
+            <button
               onClick={onClose}
               className="flex-1 px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold uppercase tracking-wider transition-colors"
             >
               Done
             </button>
           )}
-          <button 
+          <button
             onClick={logout}
             className="flex-1 px-6 py-3 border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-white rounded-lg font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2"
           >
@@ -154,7 +154,7 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
   return (
     <div className={`flex flex-col h-full bg-slate-950 overflow-y-auto ${isModal ? 'p-4 md:p-8 pt-16 relative' : 'p-8'}`}>
       {isModal && onClose && (
-        <button 
+        <button
           onClick={onClose}
           className="absolute top-6 right-6 text-slate-500 hover:text-white z-50 p-2 bg-slate-900 rounded-full border border-slate-800"
         >
@@ -184,11 +184,10 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
           <div className="grid grid-cols-2 gap-4">
             <button
               onClick={() => setPaymentMethod('jazzcash')}
-              className={`p-6 rounded-xl border-2 transition-all flex flex-col items-center text-center ${
-                paymentMethod === 'jazzcash'
+              className={`p-6 rounded-xl border-2 transition-all flex flex-col items-center text-center ${paymentMethod === 'jazzcash'
                   ? 'border-gold-500 bg-gold-500/10'
                   : 'border-slate-800 bg-slate-900 hover:border-slate-700'
-              }`}
+                }`}
             >
               <CreditCard size={32} className={paymentMethod === 'jazzcash' ? 'text-gold-500' : 'text-slate-500'} />
               <div className="mt-3 font-bold text-white">JazzCash</div>
@@ -197,11 +196,10 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
 
             <button
               onClick={() => setPaymentMethod('bank')}
-              className={`p-6 rounded-xl border-2 transition-all flex flex-col items-center text-center ${
-                paymentMethod === 'bank'
+              className={`p-6 rounded-xl border-2 transition-all flex flex-col items-center text-center ${paymentMethod === 'bank'
                   ? 'border-gold-500 bg-gold-500/10'
                   : 'border-slate-800 bg-slate-900 hover:border-slate-700'
-              }`}
+                }`}
             >
               <Building2 size={32} className={paymentMethod === 'bank' ? 'text-gold-500' : 'text-slate-500'} />
               <div className="mt-3 font-bold text-white">Bank Transfer</div>
@@ -260,7 +258,7 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
           <label className="text-xs text-slate-500 font-bold uppercase tracking-widest mb-2 block">
             Upload Payment Screenshot
           </label>
-          
+
           {!imagePreview ? (
             <label className="block w-full h-48 border-2 border-dashed border-slate-800 rounded-xl hover:border-gold-500 transition-colors cursor-pointer group bg-slate-900/50">
               <input
@@ -277,9 +275,9 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
             </label>
           ) : (
             <div className="relative">
-              <img 
-                src={imagePreview} 
-                alt="Payment proof" 
+              <img
+                src={imagePreview}
+                alt="Payment proof"
                 className="w-full h-64 object-contain bg-slate-950 rounded-xl border border-slate-800"
               />
               <button
@@ -305,11 +303,10 @@ export const PaymentSubmissionView: React.FC<PaymentSubmissionViewProps> = ({
         <button
           onClick={handleSubmit}
           disabled={isSubmitting || !imageFile || !transactionId}
-          className={`w-full h-14 rounded-xl font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-3 ${
-            isSubmitting || !imageFile || !transactionId
+          className={`w-full h-14 rounded-xl font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-3 ${isSubmitting || !imageFile || !transactionId
               ? 'bg-slate-800 text-slate-600 cursor-not-allowed'
               : 'bg-gradient-to-r from-gold-500 to-gold-600 text-black hover:shadow-lg hover:shadow-gold-500/20'
-          }`}
+            }`}
         >
           {isSubmitting ? (
             <>

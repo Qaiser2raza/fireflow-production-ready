@@ -4,6 +4,8 @@
  * Server running on http://localhost:3001/api
  */
 
+import { fetchWithAuth } from './authInterceptor';
+
 const API_BASE_URL = `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:3001/api`;
 
 // 1. Fixed Interface to match implementation
@@ -31,15 +33,13 @@ class LocalDatabaseBuilder implements QueryBuilder {
   private method: string = 'GET';
   private bodyData: any = null;
   private isSingle: boolean = false;
-  private selectCols: string = '*';
 
   constructor(table: string) {
     this.table = table;
   }
 
   // 2. Fixed select signature to match your SuperAdminView calls
-  select(columns: string = '*', options?: { count?: string; head?: boolean }) {
-    this.selectCols = columns;
+  select(_columns: string = '*', _options?: { count?: string; head?: boolean }) {
     // Note: 'count' and 'head' are ignored locally but prevented from crashing
     return this;
   }
@@ -100,7 +100,7 @@ class LocalDatabaseBuilder implements QueryBuilder {
   async execute(): Promise<{ data: any; error: any }> {
     try {
       const params = new URLSearchParams();
-      
+
       Object.entries(this.filters).forEach(([key, value]) => {
         params.set(key, String(value));
       });
@@ -114,7 +114,7 @@ class LocalDatabaseBuilder implements QueryBuilder {
       }
 
       let url = `${API_BASE_URL}/${this.table}`;
-      
+
       // Handle upsert logic
       if (this.method === 'POST' && this.bodyData && !Array.isArray(this.bodyData)) {
         if (this.bodyData.id && this.filters.id) {
@@ -135,7 +135,7 @@ class LocalDatabaseBuilder implements QueryBuilder {
         options.body = JSON.stringify(this.bodyData);
       }
 
-      const response = await fetch(url, options);
+      const response = await fetchWithAuth(url, options);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: response.statusText }));

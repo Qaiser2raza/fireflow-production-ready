@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from "@google/genai";
-import { X, Send, Sparkles, Loader2, Command, Bot, MessageSquare, Terminal } from 'lucide-react';
+import { X, Send, Loader2, Bot, Terminal } from 'lucide-react';
 import { Order, Table, MenuItem, Server } from '../../shared/types';
 
 interface AURAAssistantProps {
@@ -94,8 +94,8 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2`}>
               <div className={`max-w-[80%] p-4 rounded-[1.5rem] ${msg.role === 'user'
-                  ? 'bg-gold-500 text-slate-950 font-medium'
-                  : 'bg-slate-900/80 border border-slate-800 text-slate-200'
+                ? 'bg-gold-500 text-slate-950 font-medium'
+                : 'bg-slate-900/80 border border-slate-800 text-slate-200'
                 }`}>
                 {msg.role === 'aura' && <div className="text-[9px] font-black uppercase tracking-widest opacity-40 mb-1">AURA Protocol</div>}
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>

@@ -1,7 +1,6 @@
-
-import React, { useMemo } from 'react';
-import { Clock, ChefHat, Bike, CreditCard, ChevronRight, User, Phone, MapPin } from 'lucide-react';
-import { Order, OrderStatus } from '../../../shared/types';
+import React from 'react';
+import { Clock, CreditCard, ChevronRight, Phone, MapPin } from 'lucide-react';
+import { Order, OrderStatus, PaymentStatus } from '../../../shared/types';
 import { useAppContext } from '../../../client/App';
 
 interface OrderDetailProps {
@@ -9,20 +8,19 @@ interface OrderDetailProps {
 }
 
 export const OrderDetail: React.FC<OrderDetailProps> = ({ order }) => {
-    const { menuItems, updateOrderStatus } = useAppContext();
+    const { updateOrderStatus } = useAppContext();
 
     const orderItems = order.order_items || [];
 
     // Derived Data
     const customerName = order.customer_name || (order.dine_in_orders?.[0] ? 'Dine In Guest' : 'Walk-in');
     const tableId = order.dine_in_orders?.[0]?.table_id;
-    const isPaid = order.status === OrderStatus.PAID;
+    const isPaid = order.payment_status === PaymentStatus.PAID;
 
     // Helpers
     const getTargetStatus = (current: OrderStatus): OrderStatus | null => {
-        if (current === OrderStatus.NEW) return OrderStatus.COOKING;
-        if (current === OrderStatus.COOKING) return OrderStatus.READY;
-        if (current === OrderStatus.READY) return OrderStatus.SERVED; // or OUT_FOR_DELIVERY
+        if (current === OrderStatus.ACTIVE) return OrderStatus.READY;
+        if (current === OrderStatus.READY) return OrderStatus.CLOSED;
         return null;
     };
 
@@ -89,8 +87,8 @@ export const OrderDetail: React.FC<OrderDetailProps> = ({ order }) => {
                                     {item.quantity}
                                 </div>
                                 <div>
-                                    <div className="text-lg font-bold text-white">{item.menuItem?.name || item.menu_item_id}</div>
-                                    <div className="text-xs text-slate-500 uppercase tracking-widest">{item.status}</div>
+                                    <div className="text-lg font-bold text-white">{item.menu_item?.name || item.menu_item_id}</div>
+                                    <div className="text-xs text-slate-500 uppercase tracking-widest">{item.item_status}</div>
                                 </div>
                             </div>
                             <div className="font-mono text-slate-400">

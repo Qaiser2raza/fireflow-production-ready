@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../../client/contexts/AppContext';
-import { Plus, Trash2, Edit2, Save, X, Truck } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, Truck } from 'lucide-react';
 
 export const VendorsPanel: React.FC = () => {
     const { vendors, addVendor, updateVendor, deleteVendor } = useAppContext();

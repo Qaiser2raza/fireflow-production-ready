@@ -29,12 +29,13 @@ const payoutSchema = z.object({
 });
 
 /**
- * GET /api/accounting/session/:restaurantId
+ * GET /api/accounting/session
  * Get current active session
  */
-router.get('/session/:restaurantId', async (req, res) => {
+router.get('/session', async (req, res) => {
     try {
-        const session = await accounting.getSessionMetrics(req.params.restaurantId);
+        const restaurantId = req.restaurantId!; // SaaS Security
+        const session = await accounting.getSessionMetrics(restaurantId);
         res.json({ success: true, session });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -42,13 +43,14 @@ router.get('/session/:restaurantId', async (req, res) => {
 });
 
 /**
- * GET /api/accounting/ledger/:restaurantId
+ * GET /api/accounting/ledger
  * Get recent ledger entries
  */
-router.get('/ledger/:restaurantId', async (req, res) => {
+router.get('/ledger', async (req, res) => {
     try {
         const { limit } = req.query;
-        const entries = await accounting.getRecentLedger(req.params.restaurantId, Number(limit) || 50);
+        const restaurantId = req.restaurantId!; // SaaS Security
+        const entries = await accounting.getRecentLedger(restaurantId, Number(limit) || 50);
         res.json({ success: true, entries });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -60,8 +62,12 @@ router.get('/ledger/:restaurantId', async (req, res) => {
  */
 router.post('/session/open', async (req, res) => {
     try {
-        const validated = openSessionSchema.parse(req.body);
-        const session = await accounting.openCashSession(validated);
+        const validated = openSessionSchema.omit({ restaurantId: true, staffId: true }).parse(req.body);
+        const session = await accounting.openCashSession({
+            ...validated,
+            restaurantId: req.restaurantId!, // SaaS Security
+            staffId: req.staffId! // SaaS Security
+        });
         res.json({ success: true, session });
     } catch (e: any) {
         res.status(400).json({ error: e.message });
@@ -73,8 +79,11 @@ router.post('/session/open', async (req, res) => {
  */
 router.post('/session/close', async (req, res) => {
     try {
-        const validated = closeSessionSchema.parse(req.body);
-        const session = await accounting.closeCashSession(validated);
+        const validated = closeSessionSchema.omit({ staffId: true }).parse(req.body);
+        const session = await accounting.closeCashSession({
+            ...validated,
+            staffId: req.staffId! // SaaS Security
+        });
         res.json({ success: true, session });
     } catch (e: any) {
         res.status(400).json({ error: e.message });
@@ -95,12 +104,12 @@ router.post('/payout', async (req, res) => {
 });
 
 /**
- * GET /api/accounting/balance/:restaurantId/:staffId
+ * GET /api/accounting/balance/:staffId
  * Get current debt balance for a rider
  */
-router.get('/balance/:restaurantId/:staffId', async (req, res) => {
+router.get('/balance/:staffId', async (req, res) => {
     try {
-        const balance = await accounting.getBalance(req.params.restaurantId, req.params.staffId);
+        const balance = await accounting.getBalance(req.restaurantId!, req.params.staffId);
         res.json({ success: true, balance: Number(balance) });
     } catch (e: any) {
         res.status(500).json({ error: e.message });

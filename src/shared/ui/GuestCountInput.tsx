@@ -13,7 +13,6 @@ interface GuestCountInputProps {
 }
 
 export const GuestCountInput: React.FC<GuestCountInputProps> = ({
-    orderId,
     currentGuestCount,
     tableCapacity,
     orderStatus,
@@ -25,7 +24,7 @@ export const GuestCountInput: React.FC<GuestCountInputProps> = ({
     const [isUpdating, setIsUpdating] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
 
-    const closedStatuses: (OrderStatus | string)[] = [OrderStatus.COMPLETED, OrderStatus.PAID, OrderStatus.CANCELLED, OrderStatus.VOID, 'VOIDED', 'COMPLETED', 'PAID'];
+    const closedStatuses: (OrderStatus | string)[] = [OrderStatus.CLOSED, OrderStatus.PAID, OrderStatus.CANCELLED, OrderStatus.VOIDED, 'VOIDED', 'CLOSED', 'PAID'];
     const isLocked = closedStatuses.includes(orderStatus);
 
     const handleChange = (newGuests: number) => {

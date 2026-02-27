@@ -1,26 +1,26 @@
-
 import React, { useMemo } from 'react';
 import { useAppContext } from '../../../client/App';
+import { OrderStatus } from '../../../shared/types';
 import { Zap, Bike, ShoppingBag } from 'lucide-react';
 
 export const PulseSidebar: React.FC = () => {
   const { orders } = useAppContext();
 
-  const pulseOrders = useMemo(() => 
-    orders.filter(o => (o.type === 'TAKEAWAY' || o.type === 'DELIVERY') && o.status !== 'PAID'), 
+  const pulseOrders = useMemo(() =>
+    orders.filter(o => (o.type === 'TAKEAWAY' || o.type === 'DELIVERY') && o.status !== OrderStatus.CLOSED),
     [orders]
   );
 
   return (
     <aside className="hidden xl:flex flex-col w-[350px] border-l border-slate-800 bg-[#0f172a]/30">
       <div className="p-4 flex items-center justify-between border-b border-slate-800 bg-slate-900/40">
-         <div className="flex items-center gap-2">
-            <Zap className="text-[#ffd900] animate-pulse" size={18} />
-            <span className="text-sm font-black uppercase tracking-widest">The Pulse</span>
-         </div>
-         <span className="bg-[#ffd900]/10 text-[#ffd900] text-[10px] px-2 py-0.5 rounded font-black border border-[#ffd900]/20">
-           {pulseOrders.length} ACTIVE
-         </span>
+        <div className="flex items-center gap-2">
+          <Zap className="text-[#ffd900] animate-pulse" size={18} />
+          <span className="text-sm font-black uppercase tracking-widest">The Pulse</span>
+        </div>
+        <span className="bg-[#ffd900]/10 text-[#ffd900] text-[10px] px-2 py-0.5 rounded font-black border border-[#ffd900]/20">
+          {pulseOrders.length} ACTIVE
+        </span>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {pulseOrders.map(order => (

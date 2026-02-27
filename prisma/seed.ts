@@ -13,11 +13,16 @@ async function main() {
   await prisma.takeaway_orders.deleteMany({})
   await prisma.delivery_orders.deleteMany({})
   await prisma.reservation_orders.deleteMany({})
+  await prisma.order_intelligence.deleteMany({})
   await prisma.orders.deleteMany({})
   await prisma.transactions.deleteMany({})
   await prisma.audit_logs.deleteMany({})
   await prisma.staff_wallet_logs.deleteMany({})
   await prisma.rider_settlements.deleteMany({})
+  await prisma.rider_shifts.deleteMany({})
+  await prisma.ledger_entries.deleteMany({})
+  await prisma.payouts.deleteMany({})
+  await prisma.cash_sessions.deleteMany({})
   await prisma.expenses.deleteMany({})
   await prisma.reservations.deleteMany({})
   await prisma.registered_devices.deleteMany({})
@@ -25,6 +30,7 @@ async function main() {
   await prisma.license_keys.deleteMany({})
   await prisma.security_events.deleteMany({})
   await prisma.installation_logs.deleteMany({})
+  await prisma.customer_addresses.deleteMany({})
 
   // Master tables
   await prisma.tables.deleteMany({})
@@ -43,8 +49,8 @@ async function main() {
   console.log('🏗️  Seeding Restaurant...')
   const restaurant = await prisma.restaurants.create({
     data: {
-      name: 'Fireflow Premium POS',
-      slug: 'fireflow-main',
+      name: 'Fireflow Restaurant',
+      slug: 'fireflow-restaurant',
       currency: 'PKR',
       address: 'DHA Phase 6, Lahore',
       phone: '+92 300 1234567',
@@ -53,6 +59,7 @@ async function main() {
       tax_rate: 16,
       service_charge_enabled: true,
       service_charge_rate: 10,
+      logo_url: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', // A professional looking restaurant icon
     },
   })
 
@@ -125,7 +132,7 @@ async function main() {
         restaurant_id: restaurant.id,
         category: categoryName,
         is_available: true,
-        requires_prep: true,
+        requires_prep: categoryName !== 'Beverages',
       }
     })
   }

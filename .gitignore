@@ -28,12 +28,28 @@ dist-ssr
 .env.local
 .env.production
 .env.development
+.env.test
 .vercel
 .netlify
 
 /generated/prisma
 release/
+dist/
+dist-hq/
 dist-electron/
+dist-ssr/
 *.exe
 *.dmg
 *.zip
+
+# Temporary files
+tmp/
+*.txt
+*.cjs
+*.js
+!electron-main.cjs
+!preload.cjs
+!server.cjs
+!postcss.config.js
+!tailwind.config.js
+!vite.config.ts

@@ -1,5 +1,3 @@
-import React from 'react';
-import { Utensils } from 'lucide-react';
 import { MenuItem } from '../../../shared/types';
 
 interface MenuItemCardProps {
@@ -15,10 +13,8 @@ interface MenuItemCardProps {
 export const MenuItemCard: React.FC<MenuItemCardProps> = ({
     item,
     onSelect,
-    showCategory = false
 }) => {
     const imgUrl = item.image || item.image_url;
-    const hasValidUrl = typeof imgUrl === 'string' && imgUrl.includes('/');
     const isAvailable = item.is_available ?? item.available ?? true;
 
     return (
@@ -26,36 +22,16 @@ export const MenuItemCard: React.FC<MenuItemCardProps> = ({
             onClick={() => isAvailable && onSelect(item)}
             className="group relative bg-[#0B1120] rounded-2xl overflow-hidden cursor-pointer border border-white/5 hover:border-gold-500/40 transition-all duration-300 flex flex-col active:scale-95 h-full shadow-lg"
         >
-            {/* 
-        Image Section 
-        Uses aspect ratio (4:3) to ensure all cards have the same image dimensions.
-        Brighter fallback background (bg-slate-700) for better visual consistency.
-      */}
-            <div className="aspect-[4/3] w-full relative bg-slate-700 overflow-hidden shrink-0">
-                {hasValidUrl ? (
-                    <img
-                        src={imgUrl}
-                        alt={item.name}
-                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                        onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                            const parent = (e.target as HTMLElement).parentElement;
-                            if (parent) {
-                                const placeholder = parent.querySelector('.placeholder-icon');
-                                if (placeholder) placeholder.classList.remove('hidden');
-                            }
-                        }}
-                    />
-                ) : (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <Utensils size={36} className="text-slate-400 opacity-60" />
-                    </div>
-                )}
-
-                {/* Fallback Icon for broken images - Brighter & More Visible */}
-                <div className="placeholder-icon absolute inset-0 hidden items-center justify-center pointer-events-none">
-                    <Utensils size={36} className="text-slate-400 opacity-60" />
-                </div>
+            {/* Image Section */}
+            <div className="aspect-[1/1] w-full relative bg-slate-700 overflow-hidden shrink-0">
+                <img
+                    src={imgUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80'}
+                    alt={item.name}
+                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                    onError={(e) => {
+                        (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80';
+                    }}
+                />
 
                 {/* Modern Price Badge */}
                 <div className="absolute top-2 right-2 md:top-3 md:right-3 bg-black/80 backdrop-blur-md px-2 py-1 md:px-2.5 md:py-1.5 rounded-lg border border-white/10 shadow-xl z-20">
@@ -74,38 +50,25 @@ export const MenuItemCard: React.FC<MenuItemCardProps> = ({
                 )}
             </div>
 
-            {/* 
-                Info Section 
-                Standardized geometry with flexible name area and fixed category area to ensure PERFECT consistency.
-            */}
-            <div className="p-3 md:p-4 bg-[#0B1120] flex flex-col gap-1.5 flex-1 min-h-[100px] md:min-h-[120px]">
-                {/* Item Name: Flexible but with min-height for baseline consistency */}
-                <div className="min-h-[32px] md:min-h-[40px] flex items-start overflow-hidden">
-                    <h3
-                        className="text-white font-black text-xs md:text-[14px] leading-tight md:leading-snug uppercase tracking-tight group-hover:text-gold-500 transition-colors w-full"
-                        style={{
-                            display: '-webkit-box',
-                            WebkitBoxOrient: 'vertical',
-                            WebkitLineClamp: 2,
-                            overflow: 'hidden'
-                        }}
-                    >
-                        {item.name || 'Unknown Item'}
+            {/* Info Section */}
+            <div className="p-3 md:p-4 bg-gradient-to-b from-[#0B1120] to-black/40 flex flex-col gap-1.5 flex-1 justify-between">
+                <div>
+                    <h3 className="text-white font-black text-xs md:text-[13px] leading-tight uppercase tracking-tight group-hover:text-gold-500 transition-colors truncate">
+                        {item.name}
                     </h3>
+                    <p className="font-urdu text-lg text-slate-400 font-bold leading-none mt-1 truncate" dir="rtl">
+                        {item.name_urdu || 'بغیر نام'}
+                    </p>
                 </div>
 
-                {/* Categories: Reserved area to maintain vertical parity across all tabs */}
-                <div className="h-4 mt-auto flex items-center">
-                    {showCategory ? (
-                        <div className="flex items-center gap-1.5">
-                            <div className="w-1 h-1 rounded-full bg-gold-500/50" />
-                            <span className="text-[8px] md:text-[9px] text-slate-500 font-extrabold uppercase tracking-[0.1em] opacity-80 truncate max-w-[120px]">
-                                {item.category || item.category_rel?.name || 'General'}
-                            </span>
-                        </div>
-                    ) : (
-                        /* Invisible spacer keeps cards exactly the same height in category-specific views */
-                        <div className="h-4" />
+                <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/5">
+                    <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">
+                        {item.category || 'General'}
+                    </span>
+                    {item.station && (
+                        <span className="text-[8px] font-black uppercase tracking-widest text-gold-500/60">
+                            {item.station}
+                        </span>
                     )}
                 </div>
             </div>

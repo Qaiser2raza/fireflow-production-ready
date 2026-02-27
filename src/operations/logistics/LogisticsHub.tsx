@@ -1,312 +1,936 @@
 import React, { useState, useMemo } from 'react';
-import { useAppContext } from '../../client/App';
-import { Order, OrderStatus, Staff } from '../../shared/types';
-import { Bike, MapPin, Clock, Phone, CheckCircle2, Navigation, User, Package, Check, Printer, Send, Layers, X } from 'lucide-react';
+import { useAppContext } from '../../client/contexts/AppContext';
+import {
+   Bike, MapPin, Clock, Navigation, Package, Send, CheckCircle2,
+   Banknote, AlertCircle, Zap, Check, Layers, ShoppingCart,
+   X, ChevronRight, TrendingUp, RefreshCw,
+   User, AlertTriangle
+} from 'lucide-react';
 
-declare global {
-   interface Window {
-      electronAPI?: {
-         printDeliverySlip: (data: any) => void;
-      };
-   }
-}
+/* ─────────────────────────── helpers ─────────────────────────── */
+const fmt = (n: number) => `Rs. ${Number(n).toLocaleString()}`;
+const elapsed = (date: string | Date) =>
+   Math.floor((Date.now() - new Date(date).getTime()) / 60000);
 
+/* ─────────────────────────── component ─────────────────────────── */
 export const LogisticsHub: React.FC = () => {
-   const { orders, drivers, assignDriverToOrder, addNotification } = useAppContext();
-   const [activeTab, setActiveTab] = useState<'PENDING' | 'IN_TRANSIT'>('PENDING');
+   const { orders, drivers, addNotification, currentUser, fetchInitialData } = useAppContext();
+
+   const [activeTab, setActiveTab] = useState<'DISPATCH' | 'MONITOR' | 'SETTLE'>('DISPATCH');
    const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
-   const [isDispatching, setIsDispatching] = useState(false);
+   const [isProcessing, setIsProcessing] = useState(false);
 
-   // Filter Logic
-   const pendingOrders = useMemo(() =>
-      orders.filter(o =>
-         o.type === 'DELIVERY' &&
-         (o.status === OrderStatus.READY || o.status === OrderStatus.PREPARING || o.status === OrderStatus.FIRED) &&
-         !o.delivery_orders?.[0]?.driver_id && !o.assigned_driver_id
-      ).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+   // Dispatch modal
+   const [dispatchRiderId, setDispatchRiderId] = useState<string | null>(null);
+
+   // Shift modal
+   const [shiftModal, setShiftModal] = useState<{ open: boolean; mode: 'OPEN' | 'CLOSE'; riderId: string | null }>({ open: false, mode: 'OPEN', riderId: null });
+   const [shiftAmount, setShiftAmount] = useState('0');
+   const [shiftNotes, setShiftNotes] = useState('');
+
+   // Settlement cart
+   const [settleRiderId, setSettleRiderId] = useState<string | null>(null);
+   const [receivedCash, setReceivedCash] = useState('');
+   const [settleNotes, setSettleNotes] = useState('');
+
+   const API = 'http://localhost:3001/api';
+
+   /* ── derived data ── */
+   const pendingDispatch = useMemo(() =>
+      orders.filter(o => o.type === 'DELIVERY' && (o.status === 'READY' || o.status === 'ACTIVE') && !o.assigned_driver_id)
+         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
       [orders]);
 
-   const inTransitOrders = useMemo(() =>
-      orders.filter(o =>
-         o.type === 'DELIVERY' &&
-         (o.status === OrderStatus.OUT_FOR_DELIVERY || o.assigned_driver_id || o.delivery_orders?.[0]?.driver_id) && o.status !== OrderStatus.PAID && o.status !== OrderStatus.COMPLETED
-      ).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+   const activeRuns = useMemo(() =>
+      orders.filter(o => o.type === 'DELIVERY' && o.status === 'READY' && !!o.assigned_driver_id),
       [orders]);
 
-   const toggleOrderSelection = (id: string) => {
-      setSelectedOrderIds(prev =>
-         prev.includes(id) ? prev.filter(oid => oid !== id) : [...prev, id]
-      );
+   const delivered = useMemo(() =>
+      orders.filter(o => o.type === 'DELIVERY' && o.status === 'DELIVERED'),
+      [orders]);
+
+   const riderStats = useMemo(() => drivers.map(d => {
+      const onRoad = activeRuns.filter(o => o.assigned_driver_id === d.id);
+      const pending = delivered.filter(o => o.assigned_driver_id === d.id);
+      const float = Number(d.active_shift?.opening_float || 0);
+      const sales = pending.reduce((s, o) => s + Number(o.total), 0);
+      return { ...d, onRoad, pending, totalLiability: float + sales, hasShift: !!d.active_shift };
+   }), [drivers, activeRuns, delivered]);
+
+   const settleRider = useMemo(() => riderStats.find(r => r.id === settleRiderId), [riderStats, settleRiderId]);
+   const settleOrders = useMemo(() => delivered.filter(o => o.assigned_driver_id === settleRiderId), [delivered, settleRiderId]);
+
+   const expectedTotal = settleRider?.totalLiability ?? 0;
+   const received = Number(receivedCash) || 0;
+   const difference = received - expectedTotal;
+
+   /* ── actions ── */
+   const toggleOrder = (id: string) =>
+      setSelectedOrderIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+
+   const toggleAll = () =>
+      setSelectedOrderIds(p => p.length === pendingDispatch.length ? [] : pendingDispatch.map(o => o.id));
+
+   const handleDispatch = async () => {
+      if (!selectedOrderIds.length || !dispatchRiderId) return;
+      setIsProcessing(true);
+      try {
+         for (const orderId of selectedOrderIds) {
+            const res = await fetch(`${API}/orders/${orderId}/assign-driver`, {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json', 'x-staff-id': currentUser?.id || '', 'x-restaurant-id': currentUser?.restaurant_id || '' },
+               body: JSON.stringify({ driverId: dispatchRiderId, processedBy: currentUser?.id }),
+            });
+            const d = await res.json();
+            if (!d.success) throw new Error(d.error);
+         }
+         addNotification?.('success', `${selectedOrderIds.length} order(s) dispatched to ${drivers.find(d => d.id === dispatchRiderId)?.name}`);
+         setSelectedOrderIds([]);
+         setDispatchRiderId(null);
+         fetchInitialData();
+      } catch (e: any) {
+         addNotification?.('error', e.message || 'Dispatch failed');
+      } finally { setIsProcessing(false); }
    };
 
-   const handleBatchDispatch = async (driverId: string) => {
-      if (selectedOrderIds.length === 0) return;
-
-      setIsDispatching(true);
+   const handleMarkDelivered = async (orderId: string) => {
+      setIsProcessing(true);
       try {
-         // Batch assignment logic
-         for (const id of selectedOrderIds) {
-            await assignDriverToOrder(id, driverId);
-         }
+         const res = await fetch(`${API}/orders/${orderId}/mark-delivered`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-staff-id': currentUser?.id || '' },
+            body: JSON.stringify({ processedBy: currentUser?.id }),
+         });
+         if (!res.ok) throw new Error('Update failed');
+         addNotification?.('success', 'Marked as Delivered');
+         fetchInitialData();
+      } catch { addNotification?.('error', 'Failed to mark delivered'); }
+      finally { setIsProcessing(false); }
+   };
 
-         // Trigger Electron IPC / Print Event
-         if (window.electronAPI) {
-            window.electronAPI.printDeliverySlip({
-               orderIds: selectedOrderIds,
-               driverId,
-               timestamp: new Date().toISOString()
-            });
-         }
+   const handleOpenShift = async () => {
+      if (!shiftModal.riderId) return;
+      setIsProcessing(true);
+      try {
+         const res = await fetch(`${API}/riders/shift/open`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-restaurant-id': currentUser?.restaurant_id || '' },
+            body: JSON.stringify({ riderId: shiftModal.riderId, openedBy: currentUser?.id, openingFloat: Number(shiftAmount), notes: shiftNotes }),
+         });
+         const d = await res.json();
+         if (!d.success) throw new Error(d.error);
+         addNotification?.('success', 'Shift opened');
+         setShiftModal({ open: false, mode: 'OPEN', riderId: null });
+         setShiftAmount('0'); setShiftNotes('');
+         fetchInitialData();
+      } catch (e: any) { addNotification?.('error', e.message || 'Failed'); }
+      finally { setIsProcessing(false); }
+   };
 
-         addNotification('success', `Dispatched ${selectedOrderIds.length} orders to Rider`);
-         setSelectedOrderIds([]);
-      } catch (err) {
-         addNotification('error', 'Dispatch Sync Failed');
-      } finally {
-         setIsDispatching(false);
+   const handleCloseShift = async () => {
+      const rider = drivers.find(d => d.id === shiftModal.riderId);
+      if (!rider?.active_shift) return;
+      setIsProcessing(true);
+      try {
+         const res = await fetch(`${API}/riders/shift/close`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shiftId: rider.active_shift.id, closedBy: currentUser?.id, closingCash: Number(shiftAmount), notes: shiftNotes }),
+         });
+         const d = await res.json();
+         if (!d.success) throw new Error(d.error);
+         addNotification?.('success', 'Shift closed & reconciled');
+         setShiftModal({ open: false, mode: 'OPEN', riderId: null });
+         setShiftAmount('0'); setShiftNotes('');
+         fetchInitialData();
+      } catch (e: any) { addNotification?.('error', e.message || 'Failed'); }
+      finally { setIsProcessing(false); }
+   };
+
+   const handleSettle = async () => {
+      if (!settleRiderId || !settleOrders.length) return;
+      // Guide to shift closure
+      const rider = riderStats.find(r => r.id === settleRiderId);
+      if (rider?.active_shift) {
+         setShiftModal({ open: true, mode: 'CLOSE', riderId: settleRiderId });
+         setShiftAmount(String(expectedTotal));
+      } else {
+         addNotification?.('info', 'No active shift found for this rider. Open a shift first.');
       }
    };
 
+   /* ──────────────────────────── render ──────────────────────────── */
    return (
-      <div className="flex h-full bg-[#020617] text-slate-200 overflow-hidden font-sans">
-
-         {/* --- LEFT SIDEBAR: ACTIVE FLEET --- */}
-         <div className="w-80 bg-[#0B0F19] border-r border-slate-800/50 flex flex-col shrink-0 shadow-2xl z-20">
-            <div className="p-8 border-b border-slate-800/50 bg-slate-900/20">
-               <div className="flex items-center justify-between mb-8">
-                  <h2 className="text-2xl font-serif font-bold text-white tracking-tight">Fleet Command</h2>
-                  <div className="w-10 h-10 bg-blue-500/10 rounded-xl flex items-center justify-center text-blue-400">
-                     <Bike size={20} />
-                  </div>
+      <div className="lh-root">
+         {/* ── LEFT PANEL: Rider Fleet ── */}
+         <aside className="lh-aside">
+            <div className="lh-aside-header">
+               <div>
+                  <h2 className="lh-title-sm">Fleet Command</h2>
+                  <p className="lh-subtitle">{drivers.length} RIDERS  •  {activeRuns.length} ON ROAD</p>
                </div>
-
-               <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
-                     <span className="block text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">Total Fleet</span>
-                     <span className="text-2xl font-bold text-white leading-none">{drivers.length}</span>
-                  </div>
-                  <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
-                     <span className="block text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">In Transit</span>
-                     <span className="text-2xl font-bold text-blue-400 leading-none">
-                        {new Set(inTransitOrders.map(o => o.assigned_driver_id || o.delivery_orders?.[0]?.driver_id)).size || 0}
-                     </span>
-                  </div>
-               </div>
+               <span className="lh-badge-blue"><Bike size={13} />{drivers.filter(d => !!d.active_shift).length} Active</span>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-4 no-scrollbar">
-               <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-600 mb-2">Available Pilots</h3>
-               {drivers.map(driver => {
-                  const activeRunCount = inTransitOrders.filter(o => (o.assigned_driver_id === driver.id) || (o.delivery_orders?.[0]?.driver_id === driver.id)).length;
-                  const isAvailable = activeRunCount === 0;
-
-                  return (
-                     <div
-                        key={driver.id}
-                        className={`group relative overflow-hidden transition-all duration-300 p-4 rounded-2xl border flex items-center gap-4 ${isAvailable ? 'bg-slate-900/40 border-slate-800/50' : 'bg-blue-900/5 border-blue-900/20'
-                           }`}
-                     >
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-lg shadow-xl transition-transform group-hover:scale-110 ${isAvailable ? 'bg-slate-800 text-slate-400' : 'bg-blue-600 text-white animate-pulse'
-                           }`}>
-                           {driver.name.charAt(0)}
+            <div className="lh-rider-list">
+               {riderStats.map(rider => (
+                  <div
+                     key={rider.id}
+                     className={`lh-rider-card ${settleRiderId === rider.id ? 'lh-rider-card--active' : ''}`}
+                     onClick={() => { setSettleRiderId(rider.id); setActiveTab('SETTLE'); setReceivedCash(''); }}
+                  >
+                     <div className="lh-rider-row">
+                        <div className={`lh-avatar ${rider.hasShift ? 'lh-avatar--on' : ''}`}>
+                           {rider.name[0].toUpperCase()}
                         </div>
-                        <div className="flex-1">
-                           <div className="text-sm font-bold text-white group-hover:text-blue-400 transition-colors uppercase tracking-tight">{driver.name}</div>
-                           <div className={`text-[10px] uppercase font-black tracking-widest mt-1 ${isAvailable ? 'text-slate-500' : 'text-blue-500'}`}>
-                              {isAvailable ? 'Stationary' : `${activeRunCount} Active Deliveries`}
+                        <div className="lh-rider-info">
+                           <p className="lh-rider-name">{rider.name}</p>
+                           <div className="lh-rider-status">
+                              <span className={`lh-dot ${rider.hasShift ? 'lh-dot--green' : 'lh-dot--gray'}`} />
+                              {rider.hasShift ? `${rider.onRoad.length} running  •  ${rider.pending.length} pending` : 'No active shift'}
                            </div>
                         </div>
+                        <div className="lh-rider-liability">
+                           <p className="lh-liability-amt">{fmt(rider.totalLiability)}</p>
+                           <p className="lh-liability-lbl">liability</p>
+                        </div>
+                     </div>
 
-                        {selectedOrderIds.length > 0 && isAvailable && (
-                           <button
-                              onClick={() => handleBatchDispatch(driver.id)}
-                              className="absolute inset-0 bg-blue-600/90 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                           >
-                              <Send size={16} /> <span className="text-[10px] font-black uppercase">Assign Batch</span>
+                     <div className="lh-rider-actions" onClick={e => e.stopPropagation()}>
+                        {!rider.hasShift ? (
+                           <button className="lh-btn lh-btn--indigo lh-btn--sm" onClick={() => { setShiftModal({ open: true, mode: 'OPEN', riderId: rider.id }); setShiftAmount('0'); setShiftNotes(''); }}>
+                              <Zap size={12} /> Open Shift
                            </button>
+                        ) : (
+                           <>
+                              <button
+                                 className={`lh-btn lh-btn--emerald lh-btn--sm ${selectedOrderIds.length === 0 ? 'lh-btn--disabled' : ''}`}
+                                 disabled={selectedOrderIds.length === 0}
+                                 onClick={() => setDispatchRiderId(rider.id)}
+                              >
+                                 <Send size={12} /> Dispatch ({selectedOrderIds.length})
+                              </button>
+                              <button className="lh-btn lh-btn--ghost-red lh-btn--sm" onClick={() => { setShiftModal({ open: true, mode: 'CLOSE', riderId: rider.id }); setShiftAmount(String(rider.totalLiability)); setShiftNotes(''); }}>
+                                 <Layers size={12} /> Close Shift
+                              </button>
+                           </>
                         )}
                      </div>
-                  );
-               })}
-            </div>
-         </div>
+                  </div>
+               ))}
 
-         {/* --- MAIN DASHBOARD --- */}
-         <div className="flex-1 flex flex-col bg-[#020617] relative">
-            <div className="absolute top-0 right-0 w-1/2 h-1/2 bg-blue-500/5 blur-[120px] pointer-events-none" />
-
-            {/* Sub-Header */}
-            <div className="p-8 border-b border-slate-800/50 bg-slate-950/40 backdrop-blur-md flex justify-between items-center z-10">
-               <div className="flex gap-4 p-1.5 bg-slate-900/60 rounded-[1.5rem] border border-slate-800/50 ring-1 ring-white/5">
-                  {[
-                     { id: 'PENDING', label: 'Dispatch Queue', count: pendingOrders.length, color: 'gold-500' },
-                     { id: 'IN_TRANSIT', label: 'In Transit', count: inTransitOrders.length, color: 'blue-500' }
-                  ].map(tab => (
-                     <button
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id as any)}
-                        className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] transition-all duration-500 ${activeTab === tab.id
-                           ? `bg-white text-slate-950 shadow-2xl`
-                           : 'text-slate-500 hover:text-slate-300'
-                           }`}
-                     >
-                        {tab.label} <span className="ml-2 py-0.5 px-2 bg-black/20 rounded-full">{tab.count}</span>
-                     </button>
-                  ))}
-               </div>
-
-               {selectedOrderIds.length > 0 && (
-                  <div className="flex items-center gap-6 animate-in slide-in-from-right duration-500">
-                     <span className="text-xs font-black uppercase tracking-widest text-gold-500 flex items-center gap-2">
-                        <Layers size={16} /> {selectedOrderIds.length} Selected
-                     </span>
-                     <button
-                        onClick={() => setSelectedOrderIds([])}
-                        className="text-slate-500 hover:text-white transition-colors"
-                     >
-                        <X size={18} />
-                     </button>
+               {drivers.length === 0 && (
+                  <div className="lh-empty lh-empty--sm">
+                     <Bike size={32} className="lh-empty-icon" />
+                     <p>No riders registered</p>
                   </div>
                )}
             </div>
 
-            {/* Board Area */}
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar relative z-10">
+            {/* Fleet summary bar */}
+            <div className="lh-fleet-bar">
+               <div className="lh-fleet-stat"><p className="lh-fleet-val">{activeRuns.length}</p><p className="lh-fleet-lbl">On Road</p></div>
+               <div className="lh-fleet-divider" />
+               <div className="lh-fleet-stat"><p className="lh-fleet-val">{delivered.length}</p><p className="lh-fleet-lbl">To Settle</p></div>
+               <div className="lh-fleet-divider" />
+               <div className="lh-fleet-stat"><p className="lh-fleet-val text-indigo-400">{pendingDispatch.length}</p><p className="lh-fleet-lbl">Queued</p></div>
+            </div>
+         </aside>
 
-               {activeTab === 'PENDING' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-8">
-                     {pendingOrders.map(order => {
-                        const isSelected = selectedOrderIds.includes(order.id);
-                        return (
-                           <div
-                              key={order.id}
-                              onClick={() => toggleOrderSelection(order.id)}
-                              className={`group relative h-full flex flex-col bg-slate-900/40 border-2 rounded-[2.5rem] p-6 transition-all duration-300 cursor-pointer ${isSelected ? 'border-gold-500 ring-4 ring-gold-500/10' : 'border-slate-800/50 hover:border-slate-700'
-                                 }`}
-                           >
-                              <div className="flex justify-between items-start mb-6">
-                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500 mb-1">
-                                       #{order.id.split('-').pop()?.toUpperCase()}
-                                    </div>
-                                    <h3 className="text-xl font-serif font-bold text-white group-hover:text-gold-500 transition-colors">{order.customer_name || 'Anonymous Guest'}</h3>
-                                 </div>
-                                 <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${isSelected ? 'bg-gold-500 text-slate-950 scale-110' : 'bg-slate-800 text-slate-500 border border-slate-700'
-                                    }`}>
-                                    {isSelected ? <Check size={18} /> : <div className="w-1.5 h-1.5 rounded-full bg-slate-600" />}
-                                 </div>
+         {/* ── MAIN AREA ── */}
+         <main className="lh-main">
+            {/* Header */}
+            <header className="lh-header">
+               <div>
+                  <h1 className="lh-title">Logistics Hub</h1>
+                  <p className="lh-subtitle ml-3">Mission Control  •  Delivery Operations</p>
+               </div>
+               <div className="lh-tabs">
+                  {([
+                     { id: 'DISPATCH', label: 'Dispatch Queue', icon: Package, count: pendingDispatch.length },
+                     { id: 'MONITOR', label: 'Live Monitor', icon: Navigation, count: activeRuns.length },
+                     { id: 'SETTLE', label: 'Settlement', icon: Banknote, count: delivered.length },
+                  ] as const).map(tab => (
+                     <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`lh-tab ${activeTab === tab.id ? 'lh-tab--active' : ''}`}>
+                        <tab.icon size={15} />
+                        {tab.label}
+                        {tab.count > 0 && <span className="lh-tab-badge">{tab.count}</span>}
+                     </button>
+                  ))}
+               </div>
+            </header>
+
+            <div className="lh-content">
+
+               {/* ════════ DISPATCH TAB ════════ */}
+               {activeTab === 'DISPATCH' && (
+                  <div className="lh-table-wrapper">
+                     {/* Toolbar */}
+                     <div className="lh-toolbar">
+                        <div className="flex items-center gap-3">
+                           <input
+                              type="checkbox"
+                              className="lh-checkbox"
+                              checked={selectedOrderIds.length === pendingDispatch.length && pendingDispatch.length > 0}
+                              onChange={toggleAll}
+                           />
+                           <span className="lh-toolbar-label">
+                              {selectedOrderIds.length > 0 ? `${selectedOrderIds.length} selected` : `${pendingDispatch.length} orders waiting`}
+                           </span>
+                        </div>
+                        {selectedOrderIds.length > 0 && (
+                           <span className="lh-toolbar-total">
+                              Total: {fmt(orders.filter(o => selectedOrderIds.includes(o.id)).reduce((s, o) => s + Number(o.total), 0))}
+                           </span>
+                        )}
+                     </div>
+
+                     {/* Table header */}
+                     {pendingDispatch.length > 0 && (
+                        <div className="lh-row lh-row--header">
+                           <span style={{ width: 32 }} />
+                           <span className="lh-col lh-col--order">Order</span>
+                           <span className="lh-col lh-col--customer">Customer</span>
+                           <span className="lh-col lh-col--address">Address</span>
+                           <span className="lh-col lh-col--time">Wait</span>
+                           <span className="lh-col lh-col--amount">Amount</span>
+                           <span className="lh-col lh-col--action" />
+                        </div>
+                     )}
+
+                     {/* Rows */}
+                     <div className="lh-rows">
+                        {pendingDispatch.map(order => {
+                           const isSelected = selectedOrderIds.includes(order.id);
+                           const mins = elapsed(order.created_at);
+                           const urgent = mins > 20;
+                           return (
+                              <div
+                                 key={order.id}
+                                 className={`lh-row lh-row--data ${isSelected ? 'lh-row--selected' : ''} ${urgent ? 'lh-row--urgent' : ''}`}
+                                 onClick={() => toggleOrder(order.id)}
+                              >
+                                 <input
+                                    type="checkbox"
+                                    className="lh-checkbox"
+                                    checked={isSelected}
+                                    readOnly
+                                    onClick={e => e.stopPropagation()}
+                                    onChange={() => toggleOrder(order.id)}
+                                 />
+                                 <span className="lh-col lh-col--order">
+                                    <span className="lh-order-id">#{order.id.slice(-6).toUpperCase()}</span>
+                                 </span>
+                                 <span className="lh-col lh-col--customer">
+                                    <span className="lh-customer-name">{order.customer_name || '—'}</span>
+                                    {order.customer_phone && <span className="lh-customer-phone">{order.customer_phone}</span>}
+                                 </span>
+                                 <span className="lh-col lh-col--address">
+                                    <MapPin size={12} className="shrink-0 text-slate-500 mt-0.5" />
+                                    <span className="lh-address-text">{order.delivery_orders?.[0]?.delivery_address || 'No address'}</span>
+                                 </span>
+                                 <span className={`lh-col lh-col--time ${urgent ? 'text-red-400' : 'text-slate-400'}`}>
+                                    <Clock size={12} />
+                                    {mins}m
+                                 </span>
+                                 <span className="lh-col lh-col--amount lh-amount">{fmt(Number(order.total))}</span>
+                                 <span className="lh-col lh-col--action">
+                                    {isSelected && <ChevronRight size={16} className="text-indigo-400" />}
+                                 </span>
                               </div>
+                           );
+                        })}
+                     </div>
 
-                              <div className="flex-1 space-y-4">
-                                 <div className="flex items-center gap-3 text-xs text-slate-400">
-                                    <Phone size={14} className="text-slate-600" /> <span>{order.customer_phone}</span>
-                                 </div>
-                                 <div className="bg-slate-950/80 p-4 rounded-3xl border border-slate-800/50 flex gap-4 min-h-[5rem]">
-                                    <MapPin size={18} className="mt-1 text-red-500 shrink-0" />
-                                    <span className="text-sm text-slate-300 leading-relaxed line-clamp-2">
-                                       {order.delivery_orders?.[0]?.delivery_address || order.delivery_address || 'No address provided'}
-                                    </span>
-                                 </div>
-                              </div>
-
-                              <div className="mt-8 flex justify-between items-center pt-6 border-t border-slate-800/50">
-                                 <div className="flex items-center gap-2 text-gold-500/60 font-mono text-sm uppercase">
-                                    <Clock size={14} /> <span>{Math.floor((Date.now() - new Date(order.created_at).getTime()) / 60000)}m ago</span>
-                                 </div>
-                                 <div className="text-2xl font-black text-white px-4 py-1.5 bg-slate-800/30 rounded-2xl">
-                                    Rs. {Number(order.total).toLocaleString()}
-                                 </div>
-                              </div>
-                           </div>
-                        );
-                     })}
-
-                     {pendingOrders.length === 0 && (
-                        <div className="col-span-full h-full min-h-[400px] flex flex-col items-center justify-center opacity-30 grayscale pointer-events-none">
-                           <div className="w-32 h-32 border-4 border-dashed border-slate-800 rounded-full flex items-center justify-center mb-8">
-                              <Package size={64} className="text-slate-800" />
-                           </div>
-                           <h2 className="text-3xl font-serif text-slate-700">Dispatch Queue Clear</h2>
-                           <p className="text-[10px] uppercase font-black tracking-[0.4em] text-slate-800 mt-4">Awaiting kitchen handovers...</p>
+                     {pendingDispatch.length === 0 && (
+                        <div className="lh-empty">
+                           <Package size={48} className="lh-empty-icon" />
+                           <p className="lh-empty-title">Queue Empty</p>
+                           <p className="lh-empty-sub">All delivery orders have been dispatched</p>
                         </div>
                      )}
                   </div>
                )}
 
-               {activeTab === 'IN_TRANSIT' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-8">
-                     {inTransitOrders.map(order => {
-                        const driverId = order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id;
-                        const pilot = drivers.find(d => d.id === driverId);
+               {/* ════════ MONITOR TAB ════════ */}
+               {activeTab === 'MONITOR' && (
+                  <div className="lh-table-wrapper">
+                     <div className="lh-toolbar">
+                        <span className="lh-toolbar-label">{activeRuns.length} orders on the road</span>
+                        <button onClick={fetchInitialData} className="lh-btn lh-btn--ghost lh-btn--sm">
+                           <RefreshCw size={13} /> Refresh
+                        </button>
+                     </div>
 
-                        return (
-                           <div key={order.id} className="relative bg-slate-900/40 border-2 border-blue-900/30 rounded-[2.5rem] p-7 flex flex-col gap-6 overflow-hidden min-h-[20rem]">
-                              <div className="absolute -top-10 -right-10 opacity-5">
-                                 <Navigation size={200} className="rotate-45" />
-                              </div>
+                     {activeRuns.length > 0 && (
+                        <div className="lh-row lh-row--header">
+                           <span className="lh-col lh-col--order">Order</span>
+                           <span className="lh-col lh-col--customer">Customer</span>
+                           <span className="lh-col lh-col--address">Address</span>
+                           <span className="lh-col lh-col--rider">Rider</span>
+                           <span className="lh-col lh-col--amount">Amount</span>
+                           <span className="lh-col lh-col--action">Action</span>
+                        </div>
+                     )}
 
-                              <div className="flex justify-between items-start relative z-10">
-                                 <div>
-                                    <div className="flex items-center gap-2 mb-2">
-                                       <div className="flex items-center gap-1.5 px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded-lg text-[9px] font-black uppercase tracking-widest border border-blue-500/20">
-                                          <Bike size={10} /> In Flight
-                                       </div>
-                                    </div>
-                                    <h3 className="text-2xl font-serif font-bold text-white tracking-tight">{order.customer_name}</h3>
-                                 </div>
-                                 <div className="text-right">
-                                    <div className="text-2xl font-black text-white">Rs. {Number(order.total).toLocaleString()}</div>
-                                    <span className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Balance Due</span>
-                                 </div>
-                              </div>
-
-                              <div className="bg-slate-950/60 p-4 rounded-3xl border border-slate-800/50 flex items-center gap-4 relative z-10">
-                                 <div className="w-12 h-12 rounded-2xl bg-blue-600 flex items-center justify-center text-white font-black text-lg shadow-lg">
-                                    {pilot?.name.charAt(0)}
-                                 </div>
-                                 <div>
-                                    <span className="text-[10px] text-slate-500 uppercase font-black tracking-widest block mb-1">Assigned Pilot</span>
-                                    <span className="text-sm font-bold text-blue-400">{pilot?.name}</span>
-                                 </div>
-                              </div>
-
-                              <div className="mt-auto space-y-4 relative z-10">
-                                 <div className="flex gap-4 text-slate-400 text-sm">
-                                    <MapPin size={18} className="text-blue-500 shrink-0 mt-1" />
-                                    <span className="line-clamp-2 leading-relaxed italic">{order.delivery_orders?.[0]?.delivery_address || order.delivery_address}</span>
-                                 </div>
-
-                                 <div className="flex gap-3 pt-4 border-t border-slate-800/50">
+                     <div className="lh-rows">
+                        {activeRuns.map(order => {
+                           const rider = drivers.find(d => d.id === order.assigned_driver_id);
+                           return (
+                              <div key={order.id} className="lh-row lh-row--data">
+                                 <span className="lh-col lh-col--order">
+                                    <span className="lh-order-id">#{order.id.slice(-6).toUpperCase()}</span>
+                                 </span>
+                                 <span className="lh-col lh-col--customer">
+                                    <span className="lh-customer-name">{order.customer_name || '—'}</span>
+                                    {order.customer_phone && <span className="lh-customer-phone">{order.customer_phone}</span>}
+                                 </span>
+                                 <span className="lh-col lh-col--address">
+                                    <MapPin size={12} className="shrink-0 text-slate-500 mt-0.5" />
+                                    <span className="lh-address-text">{order.delivery_orders?.[0]?.delivery_address || '—'}</span>
+                                 </span>
+                                 <span className="lh-col lh-col--rider">
+                                    <div className="lh-avatar lh-avatar--xs lh-avatar--on">{rider?.name?.[0] ?? '?'}</div>
+                                    <span className="lh-rider-name-sm">{rider?.name ?? '—'}</span>
+                                 </span>
+                                 <span className="lh-col lh-col--amount lh-amount">{fmt(Number(order.total))}</span>
+                                 <span className="lh-col lh-col--action">
                                     <button
-                                       onClick={() => addNotification('info', 'Printing Duplicate Slip...')}
-                                       className="w-14 h-14 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-400 transition-all flex items-center justify-center group"
-                                       title="Print Duplicate"
+                                       onClick={() => handleMarkDelivered(order.id)}
+                                       disabled={isProcessing}
+                                       className="lh-btn lh-btn--indigo lh-btn--sm"
                                     >
-                                       <Printer size={20} className="group-hover:scale-110 transition-transform" />
+                                       <CheckCircle2 size={13} /> Delivered
                                     </button>
-                                    <button
-                                       className="flex-1 h-14 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-black uppercase tracking-widest text-[10px] transition-all shadow-xl shadow-blue-900/20 flex items-center justify-center gap-3 active:scale-[0.98]"
-                                    >
-                                       <CheckCircle2 size={18} /> Confirm Arrived
-                                    </button>
-                                 </div>
+                                 </span>
                               </div>
+                           );
+                        })}
+                     </div>
+
+                     {activeRuns.length === 0 && (
+                        <div className="lh-empty">
+                           <Navigation size={48} className="lh-empty-icon" />
+                           <p className="lh-empty-title">Fleet Standby</p>
+                           <p className="lh-empty-sub">No orders currently on the road</p>
+                        </div>
+                     )}
+                  </div>
+               )}
+
+               {/* ════════ SETTLE TAB ════════ */}
+               {activeTab === 'SETTLE' && (
+                  <div className="lh-settle-layout">
+                     {/* Left: order list */}
+                     <div className="lh-settle-orders">
+                        <div className="lh-toolbar">
+                           <span className="lh-toolbar-label">
+                              {settleRider ? `${settleOrders.length} orders — ${settleRider.name}` : 'Select a rider from Fleet panel'}
+                           </span>
+                           {settleRiderId && (
+                              <button onClick={() => { setSettleRiderId(null); setReceivedCash(''); }} className="lh-btn lh-btn--ghost lh-btn--sm">
+                                 <X size={13} /> Clear
+                              </button>
+                           )}
+                        </div>
+
+                        {settleRider && settleOrders.length > 0 && (
+                           <div className="lh-row lh-row--header">
+                              <span className="lh-col lh-col--order">Order</span>
+                              <span className="lh-col lh-col--customer">Customer</span>
+                              <span className="lh-col lh-col--address">Address</span>
+                              <span className="lh-col lh-col--time">Time</span>
+                              <span className="lh-col lh-col--amount">Amount</span>
                            </div>
-                        );
-                     })}
+                        )}
+
+                        <div className="lh-rows">
+                           {settleOrders.map(order => (
+                              <div key={order.id} className="lh-row lh-row--data lh-row--settle">
+                                 <span className="lh-col lh-col--order">
+                                    <span className="lh-order-id">#{order.id.slice(-6).toUpperCase()}</span>
+                                 </span>
+                                 <span className="lh-col lh-col--customer">
+                                    <span className="lh-customer-name">{order.customer_name || '—'}</span>
+                                 </span>
+                                 <span className="lh-col lh-col--address">
+                                    <MapPin size={12} className="shrink-0 text-slate-500" />
+                                    <span className="lh-address-text">{order.delivery_orders?.[0]?.delivery_address || '—'}</span>
+                                 </span>
+                                 <span className="lh-col lh-col--time text-slate-400">
+                                    {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                 </span>
+                                 <span className="lh-col lh-col--amount lh-amount lh-amount--emerald">{fmt(Number(order.total))}</span>
+                              </div>
+                           ))}
+                        </div>
+
+                        {!settleRider && (
+                           <div className="lh-empty">
+                              <User size={48} className="lh-empty-icon" />
+                              <p className="lh-empty-title">No Rider Selected</p>
+                              <p className="lh-empty-sub">Click a rider in the Fleet panel to load their settlement</p>
+                           </div>
+                        )}
+
+                        {settleRider && settleOrders.length === 0 && (
+                           <div className="lh-empty">
+                              <CheckCircle2 size={48} className="lh-empty-icon" />
+                              <p className="lh-empty-title">All Settled</p>
+                              <p className="lh-empty-sub">{settleRider.name} has no pending deliveries</p>
+                           </div>
+                        )}
+                     </div>
+
+                     {/* Right: Settlement cart — fixed footer layout */}
+                     <div className="lh-cart">
+                        {/* STICKY HEADER */}
+                        <div className="lh-cart-header">
+                           <ShoppingCart size={18} className="text-indigo-400" />
+                           <h3 className="lh-cart-title">Settlement Cart</h3>
+                           {settleRider && (
+                              <span className="lh-cart-order-count">{settleOrders.length} orders</span>
+                           )}
+                        </div>
+
+                        {settleRider ? (
+                           <>
+                              {/* SCROLLABLE BODY */}
+                              <div className="lh-cart-body">
+                                 {/* Rider chip */}
+                                 <div className="lh-cart-rider">
+                                    <div className="lh-avatar lh-avatar--sm lh-avatar--on">{settleRider.name[0]}</div>
+                                    <div>
+                                       <p className="lh-cart-rider-name">{settleRider.name}</p>
+                                       <p className="lh-cart-rider-sub">
+                                          {settleRider.onRoad.length > 0 && (
+                                             <span className="lh-pill lh-pill--warn">{settleRider.onRoad.length} still on road</span>
+                                          )}
+                                          Shift #{settleRider.active_shift?.id?.slice(-4).toUpperCase() ?? 'None'}
+                                       </p>
+                                    </div>
+                                 </div>
+
+                                 {/* Per-order rows */}
+                                 {settleOrders.length > 0 && (
+                                    <div className="lh-cart-orders">
+                                       <p className="lh-cart-label" style={{ marginBottom: '6px' }}>Delivered Orders</p>
+                                       {settleOrders.map((o, i) => (
+                                          <div key={o.id} className="lh-cart-order-row">
+                                             <span className="lh-cart-order-num">{i + 1}</span>
+                                             <div className="lh-cart-order-info">
+                                                <p className="lh-cart-order-name">{o.customer_name || 'Guest'}</p>
+                                                <p className="lh-cart-order-addr">{o.delivery_orders?.[0]?.delivery_address || 'No address'}</p>
+                                             </div>
+                                             <span className="lh-cart-order-amt">{fmt(Number(o.total))}</span>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 )}
+
+                                 {/* Breakdown */}
+                                 <div className="lh-cart-breakdown">
+                                    <div className="lh-cart-line">
+                                       <span>Opening Float</span>
+                                       <span>{fmt(Number(settleRider.active_shift?.opening_float || 0))}</span>
+                                    </div>
+                                    <div className="lh-cart-line">
+                                       <span>Sales ({settleOrders.length} orders)</span>
+                                       <span>{fmt(settleOrders.reduce((s, o) => s + Number(o.total), 0))}</span>
+                                    </div>
+                                    <div className="lh-cart-divider" />
+                                    <div className="lh-cart-line lh-cart-line--total">
+                                       <span>Total Expected</span>
+                                       <span>{fmt(expectedTotal)}</span>
+                                    </div>
+                                 </div>
+
+                                 {/* Cash input */}
+                                 <div className="lh-cart-field">
+                                    <label className="lh-cart-label">Cash Received from Rider</label>
+                                    <div className="lh-cash-input-wrap">
+                                       <span className="lh-cash-prefix">Rs.</span>
+                                       <input
+                                          type="number"
+                                          className="lh-cash-input"
+                                          placeholder="0"
+                                          value={receivedCash}
+                                          onChange={e => setReceivedCash(e.target.value)}
+                                          autoFocus
+                                       />
+                                    </div>
+                                 </div>
+
+                                 {/* Live difference — always visible when entered */}
+                                 {received > 0 && (
+                                    <div className={`lh-diff ${difference >= 0 ? 'lh-diff--ok' : 'lh-diff--short'}`}>
+                                       {difference >= 0
+                                          ? <><TrendingUp size={15} /> Overage: {fmt(difference)}</>
+                                          : <><AlertTriangle size={15} /> Shortage: {fmt(Math.abs(difference))}</>
+                                       }
+                                    </div>
+                                 )}
+
+                                 {/* Notes */}
+                                 <div className="lh-cart-field">
+                                    <label className="lh-cart-label">Notes (optional)</label>
+                                    <textarea
+                                       className="lh-cart-textarea"
+                                       placeholder="Any discrepancies or incidents..."
+                                       value={settleNotes}
+                                       onChange={e => setSettleNotes(e.target.value)}
+                                       rows={2}
+                                    />
+                                 </div>
+
+                                 {!settleRider.active_shift && (
+                                    <p className="lh-cart-warn"><AlertCircle size={13} /> Rider has no active shift. Open one first from the Fleet panel.</p>
+                                 )}
+                                 {settleRider.onRoad.length > 0 && (
+                                    <p className="lh-cart-warn" style={{ color: '#fbbf24' }}><AlertTriangle size={13} /> {settleRider.onRoad.length} order(s) still on road — mark them delivered first.</p>
+                                 )}
+                              </div>
+
+                              {/* STICKY FOOTER — always visible */}
+                              <div className="lh-cart-footer">
+                                 <div className="lh-cart-footer-total">
+                                    <span>Expected</span>
+                                    <strong>{fmt(expectedTotal)}</strong>
+                                 </div>
+                                 <button
+                                    className="lh-btn lh-btn--indigo lh-btn--full"
+                                    onClick={handleSettle}
+                                    disabled={isProcessing || settleOrders.length === 0 || !settleRider.active_shift}
+                                 >
+                                    <Layers size={16} /> Close Shift & Reconcile
+                                 </button>
+                              </div>
+                           </>
+                        ) : (
+                           <div className="lh-cart-empty">
+                              <Banknote size={40} className="lh-empty-icon" />
+                              <p>Select a rider from the Fleet panel to begin settlement</p>
+                           </div>
+                        )}
+                     </div>
                   </div>
                )}
             </div>
-         </div>
+         </main>
 
-         <style dangerouslySetInnerHTML={{
-            __html: `
-            .no-scrollbar::-webkit-scrollbar { display: none; }
-            .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-            .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-            .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
-            .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #334155; }
-         `}} />
+         {/* ════════ DISPATCH CONFIRM MODAL ════════ */}
+         {dispatchRiderId && (() => {
+            const riderForDispatch = riderStats.find(r => r.id === dispatchRiderId);
+            const ordersForDispatch = orders.filter(o => selectedOrderIds.includes(o.id));
+            const dispatchTotal = ordersForDispatch.reduce((s, o) => s + Number(o.total), 0);
+            return (
+               <div className="lh-overlay" onClick={() => setDispatchRiderId(null)}>
+                  <div className="lh-modal lh-modal--wide" onClick={e => e.stopPropagation()}>
+                     <div className="lh-modal-header">
+                        <div className="lh-modal-icon lh-modal-icon--indigo"><Send size={22} /></div>
+                        <div style={{ flex: 1 }}>
+                           <h3 className="lh-modal-title">Confirm Dispatch</h3>
+                           <p className="lh-modal-sub">
+                              Assigning {selectedOrderIds.length} order{selectedOrderIds.length > 1 ? 's' : ''} to {riderForDispatch?.name}
+                              {riderForDispatch && riderForDispatch.onRoad.length > 0 && (
+                                 <span className="lh-pill lh-pill--warn" style={{ marginLeft: 8 }}>{riderForDispatch.onRoad.length} already on road</span>
+                              )}
+                           </p>
+                        </div>
+                        <button onClick={() => setDispatchRiderId(null)} className="lh-modal-close"><X size={18} /></button>
+                     </div>
+
+                     {/* Order list */}
+                     <div className="lh-modal-order-list">
+                        {ordersForDispatch.map((o, i) => (
+                           <div key={o.id} className="lh-modal-order-row">
+                              <span className="lh-modal-order-num">{i + 1}</span>
+                              <div className="lh-modal-order-info">
+                                 <p className="lh-modal-order-name">{o.customer_name || 'Guest'}</p>
+                                 <p className="lh-modal-order-addr">
+                                    {o.delivery_orders?.[0]?.delivery_address || 'No address on file'}
+                                 </p>
+                              </div>
+                              <span className="lh-modal-order-amt">{fmt(Number(o.total))}</span>
+                           </div>
+                        ))}
+                     </div>
+
+                     <div className="lh-modal-total-bar">
+                        <span>Total Collection</span>
+                        <strong style={{ color: '#34d399' }}>{fmt(dispatchTotal)}</strong>
+                     </div>
+
+                     <div className="lh-modal-actions">
+                        <button onClick={() => setDispatchRiderId(null)} className="lh-btn lh-btn--ghost lh-btn--full">Cancel</button>
+                        <button onClick={handleDispatch} disabled={isProcessing} className="lh-btn lh-btn--emerald lh-btn--full">
+                           {isProcessing ? <><RefreshCw size={14} className="animate-spin" /> Dispatching…</> : <><Send size={14} /> Send {selectedOrderIds.length} Order{selectedOrderIds.length > 1 ? 's' : ''}</>}
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            );
+         })()}
+
+         {/* ════════ SHIFT MODAL ════════ */}
+         {shiftModal.open && (
+            <div className="lh-overlay" onClick={() => setShiftModal(p => ({ ...p, open: false }))}>
+               <div className="lh-modal" onClick={e => e.stopPropagation()}>
+                  <div className="lh-modal-header">
+                     <div className={`lh-modal-icon ${shiftModal.mode === 'OPEN' ? 'lh-modal-icon--indigo' : 'lh-modal-icon--red'}`}>
+                        {shiftModal.mode === 'OPEN' ? <Zap size={22} /> : <Layers size={22} />}
+                     </div>
+                     <div>
+                        <h3 className="lh-modal-title">{shiftModal.mode === 'OPEN' ? 'Open Rider Shift' : 'Close & Reconcile'}</h3>
+                        <p className="lh-modal-sub">{drivers.find(d => d.id === shiftModal.riderId)?.name}</p>
+                     </div>
+                     <button onClick={() => setShiftModal(p => ({ ...p, open: false }))} className="lh-modal-close"><X size={18} /></button>
+                  </div>
+                  <div className="lh-modal-body">
+                     <div className="lh-cart-field">
+                        <label className="lh-cart-label">{shiftModal.mode === 'OPEN' ? 'Opening Float (Rs.)' : 'Cash Received (Rs.)'}</label>
+                        <div className="lh-cash-input-wrap">
+                           <span className="lh-cash-prefix">Rs.</span>
+                           <input
+                              type="number"
+                              className="lh-cash-input"
+                              placeholder="0"
+                              value={shiftAmount}
+                              autoFocus
+                              onChange={e => setShiftAmount(e.target.value)}
+                           />
+                        </div>
+                     </div>
+                     <div className="lh-cart-field">
+                        <label className="lh-cart-label">Notes</label>
+                        <textarea
+                           className="lh-cart-textarea"
+                           placeholder="Shift notes..."
+                           value={shiftNotes}
+                           onChange={e => setShiftNotes(e.target.value)}
+                           rows={3}
+                        />
+                     </div>
+                  </div>
+                  <div className="lh-modal-actions">
+                     <button onClick={() => setShiftModal(p => ({ ...p, open: false }))} className="lh-btn lh-btn--ghost lh-btn--full">Cancel</button>
+                     <button
+                        onClick={shiftModal.mode === 'OPEN' ? handleOpenShift : handleCloseShift}
+                        disabled={isProcessing}
+                        className={`lh-btn lh-btn--full ${shiftModal.mode === 'OPEN' ? 'lh-btn--indigo' : 'lh-btn--red'}`}
+                     >
+                        {isProcessing
+                           ? <><RefreshCw size={14} className="animate-spin" /> Processing…</>
+                           : shiftModal.mode === 'OPEN' ? <><Check size={14} /> Activate Shift</> : <><Layers size={14} /> Finalize</>}
+                     </button>
+                  </div>
+               </div>
+            </div>
+         )}
+
+         {/* ════════ INLINE STYLES ════════ */}
+         <style>{`
+            .lh-root { display:flex; height:100vh; background:#060a12; color:#cbd5e1; font-family:'Inter',sans-serif; overflow:hidden; }
+
+            /* ASIDE */
+            .lh-aside { width:320px; background:#0a0f1e; border-right:1px solid #1e293b; display:flex; flex-direction:column; flex-shrink:0; }
+            .lh-aside-header { padding:20px 18px 14px; border-bottom:1px solid #1e293b; display:flex; align-items:center; justify-content:space-between; }
+            .lh-rider-list { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:6px; }
+
+            /* RIDER CARD */
+            .lh-rider-card { background:#0d1424; border:1px solid #1e293b; border-radius:14px; padding:12px; cursor:pointer; transition:all .18s; }
+            .lh-rider-card:hover { border-color:#334155; background:#111827; }
+            .lh-rider-card--active { border-color:#4f46e5; background:#1e1b4b22; }
+            .lh-rider-row { display:flex; align-items:center; gap:10px; }
+            .lh-rider-info { flex:1; min-width:0; }
+            .lh-rider-name { font-size:13px; font-weight:700; color:#f1f5f9; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .lh-rider-status { display:flex; align-items:center; gap:6px; font-size:11px; color:#64748b; margin-top:2px; }
+            .lh-rider-liability { text-align:right; }
+            .lh-liability-amt { font-size:12px; font-weight:700; color:#a5b4fc; white-space:nowrap; }
+            .lh-liability-lbl { font-size:9px; color:#475569; text-transform:uppercase; letter-spacing:.08em; }
+            .lh-rider-actions { display:flex; gap:6px; margin-top:10px; }
+
+            /* AVATAR */
+            .lh-avatar { width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:900; color:#fff; background:#1e293b; flex-shrink:0; }
+            .lh-avatar--on { background:#4f46e5; box-shadow:0 0 12px #4f46e540; }
+            .lh-avatar--sm { width:30px; height:30px; font-size:13px; border-radius:8px; }
+            .lh-avatar--xs { width:24px; height:24px; font-size:11px; border-radius:6px; }
+
+            /* DOT */
+            .lh-dot { width:6px; height:6px; border-radius:50%; display:inline-block; flex-shrink:0; }
+            .lh-dot--green { background:#10b981; box-shadow:0 0 6px #10b98160; }
+            .lh-dot--gray { background:#475569; }
+
+            /* FLEET BAR */
+            .lh-fleet-bar { padding:12px 16px; border-top:1px solid #1e293b; background:#070b14; display:flex; align-items:center; }
+            .lh-fleet-stat { flex:1; text-align:center; }
+            .lh-fleet-val { font-size:18px; font-weight:900; color:#f1f5f9; }
+            .lh-fleet-lbl { font-size:9px; text-transform:uppercase; letter-spacing:.1em; color:#475569; }
+            .lh-fleet-divider { width:1px; height:30px; background:#1e293b; }
+
+            /* MAIN */
+            .lh-main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+            .lh-header { padding:16px 24px; border-bottom:1px solid #1e293b; display:flex; align-items:center; justify-content:space-between; background:#070b14; flex-shrink:0; }
+            .lh-title { font-size:20px; font-weight:900; color:#f1f5f9; letter-spacing:-.03em; text-transform:uppercase; }
+            .lh-title-sm { font-size:14px; font-weight:800; color:#f1f5f9; letter-spacing:.02em; text-transform:uppercase; }
+            .lh-subtitle { font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:#475569; margin-top:2px; }
+            .lh-content { flex:1; overflow:hidden; display:flex; flex-direction:column; }
+
+            /* TABS */
+            .lh-tabs { display:flex; gap:4px; background:#0a0f1e; padding:4px; border-radius:12px; border:1px solid #1e293b; }
+            .lh-tab { display:flex; align-items:center; gap:7px; padding:8px 16px; border-radius:8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#64748b; transition:all .15s; cursor:pointer; border:none; background:transparent; }
+            .lh-tab:hover { color:#94a3b8; }
+            .lh-tab--active { background:#4f46e5; color:#fff; box-shadow:0 4px 14px #4f46e540; }
+            .lh-tab-badge { background:#ffffff25; color:#fff; font-size:10px; font-weight:800; padding:1px 7px; border-radius:6px; }
+
+            /* TABLE/ROWS */
+            .lh-table-wrapper { display:flex; flex-direction:column; flex:1; overflow:hidden; }
+            .lh-toolbar { display:flex; align-items:center; justify-content:space-between; padding:10px 20px; border-bottom:1px solid #1e293b; background:#08101f; }
+            .lh-toolbar-label { font-size:12px; font-weight:600; color:#64748b; }
+            .lh-toolbar-total { font-size:12px; font-weight:700; color:#a5b4fc; }
+            .lh-row { display:flex; align-items:center; gap:0; font-size:12px; }
+            .lh-row--header { padding:6px 20px; background:#060d1a; border-bottom:1px solid #1e293b; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:#475569; }
+            .lh-row--data { padding:10px 20px; border-bottom:1px solid #0f1929; cursor:pointer; transition:background .12s; }
+            .lh-row--data:hover { background:#0d1426; }
+            .lh-row--selected { background:#1e1b4b30 !important; border-left:3px solid #4f46e5; }
+            .lh-row--urgent { border-left:3px solid #f87171 !important; }
+            .lh-row--settle { cursor:default; }
+            .lh-rows { flex:1; overflow-y:auto; }
+
+            /* COLs */
+            .lh-col { display:flex; align-items:center; gap:5px; overflow:hidden; }
+            .lh-col--order { width:90px; flex-shrink:0; }
+            .lh-col--customer { width:160px; flex-shrink:0; flex-direction:column; align-items:flex-start; gap:2px; }
+            .lh-col--address { flex:1; }
+            .lh-col--time { width:55px; flex-shrink:0; gap:4px; }
+            .lh-col--rider { width:130px; flex-shrink:0; }
+            .lh-col--amount { width:100px; flex-shrink:0; justify-content:flex-end; }
+            .lh-col--action { width:100px; flex-shrink:0; justify-content:flex-end; }
+
+            .lh-order-id { font-family:monospace; font-size:11px; font-weight:700; color:#94a3b8; background:#1e293b; border-radius:5px; padding:2px 6px; }
+            .lh-customer-name { font-size:12px; font-weight:600; color:#e2e8f0; }
+            .lh-customer-phone { font-size:10px; color:#64748b; }
+            .lh-address-text { font-size:11px; color:#94a3b8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .lh-amount { font-size:12px; font-weight:700; color:#e2e8f0; }
+            .lh-amount--emerald { color:#34d399; }
+            .lh-rider-name-sm { font-size:12px; font-weight:600; color:#e2e8f0; }
+
+            /* SETTLE LAYOUT */
+            .lh-settle-layout { display:flex; flex:1; overflow:hidden; gap:0; }
+            .lh-settle-orders { flex:1; display:flex; flex-direction:column; overflow:hidden; border-right:1px solid #1e293b; }
+
+            /* CART — always-visible footer pattern */
+            .lh-cart { width:340px; flex-shrink:0; background:#0a0f1e; border-left:1px solid #1e293b; display:flex; flex-direction:column; overflow:hidden; }
+            .lh-cart-body { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:12px; }
+            .lh-cart-footer { flex-shrink:0; padding:14px; border-top:1px solid #1e293b; background:#070b14; display:flex; flex-direction:column; gap:10px; }
+            .lh-cart-footer-total { display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#64748b; padding:0 4px; }
+            .lh-cart-footer-total strong { font-size:16px; font-weight:800; color:#f1f5f9; }
+
+            /* Per-order rows in cart */
+            .lh-cart-orders { display:flex; flex-direction:column; gap:4px; }
+            .lh-cart-order-row { display:flex; align-items:flex-start; gap:8px; padding:8px 10px; background:#060d1a; border:1px solid #1e293b; border-radius:8px; }
+            .lh-cart-order-num { width:18px; height:18px; border-radius:50%; background:#1e293b; color:#64748b; font-size:9px; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px; }
+            .lh-cart-order-info { flex:1; min-width:0; }
+            .lh-cart-order-name { font-size:12px; font-weight:600; color:#e2e8f0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .lh-cart-order-addr { font-size:10px; color:#64748b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+            .lh-cart-order-amt { font-size:12px; font-weight:700; color:#34d399; flex-shrink:0; margin-left:6px; }
+            .lh-cart-order-count { margin-left:auto; font-size:10px; font-weight:700; background:#1e1b4b; color:#a5b4fc; border:1px solid #3730a3; border-radius:6px; padding:2px 8px; }
+
+            /* pill badges */
+            .lh-pill { display:inline-flex; align-items:center; font-size:9px; font-weight:800; border-radius:5px; padding:2px 6px; text-transform:uppercase; letter-spacing:.06em; }
+            .lh-pill--warn { background:#451a03; color:#fbbf24; border:1px solid #78350f; }
+            .lh-cart-header { display:flex; align-items:center; gap:10px; padding:14px 14px 12px; border-bottom:1px solid #1e293b; flex-shrink:0; }
+            .lh-cart-title { font-size:14px; font-weight:800; color:#f1f5f9; text-transform:uppercase; letter-spacing:.05em; }
+            .lh-cart-rider { display:flex; align-items:center; gap:10px; background:#111827; border:1px solid #1e293b; border-radius:10px; padding:10px; }
+            .lh-cart-rider-name { font-size:13px; font-weight:700; color:#f1f5f9; text-transform:uppercase; }
+            .lh-cart-rider-sub { font-size:10px; color:#64748b; margin-top:2px; }
+            .lh-cart-breakdown { background:#060d1a; border:1px solid #1e293b; border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:8px; }
+            .lh-cart-line { display:flex; justify-content:space-between; font-size:12px; color:#64748b; }
+            .lh-cart-line--total { font-size:13px; font-weight:700; color:#f1f5f9; padding-top:4px; }
+            .lh-cart-divider { height:1px; background:#1e293b; }
+            .lh-cart-field { display:flex; flex-direction:column; gap:6px; }
+            .lh-cart-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:#475569; }
+            .lh-cart-textarea { background:#060d1a; border:1px solid #1e293b; border-radius:10px; padding:10px; color:#e2e8f0; font-size:12px; resize:none; outline:none; transition:border .15s; width:100%; }
+            .lh-cart-textarea:focus { border-color:#4f46e5; }
+            .lh-cart-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:#475569; font-size:12px; text-align:center; opacity:.6; }
+            .lh-cart-warn { font-size:11px; color:#f87171; display:flex; align-items:center; gap:6px; }
+
+            /* CASH INPUT */
+            .lh-cash-input-wrap { position:relative; }
+            .lh-cash-prefix { position:absolute; left:12px; top:50%; transform:translateY(-50%); font-size:12px; font-weight:700; color:#64748b; }
+            .lh-cash-input { width:100%; background:#060d1a; border:1px solid #1e293b; border-radius:10px; padding:12px 12px 12px 40px; color:#f1f5f9; font-size:20px; font-weight:800; outline:none; transition:border .15s; }
+            .lh-cash-input:focus { border-color:#4f46e5; box-shadow:0 0 0 3px #4f46e520; }
+
+            /* DIFF */
+            .lh-diff { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; padding:10px 14px; border-radius:10px; }
+            .lh-diff--ok { background:#052e16; color:#34d399; border:1px solid #166534; }
+            .lh-diff--short { background:#1f0808; color:#f87171; border:1px solid #7f1d1d; }
+
+            /* BUTTONS */
+            .lh-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; border-radius:9px; border:none; cursor:pointer; transition:all .15s; padding:7px 13px; }
+            .lh-btn--sm { padding:5px 11px; font-size:10px; }
+            .lh-btn--full { width:100%; padding:13px; font-size:12px; border-radius:10px; }
+            .lh-btn--indigo { background:#4f46e5; color:#fff; }
+            .lh-btn--indigo:hover { background:#4338ca; }
+            .lh-btn--indigo:disabled { opacity:.35; cursor:not-allowed; }
+            .lh-btn--emerald { background:#059669; color:#fff; }
+            .lh-btn--emerald:hover { background:#047857; }
+            .lh-btn--red { background:#dc2626; color:#fff; }
+            .lh-btn--red:hover { background:#b91c1c; }
+            .lh-btn--ghost { background:#1e293b; color:#94a3b8; }
+            .lh-btn--ghost:hover { background:#334155; color:#f1f5f9; }
+            .lh-btn--ghost-red { background:transparent; color:#f87171; border:1px solid #7f1d1d; }
+            .lh-btn--ghost-red:hover { background:#7f1d1d30; }
+            .lh-btn--disabled { opacity:.3; cursor:not-allowed; }
+
+            /* BADGE */
+            .lh-badge-blue { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; background:#1e1b4b; color:#a5b4fc; border:1px solid #3730a3; border-radius:8px; padding:4px 10px; }
+
+            /* EMPTY */
+            .lh-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding:40px; }
+            .lh-empty--sm { padding:20px; }
+            .lh-empty-icon { color:#1e293b; }
+            .lh-empty-title { font-size:15px; font-weight:700; color:#334155; }
+            .lh-empty-sub { font-size:12px; color:#1e293b; max-width:260px; }
+
+            /* CHECKBOX */
+            .lh-checkbox { width:16px; height:16px; accent-color:#4f46e5; cursor:pointer; flex-shrink:0; }
+
+            /* ml helper */
+            .ml-3 { margin-left:12px; }
+
+            /* OVERLAY / MODAL */
+            .lh-overlay { position:fixed; inset:0; background:rgba(0,0,0,.8); backdrop-filter:blur(12px); display:flex; align-items:center; justify-content:center; z-index:200; }
+            .lh-modal { background:#0c1120; border:1px solid #1e293b; border-radius:20px; padding:24px; width:420px; max-width:90vw; box-shadow:0 24px 80px #0007; }
+            .lh-modal--wide { width:520px; }
+            .lh-modal-header { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
+            .lh-modal-icon { width:46px; height:46px; border-radius:12px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+            .lh-modal-icon--indigo { background:#1e1b4b; color:#a5b4fc; }
+            .lh-modal-icon--red { background:#1f0808; color:#f87171; }
+            .lh-modal-title { font-size:16px; font-weight:800; color:#f1f5f9; text-transform:uppercase; letter-spacing:-.01em; }
+            .lh-modal-sub { font-size:11px; color:#64748b; margin-top:3px; display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
+            .lh-modal-close { margin-left:auto; background:none; border:none; color:#475569; cursor:pointer; padding:4px; flex-shrink:0; }
+            .lh-modal-close:hover { color:#94a3b8; }
+            .lh-modal-body { display:flex; flex-direction:column; gap:14px; margin-bottom:16px; background:#08101f; border-radius:12px; padding:16px; }
+            .lh-modal-stat-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; color:#64748b; padding:4px 0; }
+            .lh-modal-stat-row strong { color:#f1f5f9; }
+            .lh-modal-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:16px; }
+            /* dispatch modal order list */
+            .lh-modal-order-list { max-height:260px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
+            .lh-modal-order-row { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#08101f; border:1px solid #1e293b; border-radius:10px; }
+            .lh-modal-order-num { width:20px; height:20px; border-radius:50%; background:#1e293b; color:#64748b; font-size:9px; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:2px; }
+            .lh-modal-order-info { flex:1; min-width:0; }
+            .lh-modal-order-name { font-size:12px; font-weight:700; color:#f1f5f9; }
+            .lh-modal-order-addr { font-size:11px; color:#64748b; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .lh-modal-order-amt { font-size:13px; font-weight:700; color:#34d399; white-space:nowrap; }
+            .lh-modal-total-bar { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:#0d1f14; border:1px solid #166534; border-radius:10px; font-size:12px; color:#64748b; margin-bottom:4px; }
+            .lh-modal-total-bar strong { font-size:16px; font-weight:800; }
+
+            /* scrollbar */
+            ::-webkit-scrollbar { width:4px; }
+            ::-webkit-scrollbar-track { background:transparent; }
+            ::-webkit-scrollbar-thumb { background:#1e293b; border-radius:4px; }
+         `}</style>
       </div>
    );
 };

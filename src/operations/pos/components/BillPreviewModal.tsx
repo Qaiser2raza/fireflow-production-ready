@@ -1,6 +1,6 @@
 import React from 'react';
 import { Order, PaymentBreakdown } from '../../../shared/types';
-import { X, Printer, ArrowRight, Receipt, DollarSign } from 'lucide-react';
+import { X, Printer, ArrowRight, Receipt, Banknote } from 'lucide-react';
 
 interface BillPreviewModalProps {
     isOpen: boolean;
@@ -139,7 +139,7 @@ export const BillPreviewModal: React.FC<BillPreviewModalProps> = ({
                     {/* Additional Info */}
                     <div className="mt-4 p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl">
                         <div className="flex items-center gap-2 text-blue-400 text-xs">
-                            <DollarSign size={14} />
+                            <Banknote size={14} />
                             <span className="font-bold">
                                 Bill generated at {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>

@@ -1,4 +1,4 @@
-import { orders, Prisma } from '@prisma/client';
+import { orders } from '@prisma/client';
 
 export type CreateOrderDTO = {
     restaurant_id: string;

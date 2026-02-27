@@ -14,7 +14,9 @@ export const FloorManagementView: React.FC = () => {
         setActiveView,
         seatGuests,
         setOrderToEdit,
-        updateOrderStatus
+        updateOrderStatus,
+        updateTableStatus,
+        currentUser
     } = useAppContext();
 
     const [activeZone, setActiveZone] = useState<string>('ALL');
@@ -24,7 +26,7 @@ export const FloorManagementView: React.FC = () => {
 
     // Get dine-in orders
     const dineInOrders = useMemo(() => {
-        return orders.filter(o => o.type === 'DINE_IN' && o.status !== 'PAID' && o.status !== 'CANCELLED');
+        return orders.filter(o => o.type === 'DINE_IN' && o.payment_status !== 'PAID' && o.status !== 'CANCELLED');
     }, [orders]);
 
     // Hall Capacity Stats
@@ -44,8 +46,11 @@ export const FloorManagementView: React.FC = () => {
 
         // Apply Zone Filter
         if (activeZone === 'ALL') {
-            // "Active Orders" view: Only show tables that have an associated live order
-            baseTables = tables.filter(t => dineInOrders.some(o => o.table_id === t.id));
+            // "Active Orders" view: Show tables with live orders OR dirty tables needing cleaning
+            baseTables = tables.filter(t =>
+                dineInOrders.some(o => o.table_id === t.id) ||
+                t.status === 'DIRTY'
+            );
         } else {
             baseTables = tables.filter(t => t.section_id === activeZone);
         }
@@ -139,6 +144,7 @@ export const FloorManagementView: React.FC = () => {
                                             key={table.id}
                                             table={table}
                                             order={order}
+                                            currentUser={currentUser}
                                             onSeat={(count) => seatGuests(table.id, count)}
                                             onOpenPOS={() => {
                                                 if (order) setOrderToEdit(order);
@@ -149,6 +155,9 @@ export const FloorManagementView: React.FC = () => {
                                             }}
                                             onRequestBill={async (orderId) => {
                                                 await updateOrderStatus(orderId, 'BILL_REQUESTED' as any);
+                                            }}
+                                            onUpdateStatus={async (status) => {
+                                                await updateTableStatus(table.id, status as any);
                                             }}
                                         />
                                     );
@@ -187,6 +196,7 @@ export const FloorManagementView: React.FC = () => {
                 onClose={() => setIsRecallOpen(false)}
                 orders={orders}
                 onSelectOrder={handleSelectOrder}
+                currentUser={currentUser}
             />
 
             <style>{`

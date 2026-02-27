@@ -13,7 +13,7 @@ export const validateBody = (schema: ZodSchema) => {
             if (error instanceof ZodError) {
                 return res.status(400).json({
                     error: 'Validation failed',
-                    details: error.errors.map(err => ({
+                    details: error.issues.map((err: any) => ({
                         path: err.path.join('.'),
                         message: err.message
                     }))
@@ -30,13 +30,13 @@ export const validateBody = (schema: ZodSchema) => {
 export const validateQuery = (schema: ZodSchema) => {
     return (req: Request, res: Response, next: NextFunction) => {
         try {
-            req.query = schema.parse(req.query);
+            req.query = schema.parse(req.query) as any;
             next();
         } catch (error) {
             if (error instanceof ZodError) {
                 return res.status(400).json({
                     error: 'Query validation failed',
-                    details: error.errors.map(err => ({
+                    details: error.issues.map((err: any) => ({
                         path: err.path.join('.'),
                         message: err.message
                     }))

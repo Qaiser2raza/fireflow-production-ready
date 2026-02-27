@@ -1,6 +1,6 @@
 import React from 'react';
-import { Order, OrderStatus } from '../../../shared/types';
-import { Zap, Clock, ChevronRight, Bike, Package } from 'lucide-react';
+import { Order } from '../../../shared/types';
+import { Zap, Clock, Bike, Package } from 'lucide-react';
 
 interface OrderSidebarProps {
     orders: Order[];
@@ -84,9 +84,8 @@ const PulseItem: React.FC<{ order: Order; onClick: () => void }> = ({ order, onC
 
     const getStatusStyle = () => {
         switch (order.status) {
-            case OrderStatus.READY: return 'border-[#D4AF37] text-[#D4AF37]';
-            case OrderStatus.FIRED:
-            case OrderStatus.PREPARING: return 'border-[#F59E0B] text-[#F59E0B]';
+            case 'READY': return 'border-[#D4AF37] text-[#D4AF37]';
+            case 'ACTIVE': return 'border-[#F59E0B] text-[#F59E0B]';
             default: return 'border-slate-700 text-slate-400';
         }
     };
@@ -122,8 +121,8 @@ const PulseItem: React.FC<{ order: Order; onClick: () => void }> = ({ order, onC
 
             <div className="mt-3 overflow-hidden h-1 bg-slate-800 rounded-full">
                 <div
-                    className={`h-full transition-all duration-700 ${order.status === OrderStatus.READY ? 'bg-[#D4AF37]' : 'bg-[#F59E0B]'}`}
-                    style={{ width: order.status === OrderStatus.READY ? '100%' : '50%' }}
+                    className={`h-full transition-all duration-700 ${order.status === 'READY' ? 'bg-[#D4AF37]' : 'bg-[#F59E0B]'}`}
+                    style={{ width: order.status === 'READY' ? '100%' : '50%' }}
                 />
             </div>
         </div>

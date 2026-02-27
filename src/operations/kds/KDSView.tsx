@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App';
-import { Order, OrderStatus, ItemStatus, Station } from '../../shared/types';
+import { Order, Station } from '../../shared/types';
 import { Clock, AlertCircle, CheckCircle2, ChefHat, Bike, ShoppingBag, CheckSquare, RotateCcw, Circle } from 'lucide-react';
 
 export const KDSView: React.FC = () => {
   const { orders, updateOrder, stations, tables, addNotification } = useAppContext();
   const [activeStationId, setActiveStationId] = useState<string>('ALL');
-  const [undoStack, setUndoStack] = useState<{ order: Order, items: any[], status: OrderStatus }[]>([]);
+  const [undoStack, setUndoStack] = useState<{ order: Order, items: any[], status: any }[]>([]);
   const [showSafetyModal, setShowSafetyModal] = useState<{ show: boolean, order?: Order }>({ show: false });
 
   // Robust Station Matcher
@@ -19,7 +19,8 @@ export const KDSView: React.FC = () => {
   // Filter orders for KDS
   const kdsOrders = useMemo(() => {
     return orders.filter(o => {
-      if ([OrderStatus.PAID, OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.VOID, OrderStatus.DRAFT].includes(o.status)) {
+      // v3.0 logic: Exclude finished or aborted orders
+      if (['CLOSED', 'CANCELLED', 'VOIDED'].includes(o.status)) {
         return false;
       }
       return true;
@@ -31,8 +32,9 @@ export const KDSView: React.FC = () => {
       const items = o.order_items || [];
       const hasVisibleItems = items.some(item => {
         const stationMatch = isItemForStation(item, activeStationId);
-        const isNotReady = item.item_status !== ItemStatus.READY && item.item_status !== ItemStatus.SERVED;
-        return stationMatch && isNotReady;
+        // v3.0 logic: Item is visible if waiting or in progress
+        const isVisible = item.item_status === 'PENDING' || item.item_status === 'PREPARING';
+        return stationMatch && isVisible;
       });
       return hasVisibleItems;
     }).sort((a, b) => new Date(a.created_at || (a as any).timestamp || 0).getTime() - new Date(b.created_at || (b as any).timestamp || 0).getTime());
@@ -65,13 +67,16 @@ export const KDSView: React.FC = () => {
     const items = [...(order.order_items || [])];
     const item = items[itemIndex];
 
+    if (!item) return;
+
     let nextStatus: string;
-    if (item.item_status === ItemStatus.FIRED || item.item_status === ItemStatus.PENDING) {
-      nextStatus = ItemStatus.PREPARING;
-    } else if (item.item_status === ItemStatus.PREPARING) {
-      nextStatus = ItemStatus.READY;
-    } else if (item.item_status === ItemStatus.READY) {
-      nextStatus = ItemStatus.FIRED;
+    // v3.0 flow: PENDING -> PREPARING -> DONE
+    if (item.item_status === 'PENDING') {
+      nextStatus = 'PREPARING';
+    } else if (item.item_status === 'PREPARING') {
+      nextStatus = 'DONE';
+    } else if (item.item_status === 'DONE') {
+      nextStatus = 'PENDING'; // Toggle back if error
     } else {
       return;
     }
@@ -82,13 +87,13 @@ export const KDSView: React.FC = () => {
 
     setUndoStack(prev => [...prev.slice(-10), { order, items: order.order_items || [], status: order.status }]);
 
-    const allReady = updatedItems.every(i => i.item_status === ItemStatus.READY || i.item_status === ItemStatus.SERVED);
-    const anyPreparing = updatedItems.some(i => i.item_status === ItemStatus.PREPARING);
+    const allReady = updatedItems.every(i => i.item_status === 'DONE' || i.item_status === 'SERVED');
+    const anyPreparing = updatedItems.some(i => i.item_status === 'PREPARING');
 
-    let orderStatus: OrderStatus = order.status;
-    if (allReady) orderStatus = OrderStatus.READY;
-    else if (anyPreparing) orderStatus = OrderStatus.PREPARING;
-    else orderStatus = OrderStatus.FIRED;
+    let orderStatus: any = order.status;
+    if (allReady) orderStatus = 'READY';
+    else if (anyPreparing) orderStatus = 'ACTIVE';
+    else orderStatus = 'ACTIVE';
 
     try {
       await updateOrder({
@@ -113,19 +118,19 @@ export const KDSView: React.FC = () => {
 
     const updatedItems = items.map(item => {
       const isRelevant = isItemForStation(item, activeStationId);
-      if (isRelevant && (item.item_status === ItemStatus.FIRED || item.item_status === ItemStatus.PREPARING || item.item_status === ItemStatus.PENDING)) {
-        return { ...item, item_status: ItemStatus.READY };
+      if (isRelevant && (item.item_status === 'PENDING' || item.item_status === 'PREPARING')) {
+        return { ...item, item_status: 'DONE' };
       }
       return item;
     });
 
-    const allReady = updatedItems.every(i => i.item_status === ItemStatus.READY || i.item_status === ItemStatus.SERVED);
+    const allReady = updatedItems.every(i => i.item_status === 'DONE' || i.item_status === 'SERVED');
 
     try {
       await updateOrder({
         ...order,
         order_items: updatedItems,
-        status: allReady ? OrderStatus.READY : OrderStatus.PREPARING,
+        status: (allReady ? 'READY' : 'ACTIVE') as any,
         last_action_desc: `Station items marked as READY`
       });
       setShowSafetyModal({ show: false });
@@ -297,7 +302,9 @@ const KDSTicket: React.FC<{
   const visibleItems = items
     .map((item, originalIndex) => ({ ...item, originalIndex }))
     .filter(item => {
-      return isItemForStationInternal(item, activeStationId) && item.item_status !== ItemStatus.SERVED;
+      // Exclude SERVED and PENDING items from KDS if necessary, but here we keep PENDING
+      return isItemForStationInternal(item, activeStationId) &&
+        item.item_status !== 'SERVED';
     });
 
   if (visibleItems.length === 0) return null;
@@ -345,31 +352,35 @@ const KDSTicket: React.FC<{
           <div
             key={idx}
             onClick={() => onToggleItem(item.originalIndex)}
-            className={`p-3 rounded-xl border transition-all duration-300 cursor-pointer group flex items-start gap-3 ${item.item_status === ItemStatus.READY
+            className={`p-3 rounded-xl border transition-all duration-300 cursor-pointer group flex items-start gap-3 ${item.item_status === 'DONE'
               ? 'bg-green-500/10 border-green-500/20 opacity-50'
-              : item.item_status === ItemStatus.PREPARING
+              : item.item_status === 'PREPARING'
                 ? 'bg-gold-500/10 border-gold-500/30 shadow-lg shadow-gold-500/5'
-                : 'bg-slate-800/20 border-slate-700/50 hover:bg-slate-800/40'
+                : 'bg-blue-500/20 border-blue-500/50 hover:bg-blue-500/30 animate-pulse' // Highlight NEW items
               }`}
           >
             <div className="mt-0.5">
-              {item.item_status === ItemStatus.READY ? (
+              {item.item_status === 'DONE' ? (
                 <CheckCircle2 size={18} className="text-green-500 animate-in zoom-in" />
-              ) : item.item_status === ItemStatus.PREPARING ? (
+              ) : item.item_status === 'PREPARING' ? (
                 <CheckSquare size={18} className="text-gold-500 animate-in zoom-in" />
               ) : (
-                <Circle size={18} className="text-slate-600 group-hover:text-slate-400 transition-colors" />
+                <Circle size={18} className="text-blue-400 group-hover:text-blue-300 transition-colors" />
               )}
             </div>
 
             <div className="flex-1">
               <div className="flex justify-between items-start gap-2">
-                <span className={`text-sm font-bold leading-tight ${item.item_status === ItemStatus.READY ? 'text-slate-500 line-through' :
-                  item.item_status === ItemStatus.PREPARING ? 'text-white' : 'text-slate-300'
+                <span className={`text-sm font-bold leading-tight ${item.item_status === 'DONE' ? 'text-slate-500 line-through' :
+                  item.item_status === 'PREPARING' ? 'text-white' : 'text-blue-100' // Brighter text for NEW items
                   }`}>
                   {item.menu_item?.name || item.item_name}
+                  {item.item_status === 'PENDING' && (
+                    <span className="ml-2 px-1.5 py-0.5 bg-blue-500 text-white text-[8px] font-black uppercase tracking-wider rounded animate-pulse">NEW</span>
+                  )}
                 </span>
-                <span className={`text-lg font-black leading-none ${item.item_status === ItemStatus.READY ? 'text-green-500/50' : 'text-gold-500'
+                <span className={`text-lg font-black leading-none ${item.item_status === 'DONE' ? 'text-green-500/50' :
+                  item.item_status === 'PREPARING' ? 'text-gold-500' : 'text-blue-400'
                   }`}>x{item.quantity}</span>
               </div>
 

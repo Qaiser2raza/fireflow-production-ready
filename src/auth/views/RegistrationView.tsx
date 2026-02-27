@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { Restaurant, Server } from '../../shared/types';
-import { supabase } from '../../shared/lib/apiClient';
+import {
+  registerRestaurant,
+  activateLicenseKey,
+  type RestaurantRegistrationData
+} from '../../shared/lib/cloudClient';
 import {
   Building2,
   MapPin,
@@ -8,7 +12,6 @@ import {
   User,
   Lock,
   Hash,
-  CreditCard,
   ChevronRight,
   ChevronLeft,
   Loader2,
@@ -47,6 +50,7 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
   });
 
   const [selectedPlan, setSelectedPlan] = useState<'BASIC' | 'STANDARD' | 'PREMIUM'>('BASIC');
+  const [licenseKey, setLicenseKey] = useState('');
 
   const PLANS = {
     BASIC: { price: 1000, features: ['POS System', 'KDS', 'Basic Reports', 'Up to 3 Staff'] },
@@ -104,24 +108,33 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
       if (validateBusinessStep()) {
         setIsSubmitting(true);
         try {
-          const cleanPhone = businessData.phone.replace(/\D/g, '');
-          const { data: existing } = await supabase
-            .from('restaurants')
-            .select('id, name, phone')
-            .or(`phone.eq.${cleanPhone},name.ilike.${businessData.name.trim()}`);
-          if (existing && existing.length > 0) {
-            const match = existing[0];
-            if (match.phone === cleanPhone) setError(`This phone number (${cleanPhone}) is already registered with "${match.name}".`);
-            else setError(`A business named "${match.name}" is already registered.`);
+          // Call registerRestaurant from cloudClient to check for duplicates
+          const cloudResult = await registerRestaurant({
+            restaurantId: 'temp', // temp ID for duplicate check
+            name: businessData.name.trim(),
+            phone: businessData.phone.replace(/\D/g, ''),
+            city: businessData.city,
+            slug: businessData.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+            subscriptionPlan: selectedPlan
+          });
+
+          // If cloud check failed, it might be because of duplicate
+          if (cloudResult.error && cloudResult.error.includes('duplicate')) {
+            setError('This restaurant name or phone number is already registered.');
             setIsSubmitting(false);
             return;
           }
+
+          setIsSubmitting(false);
+          setAdminData(prev => ({ ...prev, ownerPhone: businessData.phone }));
+          setCurrentStep('admin');
         } catch (err) {
-          console.error("Duplicate check failed:", err);
+          console.error('Duplicate check error:', err);
+          setIsSubmitting(false);
+          // Allow proceeding even if cloud check fails (local-only mode)
+          setAdminData(prev => ({ ...prev, ownerPhone: businessData.phone }));
+          setCurrentStep('admin');
         }
-        setIsSubmitting(false);
-        setAdminData(prev => ({ ...prev, ownerPhone: businessData.phone }));
-        setCurrentStep('admin');
       }
     } else if (currentStep === 'admin') {
       if (validateAdminStep()) setCurrentStep('plan');
@@ -137,85 +150,132 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
     if (!validateAdminStep()) return;
     setIsSubmitting(true);
     setError(null);
+
     try {
-      const cleanPhone = businessData.phone.replace(/\D/g, '');
-      const ownerPhone = adminData.ownerPhone.replace(/\D/g, '');
+      // Step 1: Generate slug
       const slug = businessData.name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
         + '-' + Math.random().toString(36).substring(2, 6);
 
+      // Step 2: Calculate trial dates
       const now = new Date();
       const trialEndsAt = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-      const subscriptionExpiresAt = new Date(trialEndsAt);
 
-      const restaurantData: any = {
+      // Step 3: Create local restaurant record
+      const restaurantPayload = {
         name: businessData.name.trim(),
         slug: slug,
-        phone: cleanPhone,
+        phone: businessData.phone.replace(/\D/g, ''),
         address: businessData.address || null,
         city: businessData.city,
         subscription_plan: selectedPlan,
         subscription_status: 'trial',
         trial_ends_at: trialEndsAt.toISOString(),
-        subscription_expires_at: subscriptionExpiresAt.toISOString(),
+        subscription_expires_at: trialEndsAt.toISOString(),
         monthly_fee: PLANS[selectedPlan].price,
         currency: 'PKR',
         tax_rate: 0,
         service_charge_rate: 5,
-        timezone: 'Asia/Karachi',
-        created_at: now.toISOString(),
-        is_active: true
+        timezone: 'Asia/Karachi'
       };
 
-      const { data: newRestaurant, error: restaurantError } = await supabase
-        .from('restaurants')
-        .insert(restaurantData)
-        .select()
-        .single();
+      const restaurantRes = await fetch('http://localhost:3001/api/restaurants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(restaurantPayload)
+      });
 
-      if (restaurantError) throw new Error(`Registration failed: ${restaurantError.message}`);
-
-      const ownerId = `OWNER-${Math.random().toString(36).substring(2, 9)}`;
-      const ownerData = {
-        id: ownerId,
-        restaurant_id: newRestaurant.id,
-        name: adminData.ownerName.trim(),
-        role: 'MANAGER',
-        pin: adminData.pin,
-        email: ownerPhone + '@fireflow.local',
-        password: adminData.password,
-        activeTables: 0,
-        last_login: null
-      };
-
-      const { error: ownerError } = await supabase
-        .from('staff')
-        .insert(ownerData);
-
-      if (ownerError) {
-        await supabase.from('restaurants').delete().eq('id', newRestaurant.id);
-        throw new Error(`Account setup failed: ${ownerError.message}`);
+      if (!restaurantRes.ok) {
+        const data = await restaurantRes.json();
+        throw new Error(data.error || 'Failed to create restaurant');
       }
 
-      await supabase.from('restaurants').update({ owner_id: ownerId }).eq('id', newRestaurant.id);
+      const newRestaurant = await restaurantRes.json();
 
-      onRegister({
-        ...newRestaurant,
-        subscriptionPlan: newRestaurant.subscription_plan,
-        subscriptionStatus: newRestaurant.subscription_status,
-        trialEndsAt: new Date(newRestaurant.trial_ends_at),
-        subscriptionExpiresAt: new Date(newRestaurant.subscription_expires_at),
-        createdAt: new Date(newRestaurant.created_at)
-      }, {
-        id: ownerId,
-        restaurantId: newRestaurant.id,
-        name: adminData.ownerName,
-        role: 'MANAGER',
+      // Step 4: Create owner staff record (no custom id — let DB generate a UUID)
+      const staffPayload = {
+        restaurant_id: newRestaurant.id,
+        name: adminData.ownerName.trim(),
+        role: 'ADMIN',
         pin: adminData.pin,
-        activeTables: 0
+        status: 'active'
+      };
+
+      const staffRes = await fetch('http://localhost:3001/api/staff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(staffPayload)
       });
+
+      if (!staffRes.ok) {
+        const data = await staffRes.json();
+        // Cleanup: Delete the created restaurant
+        await fetch(`http://localhost:3001/api/restaurants/${newRestaurant.id}`, {
+          method: 'DELETE'
+        }).catch(console.error);
+        throw new Error(data.error || 'Failed to create staff account');
+      }
+
+      const newStaff = await staffRes.json();
+
+      // Step 5: Sync to cloud SaaS system
+      const cloudRegisterResult = await registerRestaurant({
+        restaurantId: newRestaurant.id,
+        name: businessData.name.trim(),
+        phone: businessData.phone.replace(/\D/g, ''),
+        city: businessData.city,
+        slug: slug,
+        subscriptionPlan: selectedPlan
+      });
+
+      if (cloudRegisterResult.error) {
+        console.warn('Cloud sync warning:', cloudRegisterResult.error);
+        // Don't fail - cloud registration is optional
+      }
+
+      // Step 6: Activate license key if provided
+      if (licenseKey.trim()) {
+        const activateResult = await activateLicenseKey(
+          licenseKey.trim(),
+          newRestaurant.id
+        );
+
+        if (activateResult.error) {
+          console.warn('License activation warning:', activateResult.error);
+          // Don't fail - license is optional
+        }
+      }
+
+      // Success: Call onRegister callback
+      onRegister(
+        {
+          id: newRestaurant.id,
+          name: newRestaurant.name,
+          phone: newRestaurant.phone,
+          address: newRestaurant.address,
+          city: newRestaurant.city,
+          slug: newRestaurant.slug,
+          subscriptionPlan: newRestaurant.subscription_plan,
+          subscriptionStatus: newRestaurant.subscription_status,
+          trialEndsAt: new Date(newRestaurant.trial_ends_at),
+          subscriptionExpiresAt: new Date(newRestaurant.subscription_expires_at),
+          monthlyFee: newRestaurant.monthly_fee,
+          currency: newRestaurant.currency,
+          createdAt: new Date(newRestaurant.created_at || now)
+        } as Restaurant,
+        {
+          id: newStaff.id,
+          restaurant_id: newRestaurant.id,
+          restaurantId: newRestaurant.id,
+          name: adminData.ownerName,
+          role: 'ADMIN',
+          pin: adminData.pin,
+          status: 'active',
+          active_tables: 0
+        } as Server
+      );
 
     } catch (err: any) {
       console.error('Registration error:', err);
@@ -231,11 +291,11 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center text-3xl font-serif font-bold shadow-lg shadow-gold-500/20">
-                F
+                C
               </div>
               <div>
-                <h1 className="text-4xl font-serif font-bold tracking-tight text-white">Fireflow</h1>
-                <p className="text-slate-400 text-sm tracking-wide">Precision Control for Premium Dining</p>
+                <h1 className="text-4xl font-serif font-bold tracking-tight text-white">Cravex</h1>
+                <p className="text-slate-400 text-sm tracking-wide">Next-Gen Solutions for Premium Dining</p>
               </div>
             </div>
           </div>
@@ -258,7 +318,7 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
             />
           </div>
 
-          <p className="text-slate-600 text-xs">© 2024 Fireflow Systems. Built for performance.</p>
+          <p className="text-slate-600 text-xs">© 2026 Cravex Solutions Pakistan. All rights reserved.</p>
         </div>
 
         <div className="flex-1 w-full max-w-xl">
@@ -415,6 +475,19 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
                       </div>
                     </div>
                   </div>
+
+                  <div>
+                    <label className="block text-slate-300 text-xs font-semibold mb-2 uppercase tracking-wide">
+                      Have a License Key? (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={licenseKey}
+                      onChange={(e) => setLicenseKey(e.target.value)}
+                      placeholder="e.g., CRAVEX-ABC123-XYZ789"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-gold-500 focus:border-transparent transition-all text-sm"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -520,22 +593,22 @@ const InputField: React.FC<{
 const PlanCard: React.FC<{
   name: string;
   price: number;
-  features: string[];
+  features: readonly string[];
   selected: boolean;
   onSelect: () => void;
 }> = ({ name, price, features, selected, onSelect }) => (
   <button
     onClick={onSelect}
     className={`w-full text-left p-5 rounded-xl border-2 transition-all ${selected
-        ? 'border-gold-500 bg-gold-500/10 shadow-lg shadow-gold-500/20'
-        : 'border-slate-700 bg-slate-800/50 hover:border-slate-600'
+      ? 'border-gold-500 bg-gold-500/10 shadow-lg shadow-gold-500/20'
+      : 'border-slate-700 bg-slate-800/50 hover:border-slate-600'
       }`}
   >
     <div className="flex items-start justify-between mb-3">
       <div>
         <h3 className="text-white font-bold text-lg uppercase tracking-wide">{name}</h3>
         <p className="text-slate-400 text-sm mt-1">
-          <span className="text-2xl font-bold text-white">PKR {price}</span>/month
+          <span className="text-2xl font-bold text-white">Rs. {price.toLocaleString()}</span>/month
         </p>
       </div>
       {selected && (

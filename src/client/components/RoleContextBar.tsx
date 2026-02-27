@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, DollarSign, Clock, Utensils, Users } from 'lucide-react';
+import { Bell, Banknote, Clock, Utensils } from 'lucide-react';
 import { Staff } from '../../shared/types';
 
 interface RoleContextBarProps {
@@ -15,7 +15,6 @@ export const RoleContextBar: React.FC<RoleContextBarProps> = ({
     pendingBills = 0,
     activeTables = 0,
     pendingOrders = 0,
-    cashInHand = 0
 }) => {
     if (!currentUser) return null;
 
@@ -23,7 +22,7 @@ export const RoleContextBar: React.FC<RoleContextBarProps> = ({
         <>
             {pendingBills > 0 && (
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-                    <DollarSign size={16} className="text-yellow-500" />
+                    <Banknote size={16} className="text-yellow-500" />
                     <span className="text-xs font-semibold text-yellow-400">
                         {pendingBills} Bill Request{pendingBills !== 1 ? 's' : ''} Pending
                     </span>

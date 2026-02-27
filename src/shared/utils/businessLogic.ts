@@ -1,14 +1,9 @@
-import { 
-  Order, 
-  OrderItem, 
-  OrderType, 
-  OrderBreakdown, 
-  MenuItem, 
-  TableStatus, 
-  OrderStatus, 
-  Section, 
-  Table, 
-  Staff 
+import {
+  OrderItem,
+  OrderType,
+  OrderBreakdown,
+  TableStatus,
+  OrderStatus,
 } from '../types';
 
 /**
@@ -38,7 +33,7 @@ export const DEFAULT_SETTINGS: RestaurantSettings = {
   deliveryFeeDefault: 200,
   peakHourMultiplier: 1.0,
   // Fixed: Using the Enum values from OrderType
-  applyServiceChargeOnTypes: ['DINE_IN'], 
+  applyServiceChargeOnTypes: ['DINE_IN'],
   applyTaxOnTypes: ['DINE_IN', 'TAKEAWAY', 'DELIVERY'],
   currency: 'PKR',
   minimumOrderAmount: 0
@@ -87,7 +82,7 @@ export class SettingsManager {
   }
 
   static updateSetting<K extends keyof RestaurantSettings>(
-    key: K, 
+    key: K,
     value: RestaurantSettings[K]
   ): void {
     const current = this.loadSettings();
@@ -101,15 +96,15 @@ export class SettingsManager {
  * Refactored to use snake_case properties from updated OrderItem type
  */
 export const calculateOrderBreakdown = (
-  items: OrderItem[], 
-  type: OrderType, 
-  guestCount: number = 1, 
+  items: OrderItem[],
+  type: OrderType,
+  guestCount: number = 1,
   deliveryFee?: number,
   discountAmount: number = 0,
   discountPercentage: number = 0
 ): OrderBreakdown => {
   const settings = SettingsManager.getSettings();
-  
+
   if (!items || items.length === 0) {
     return {
       subtotal: 0,
@@ -126,7 +121,7 @@ export const calculateOrderBreakdown = (
 
   items.forEach(item => {
     // Fixed: menu_item.price -> unit_price or menu_item.price based on your types.ts
-    const price = Number(item.unit_price) || 0; 
+    const price = Number(item.unit_price) || 0;
     const qty = Number(item.quantity) || 0;
 
     // Fixed: pricingStrategy sits on menu_item relation
@@ -144,25 +139,25 @@ export const calculateOrderBreakdown = (
   if (discountPercentage > 0) {
     discount = Math.round(subtotal * (discountPercentage / 100));
   }
-  
+
   const maxAllowedDiscount = subtotal * settings.maxDiscountRate;
   discount = Math.min(discount, maxAllowedDiscount);
 
   const discountedSubtotal = subtotal - discount;
 
   const shouldApplyServiceCharge = settings.applyServiceChargeOnTypes.includes(type);
-  const serviceCharge = shouldApplyServiceCharge 
-    ? Math.round(discountedSubtotal * settings.serviceChargeRate) 
+  const serviceCharge = shouldApplyServiceCharge
+    ? Math.round(discountedSubtotal * settings.serviceChargeRate)
     : 0;
 
   const shouldApplyTax = settings.applyTaxOnTypes.includes(type);
-  const tax = shouldApplyTax 
-    ? Math.round((discountedSubtotal + serviceCharge) * settings.taxRate) 
+  const tax = shouldApplyTax
+    ? Math.round((discountedSubtotal + serviceCharge) * settings.taxRate)
     : 0;
 
   // Fixed: comparison with 'DELIVERY' Enum
-  const finalDeliveryFee = type === 'DELIVERY' 
-    ? (deliveryFee !== undefined ? Number(deliveryFee) : settings.deliveryFeeDefault) 
+  const finalDeliveryFee = type === 'DELIVERY'
+    ? (deliveryFee !== undefined ? Number(deliveryFee) : settings.deliveryFeeDefault)
     : 0;
 
   const total = discountedSubtotal + serviceCharge + tax + finalDeliveryFee;
@@ -192,17 +187,17 @@ export const updateTaxRate = (ratePercentage: number): void => {
  * WORKFLOW STATE MACHINE
  */
 export const getNextTableState = (
-  currentStatus: TableStatus, 
+  currentStatus: TableStatus,
   orderStatus: OrderStatus
 ): TableStatus => {
-  if (orderStatus === OrderStatus.PAID || orderStatus === OrderStatus.CANCELLED || orderStatus === OrderStatus.VOID) {
+  if (orderStatus === OrderStatus.CLOSED || orderStatus === OrderStatus.CANCELLED || orderStatus === OrderStatus.VOIDED) {
     return TableStatus.DIRTY;
   }
   if (orderStatus === OrderStatus.READY) {
     // Table remains occupied while waiting for payment/bill
     return TableStatus.OCCUPIED;
   }
-  if (orderStatus === OrderStatus.NEW || orderStatus === OrderStatus.COOKING) {
+  if (orderStatus === OrderStatus.ACTIVE) {
     return TableStatus.OCCUPIED;
   }
   return currentStatus;

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../../client/contexts/AppContext';
-import { Plus, Trash2, Edit2, Save, X, LayoutTemplate } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, LayoutTemplate } from 'lucide-react';
 
 export const TablesPanel: React.FC = () => {
     const { tables, sections, addTable, updateTable, deleteTable } = useAppContext();

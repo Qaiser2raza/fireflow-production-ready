@@ -3,11 +3,10 @@ import { useAppContext } from '../../client/contexts/AppContext';
 import { Staff } from '../../shared/types';
 import {
   Users, Shield, ChefHat, Bike, User,
-  Plus, Edit2, Trash2, Search, Camera, LayoutGrid, List
+  Plus, Edit2, Trash2, Search, Camera, LayoutGrid
 } from 'lucide-react';
 import { Card } from '../../shared/ui/Card';
 import { Button } from '../../shared/ui/Button';
-import { Badge } from '../../shared/ui/Badge';
 import { Modal } from '../../shared/ui/Modal';
 import { Input } from '../../shared/ui/Input';
 

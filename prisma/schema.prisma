@@ -115,7 +115,24 @@ model license_keys {
   license_type    String?      @default("STANDARD") @db.VarChar(50)
   device_limit    Int?         @default(1)
   last_checked_at DateTime?    @db.Timestamp(6)
+  created_at      DateTime     @default(now())
   restaurants     restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model subscription_payments {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String       @db.Uuid
+  amount          Decimal      @db.Decimal(10, 2)
+  payment_method  String?      @db.VarChar(50)
+  transaction_id  String       @unique @db.VarChar(100)
+  payment_proof   String?      // Base64 or URL
+  payment_proof_url String?    @db.VarChar(500)
+  status          String       @default("pending") @db.VarChar(20)
+  created_at      DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at      DateTime?    @default(now()) @db.Timestamp(6)
+  verified_at     DateTime?    @db.Timestamp(6)
+  verified_by     String?      @db.VarChar(100)
+  restaurants     restaurants  @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
 model menu_categories {
@@ -235,7 +252,7 @@ model orders {
   staff_orders_assigned_driver_idTostaff staff?              @relation("orders_assigned_driver_idTostaff", fields: [assigned_driver_id], references: [id])
   staff_orders_assigned_waiter_idTostaff staff?              @relation("orders_assigned_waiter_idTostaff", fields: [assigned_waiter_id], references: [id])
   customers                              customers?          @relation(fields: [customer_id], references: [id])
-  restaurants                            restaurants         @relation(fields: [restaurant_id], references: [id])
+  restaurants                            restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   tables                                 tables?             @relation(fields: [table_id], references: [id])
   reservation_orders                     reservation_orders?
   takeaway_orders                        takeaway_orders?
@@ -245,6 +262,15 @@ model orders {
   @@index([assigned_waiter_id])
   @@index([restaurant_id])
   @@index([table_id])
+}
+
+model parked_orders {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String   @db.Uuid
+  staff_id      String   @db.Uuid
+  data          Json
+  created_at    DateTime @default(now())
+  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
 model order_intelligence {
@@ -340,6 +366,8 @@ model restaurants {
   is_active              Boolean              @default(true)
   subscription_status    String               @default("trial")
   subscription_plan      String               @default("BASIC")
+  subscription_expires_at DateTime?           @db.Timestamp(6)
+  trial_ends_at          DateTime?            @db.Timestamp(6)
   created_at             DateTime             @default(now())
   updated_at             DateTime             @default(now())
   monthly_fee            Decimal?             @db.Decimal(10, 2)
@@ -350,6 +378,7 @@ model restaurants {
   default_delivery_fee   Decimal              @default(250) @db.Decimal(10, 2)
   default_guest_count    Int                  @default(2)
   default_rider_float    Decimal              @default(5000) @db.Decimal(10, 2)
+  logo_url               String?
   audit_logs             audit_logs[]
   customers              customers[]
   expenses               expenses[]
@@ -370,8 +399,37 @@ model restaurants {
   payouts                payouts[]
   cash_sessions          cash_sessions[]
   rider_shifts           rider_shifts[]
+  restaurant_features    restaurant_features?
+  subscription_payments  subscription_payments[]
+  parked_orders          parked_orders[]
+  rider_settlements      rider_settlements[]
+  system_logs            system_logs[]
 
   @@index([slug])
+}
+
+model system_logs {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp     DateTime @default(now())
+  level         String
+  service       String
+  restaurant_id String?  @db.Uuid
+  user_id       String?  @db.Uuid
+  action        String
+  duration_ms   Int?
+  metadata      Json?
+  error         Json?
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([timestamp])
+  @@index([restaurant_id])
+}
+
+model restaurant_features {
+  restaurant_id String      @id @db.Uuid
+  features      Json
+  updated_at    DateTime    @default(now()) @db.Timestamp(6)
+  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
 model rider_settlements {
@@ -389,6 +447,7 @@ model rider_settlements {
   notes              String?
   created_at         DateTime  @default(now())
   staff              staff     @relation(fields: [driver_id], references: [id])
+  restaurants        restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
 model rider_shifts {
@@ -465,7 +524,7 @@ model staff {
   rider_settlements                       rider_settlements[]
   rider_shifts                            rider_shifts[]       @relation("rider_shifts")
   security_events                         security_events[]
-  restaurants                             restaurants          @relation(fields: [restaurant_id], references: [id])
+  restaurants                             restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   staff_wallet_logs                       staff_wallet_logs[]
 
   @@unique([restaurant_id, name, role])
@@ -518,7 +577,7 @@ model tables {
   dine_in_orders     dine_in_orders[]
   orders             orders[]
   reservation_orders reservation_orders[]
-  restaurants        restaurants          @relation(fields: [restaurant_id], references: [id])
+  restaurants        restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   sections           sections?            @relation(fields: [section_id], references: [id])
 
   @@unique([restaurant_id, name])

@@ -49,21 +49,38 @@ export const RestaurantProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return;
     }
 
-    try {
-      const { data, error } = await supabase
-        .from('subscription_payments')
-        .select('id')
-        .eq('restaurant_id', currentRestaurant.id)
-        .eq('status', 'pending')
-        .limit(1);
+    // FIX: Do not query if we don't have valid auth tokens
+    const accessToken = sessionStorage.getItem('accessToken');
+    if (!accessToken) {
+      console.log('[RestaurantContext] No access token, skipping pending payment check');
+      setHasPendingPayment(false);
+      return;
+    }
 
-      if (!error && data && data.length > 0) {
-        setHasPendingPayment(true);
-      } else {
+    try {
+      // Note: subscription_payments is a Supabase cloud table, not available in offline mode
+      // Gracefully skip if Supabase is not available
+      try {
+        const { data, error } = await supabase
+          .from('subscription_payments')
+          .select('id')
+          .eq('restaurant_id', currentRestaurant.id)
+          .eq('status', 'pending')
+          .limit(1);
+
+        if (!error && data && data.length > 0) {
+          setHasPendingPayment(true);
+        } else {
+          setHasPendingPayment(false);
+        }
+      } catch (supabaseErr: any) {
+        // Supabase not available (offline/no internet), silently skip
+        console.log('[RestaurantContext] Supabase unavailable, skipping pending payment check');
         setHasPendingPayment(false);
       }
     } catch (err) {
       console.error('Error checking pending payments:', err);
+      setHasPendingPayment(false);
     }
   }, [currentRestaurant?.id]);
 

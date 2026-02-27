@@ -10,11 +10,17 @@ export type OrderType = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'RESERVATION';
 
 export enum OrderStatus {
     ACTIVE = 'ACTIVE',
+    PENDING = 'PENDING',        // Map to ACTIVE in DB
+    PREPARING = 'PREPARING',    // Map to ACTIVE in DB
     READY = 'READY',
+    SERVED = 'SERVED',          // Map to READY or CLOSED in DB
     DELIVERED = 'DELIVERED',
+    BILL_REQUESTED = 'BILL_REQUESTED', // Map to READY in DB
     CLOSED = 'CLOSED',
+    PAID = 'CLOSED',            // Alias for CLOSED
     CANCELLED = 'CANCELLED',
-    VOIDED = 'VOIDED'
+    VOIDED = 'VOIDED',
+    VOID = 'VOIDED'             // Alias for VOIDED
 }
 
 export enum ItemStatus {
@@ -92,6 +98,11 @@ export interface Restaurant {
     tax_rate?: number;
     defaultDeliveryFee?: number;
     default_delivery_fee?: number;
+    slug?: string;
+    monthlyFee?: number;
+    monthly_fee?: number;
+    currency?: string;
+    city?: string;
 }
 
 export interface Staff {
@@ -271,6 +282,9 @@ export interface DeliveryOrder {
     driver_id?: string;
     dispatched_at?: Date | string;
     delivered_at?: Date | string;
+    float_given?: number;
+    is_settled?: boolean;
+    settlement_id?: string;
 }
 
 export interface ReservationOrder {
@@ -306,6 +320,7 @@ export interface Order {
     customer_id?: string;
     closed_at?: Date | string;
     completed_at?: Date | string;
+    is_settled_with_rider?: boolean;
 
     // New Relation Fields
     table_id?: string;
@@ -481,6 +496,7 @@ export interface Reservation {
 
 export interface AppContextType {
     currentUser: Staff | null;
+    currentRestaurant: any | null;
     orders: Order[];
     drivers: Staff[];
     servers: Staff[];

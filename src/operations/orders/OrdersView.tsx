@@ -1,8 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App';
 import {
-  OrderStatus,
-  OrderType
+  OrderStatus
 } from '../../shared/types';
 import {
   Search,
@@ -49,13 +48,13 @@ export const OrdersView: React.FC = () => {
   // --- LOGIC: PROGRESS CALCULATOR ---
   const getProgressStats = (status: OrderStatus) => {
     const map = {
-      [OrderStatus.DRAFT]: { width: '10%', color: 'bg-slate-700' },
-      [OrderStatus.CONFIRMED]: { width: '25%', color: 'bg-blue-500' },
-      [OrderStatus.FIRED]: { width: '35%', color: 'bg-orange-600' },
+      [OrderStatus.ACTIVE]: { width: '10%', color: 'bg-slate-700' },
+      [OrderStatus.PENDING]: { width: '25%', color: 'bg-blue-500' },
       [OrderStatus.PREPARING]: { width: '50%', color: 'bg-gold-500' },
       [OrderStatus.READY]: { width: '75%', color: 'bg-green-500' },
       [OrderStatus.SERVED]: { width: '90%', color: 'bg-indigo-500' },
-      [OrderStatus.COMPLETED]: { width: '100%', color: 'bg-emerald-600' },
+      [OrderStatus.DELIVERED]: { width: '95%', color: 'bg-indigo-400' },
+      [OrderStatus.CLOSED]: { width: '100%', color: 'bg-emerald-600' },
       [OrderStatus.CANCELLED]: { width: '100%', color: 'bg-red-600' },
       [OrderStatus.VOIDED]: { width: '100%', color: 'bg-red-800' },
       [OrderStatus.BILL_REQUESTED]: { width: '85%', color: 'bg-purple-500' },
@@ -90,7 +89,7 @@ export const OrdersView: React.FC = () => {
   }, [orders, searchQuery, viewMode, sections]);
 
   const handleOrderClick = (order: any) => {
-    if (order.type === 'DELIVERY' && [OrderStatus.READY, OrderStatus.COMPLETED].includes(order.status)) {
+    if (order.type === 'DELIVERY' && [OrderStatus.READY, OrderStatus.DELIVERED, OrderStatus.CLOSED].includes(order.status)) {
       setActiveView('dispatch');
     } else {
       setOrderToEdit(order);

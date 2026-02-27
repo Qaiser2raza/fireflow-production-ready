@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Table, Order, OrderStatus, Staff } from '../../../shared/types';
+import { Table, Order, Staff } from '../../../shared/types';
 import { Clock, Users, CheckCircle2, FileText, Eye, Edit2, Plus, Minus } from 'lucide-react';
 import { OrderDetailModal } from './OrderDetailModal';
 
@@ -10,6 +10,7 @@ interface TableCardProps {
     onOpenPOS: () => void;
     onMarkServed?: (orderId: string) => Promise<void>;
     onRequestBill?: (orderId: string) => Promise<void>;
+    onUpdateStatus?: (status: 'AVAILABLE' | 'OCCUPIED' | 'DIRTY' | 'CLEANING') => Promise<void>;
     currentUser: Staff | null;
 }
 
@@ -20,24 +21,28 @@ export const TableCard: React.FC<TableCardProps> = ({
     onOpenPOS,
     onMarkServed,
     onRequestBill,
+    onUpdateStatus,
     currentUser
 }) => {
     const [guestCount, setGuestCount] = useState(table.capacity || 2);
     const [showDetailModal, setShowDetailModal] = useState(false);
 
     const getStatusInfo = () => {
+        if (table.status === 'DIRTY') {
+            return { color: 'border-orange-900 bg-orange-900/10', label: 'DIRTY (Needs Cleaning)', pulse: false };
+        }
         if (!order) return { color: 'border-slate-800 bg-[#0f172a]', label: 'AVAILABLE', pulse: false };
 
-        // Priority: Bill Requested > Ready > Fired > Occupied
-        if (order.status === OrderStatus.BILL_REQUESTED) {
-            return { color: 'border-[#FBBF24] bg-[#FBBF24]/10', label: 'BILL REQUESTED', pulse: false };
-        }
-
-        if (order.status === OrderStatus.READY) {
+        // Priority: Ready > Active
+        if (order.status === 'READY') {
             return { color: 'border-[#D4AF37] bg-[#D4AF37]/10', label: 'READY TO SERVE', pulse: true };
         }
 
-        if (order.status === OrderStatus.FIRED || order.status === OrderStatus.PREPARING) {
+        if (order.status === 'ACTIVE') {
+            const hasFiredItems = order.order_items?.some(i => i.item_status !== 'DRAFT');
+            if (!hasFiredItems && order.order_items?.length) {
+                return { color: 'border-slate-500 bg-slate-500/10', label: 'HOLDING', pulse: false };
+            }
             return { color: 'border-[#F59E0B] bg-[#F59E0B]/10', label: 'COOKING', pulse: false };
         }
 
@@ -63,7 +68,7 @@ export const TableCard: React.FC<TableCardProps> = ({
     };
 
     // ENHANCED VALIDATION: Bill request only when all items served
-    const servedItems = order?.order_items?.filter(item => item.item_status === 'SERVED' || item.item_status === 'READY') || [];
+    const servedItems = order?.order_items?.filter(item => item.item_status === 'SERVED' || item.item_status === 'DONE') || [];
     const totalItems = order?.order_items?.length || 0;
     const canRequestBill = order && totalItems > 0 && servedItems.length === totalItems;
     const billTooltip = !canRequestBill && order
@@ -93,9 +98,9 @@ export const TableCard: React.FC<TableCardProps> = ({
                 {/* Urgent Badges - Top Right */}
                 {order && (
                     <div className="absolute top-2 right-2 flex gap-1">
-                        {order.status === OrderStatus.BILL_REQUESTED && (
-                            <span className="bg-yellow-500 text-black text-[8px] font-black px-2 py-0.5 rounded uppercase animate-pulse">
-                                BILL REQ
+                        {order.payment_status === 'PAID' && (
+                            <span className="bg-emerald-500 text-white text-[8px] font-black px-2 py-0.5 rounded uppercase">
+                                PAID
                             </span>
                         )}
                         {isOverdue && (
@@ -135,7 +140,23 @@ export const TableCard: React.FC<TableCardProps> = ({
                 </div>
 
                 <div className="mt-3 relative z-10">
-                    {!order ? (
+                    {table.status === 'DIRTY' ? (
+                        <div className="flex flex-col gap-2">
+                            <div className="flex items-center justify-center p-6 bg-orange-500/10 border border-orange-500/20 rounded-xl">
+                                <span className="text-orange-500 font-black text-[10px] tracking-[0.2em] uppercase italic">Needs Cleaning</span>
+                            </div>
+                            {/* Hover Overlay - Centered on Card */}
+                            <div className="absolute -inset-x-3 -bottom-3 -top-24 bg-black/60 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all duration-200 rounded-lg flex items-center justify-center p-6 z-20">
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onUpdateStatus?.('AVAILABLE'); }}
+                                    className="w-full bg-white hover:bg-slate-200 text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs transition-all shadow-2xl active:scale-95 flex items-center justify-center gap-3 border-2 border-orange-500/20"
+                                >
+                                    <CheckCircle2 size={18} className="text-orange-600" />
+                                    Mark as Item Clean
+                                </button>
+                            </div>
+                        </div>
+                    ) : !order ? (
                         <div className="space-y-2">
                             {/* Always-visible Guest Controls */}
                             <div className="flex items-center justify-between bg-slate-900/50 rounded-lg p-2">
@@ -188,7 +209,7 @@ export const TableCard: React.FC<TableCardProps> = ({
                                 const items = order.order_items || [];
                                 const totalItems = items.length;
                                 const readyItems = items.filter(item =>
-                                    item.item_status === 'READY' || item.item_status === 'SERVED'
+                                    item.item_status === 'DONE' || item.item_status === 'SERVED'
                                 ).length;
                                 const progress = totalItems > 0 ? Math.round((readyItems / totalItems) * 100) : 0;
 
@@ -215,7 +236,7 @@ export const TableCard: React.FC<TableCardProps> = ({
 
                             {/* Quick Action Menu on Hover */}
                             <div className="absolute inset-x-5 bottom-5 opacity-0 group-hover:opacity-100 transition-all duration-200 space-y-1.5">
-                                {order.status === OrderStatus.READY && onMarkServed && (
+                                {order.status === 'READY' && onMarkServed && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleMarkServed(); }}
                                         className="w-full bg-green-600/90 backdrop-blur-md border border-green-500/30 hover:bg-green-500 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
@@ -224,7 +245,7 @@ export const TableCard: React.FC<TableCardProps> = ({
                                         Mark Served
                                     </button>
                                 )}
-                                {(order.status === OrderStatus.SERVED || order.status === OrderStatus.READY) && onRequestBill && (
+                                {(order.status === 'ACTIVE' || order.status === 'READY') && onRequestBill && (
                                     <button
                                         onClick={(e) => {
                                             e.stopPropagation();
@@ -235,8 +256,8 @@ export const TableCard: React.FC<TableCardProps> = ({
                                         disabled={!canRequestBill}
                                         title={billTooltip}
                                         className={`w-full backdrop-blur-md border text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${canRequestBill
-                                                ? 'bg-red-600/90 border-red-500/30 hover:bg-red-500 cursor-pointer'
-                                                : 'bg-gray-700/50 border-gray-600/30 cursor-not-allowed opacity-60'
+                                            ? 'bg-red-600/90 border-red-500/30 hover:bg-red-500 cursor-pointer'
+                                            : 'bg-gray-700/50 border-gray-600/30 cursor-not-allowed opacity-60'
                                             }`}
                                     >
                                         <FileText size={12} />
@@ -255,7 +276,7 @@ export const TableCard: React.FC<TableCardProps> = ({
                                     className="w-full bg-gold-500/90 backdrop-blur-md border border-gold-400/30 hover:bg-gold-400 text-black font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
                                 >
                                     <Edit2 size={12} />
-                                    Edit Order
+                                    Edit in POS
                                 </button>
                             </div>
                         </div>

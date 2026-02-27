@@ -152,37 +152,43 @@ export async function verifyPairingCode(
       }
     });
 
-    // Upsert device (replace if same fingerprint, else create new)
-    return await tx.registered_devices.upsert({
+    // Manual Upsert (safer than Prisma upsert when types are ambiguous)
+    const existing = await tx.registered_devices.findFirst({
       where: {
-        // Unique constraint: (restaurant_id, staff_id, device_fingerprint)
-        restaurant_id_staff_id_device_fingerprint: {
-          restaurant_id: restaurantId,
-          staff_id: staffId,
-          device_fingerprint: deviceFingerprint
-        }
-      },
-      update: {
-        // If device already registered, refresh auth token
-        auth_token_hash: authTokenHash,
-        device_name: deviceName,
-        user_agent: userAgent,
-        platform: platform,
-        is_active: true,
-        updated_at: new Date(),
-        pairing_code_id: codeId
-      },
-      create: {
         restaurant_id: restaurantId,
         staff_id: staffId,
-        device_name: deviceName,
-        device_fingerprint: deviceFingerprint,
-        user_agent: userAgent,
-        platform: platform,
-        auth_token_hash: authTokenHash,
-        pairing_code_id: codeId
+        device_fingerprint: deviceFingerprint
       }
     });
+
+    if (existing) {
+      return await tx.registered_devices.update({
+        where: { id: existing.id },
+        data: {
+          auth_token_hash: authTokenHash,
+          device_name: deviceName,
+          user_agent: userAgent,
+          platform: platform,
+          is_active: true,
+          updated_at: new Date(),
+          pairing_code_id: codeId
+        }
+      });
+    } else {
+      return await tx.registered_devices.create({
+        data: {
+          restaurant_id: restaurantId,
+          staff_id: staffId,
+          device_name: deviceName,
+          device_fingerprint: deviceFingerprint,
+          user_agent: userAgent,
+          platform: platform,
+          auth_token_hash: authTokenHash,
+          pairing_code_id: codeId,
+          updated_at: new Date()
+        }
+      });
+    }
   });
 
   // Audit: Log successful pairing

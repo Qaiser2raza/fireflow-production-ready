@@ -1,5 +1,5 @@
 
-import { MenuItem, Order, OrderStatus, Section, Server, Table, TableStatus, Reservation } from './types';
+import { MenuItem, Order, Section, Server, Table, TableStatus, Reservation } from './types';
 
 export const MENU_ITEMS: MenuItem[] = [
   {
@@ -112,15 +112,16 @@ export const INITIAL_SECTIONS: Section[] = [
 ];
 
 export const INITIAL_SERVERS: Server[] = [
-  { id: 'S-TEMP-1', name: 'Staff Member 1', role: 'WAITER', pin: '1111', active_tables: 0 },
-  { id: 'S-TEMP-2', name: 'Staff Member 2', role: 'CASHIER', pin: '2222', active_tables: 0 },
-  { 
-    id: 'SUPER-ADMIN-1', 
-    name: 'System Admin', 
-    role: 'SUPER_ADMIN', 
-    pin: '9999', 
+  { id: 'S-TEMP-1', name: 'Staff Member 1', role: 'WAITER', pin: '1111', active_tables: 0, status: 'ACTIVE', restaurant_id: 'temp-ref' },
+  { id: 'S-TEMP-2', name: 'Staff Member 2', role: 'CASHIER', pin: '2222', active_tables: 0, status: 'ACTIVE', restaurant_id: 'temp-ref' },
+  {
+    id: 'SUPER-ADMIN-1',
+    name: 'System Admin',
+    role: 'SUPER_ADMIN',
+    pin: '9999',
     active_tables: 0,
-    restaurant_id: undefined
+    status: 'ACTIVE',
+    restaurant_id: 'super-admin-ref'
   }
 ];
 

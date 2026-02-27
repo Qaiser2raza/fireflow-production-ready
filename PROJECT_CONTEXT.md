@@ -1,14 +1,13 @@
-# PROJECT CONTEXT: Fireflow (Local Server Version)
-**Current State:** 80% Complete. Migration from Supabase to Local SQLite/Postgres is DONE.
+# PROJECT CONTEXT: Fireflow (Hybrid SaaS Version)
+**Current State:** 95% Complete.
 **Architecture:**
-- Frontend: React + Vite (located in /src)
-- Backend: Local Node/Express Server (located in /src/api/server.ts)
-- Desktop Wrapper: Electron (located in /electron)
-- DB: Prisma (Local)
+- **Local Operations**: Core restaurant features (Orders, KDS, Menu) run on **Local PostgreSQL** (Port 5432) via a direct **Node/Express API** (Port 3001).
+- **Cloud SaaS**: Business logic (Subscriptions, Licensing, Payments) depends on **Supabase Cloud**.
+- **Desktop Wrapper**: Electron integrates the local server and web preview.
 
 **STRICT RULES FOR AI:**
-1. DO NOT suggest Cloud/Supabase solutions. We are 100% local now.
-2. DO NOT refactor `src/api/server.ts` or `db.ts` unless explicitly asked. They are working.
-3. If working on Frontend, do not touch the `/src/api` folder unless necessary.
-4. If working on Backend, do not touch the `/src/features` (Frontend) folders.
-5. IGNORE any files in `_ARCHIVE_MIGRATION`.
+1. **Hybrid Awareness**: Operational data (Orders, etc.) goes to Local API. SaaS data (Subscriptions, etc.) goes via `cloudClient.ts` to Supabase.
+2. **Branding**: Maintain the "Fireflow Restaurant" branding for tenants while keeping "Powered by Fireflow" as the SaaS provider badge.
+3. **No destructive refactors**: `src/api/server.ts` handles all core local operations. Don't touch it unless fixing bugs.
+4. **Bilingual Requirement**: All customer/subscriber notifications must be in English and Urdu.
+5. **Ignore Archive**: Stay away from `_ARCHIVE_MIGRATION`.

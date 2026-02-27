@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Key, Server, User, Lock, Loader2 } from 'lucide-react';
+import { Shield, Key, Server, User, Lock } from 'lucide-react';
 import { Card } from '../../shared/ui/Card';
 import { Input } from '../../shared/ui/Input';
 import { Button } from '../../shared/ui/Button';

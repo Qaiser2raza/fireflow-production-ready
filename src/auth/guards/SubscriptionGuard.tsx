@@ -1,19 +1,73 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRestaurant, formatCurrency } from '../../client/RestaurantContext';
 import { useAppContext } from '../../client/App';
-import { Lock, AlertCircle, CreditCard, Phone, Building2, X, Clock, Loader2, CheckCircle2, LogOut } from 'lucide-react';
+import { Lock, AlertCircle, CreditCard, Phone, Building2, Clock, Loader2, CheckCircle2, LogOut, X } from 'lucide-react';
 import { PaymentSubmissionView } from '../../operations/pos/PaymentSubmissionView';
+import { getSubscriptionStatus } from '../../shared/lib/cloudClient';
 
 export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentRestaurant, isSubscriptionActive, daysUntilExpiry, hasPendingPayment } = useRestaurant();
   const { logout } = useAppContext();
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<'loading' | 'trial' | 'active' | 'expired' | 'offline'>('loading');
+  const [isOffline, setIsOffline] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const cacheKey = currentRestaurant?.id ? `cloud_status_${currentRestaurant.id}` : null;
 
-  if (!currentRestaurant) {
-    return <>{children}</>;
-  }
+  useEffect(() => {
+    if (!currentRestaurant?.id || currentRestaurant.id === 'SYSTEM') {
+      setCloudStatus('active');
+      return;
+    }
 
+    const validateCloud = async () => {
+      if (!cacheKey) return;
+
+      // Check sessionStorage cache first (5 minute cache)
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const { status, timestamp } = JSON.parse(cached);
+          if (Date.now() - timestamp < 5 * 60 * 1000) {
+            setCloudStatus(status);
+            return;
+          }
+        } catch (e) {
+          // Invalid cache, continue
+        }
+      }
+
+      try {
+        // 3 second timeout
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('timeout')), 3000)
+        );
+        const result = (await Promise.race([
+          getSubscriptionStatus(currentRestaurant.id),
+          timeoutPromise
+        ])) as any;
+
+        if (result.error) throw new Error(result.error);
+
+        const status = result.data?.status || 'active';
+        setCloudStatus(status);
+        setIsOffline(false);
+        if (cacheKey) {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ status, timestamp: Date.now() }));
+        }
+      } catch (err) {
+        // Cloud unreachable — fall back to local data
+        setIsOffline(true);
+        setCloudStatus((currentRestaurant.subscriptionStatus as any) || 'active');
+        console.warn('[SubscriptionGuard] Cloud check failed, using local data:', err);
+      }
+    };
+
+    validateCloud();
+    const interval = setInterval(validateCloud, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [currentRestaurant?.id, cacheKey]);
   const subscriptionStatus = currentRestaurant.subscriptionStatus;
 
   // CASE 1: EXPIRED & PENDING VERIFICATION
@@ -87,7 +141,7 @@ export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ chi
   }
 
   // CASE 2: EXPIRED - Show payment screen (BLOCKING)
-  if (subscriptionStatus === 'expired') {
+  if (subscriptionStatus === 'expired' || cloudStatus === 'expired') {
     return (
       <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-slate-950 p-4 md:p-8 overflow-y-auto">
         <div className="max-w-2xl w-full my-auto">
@@ -130,7 +184,7 @@ export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ chi
               </div>
               <div>
                 <div className="text-slate-500 text-xs uppercase tracking-wider mb-1">Monthly Fee</div>
-                <div className="text-gold-500 font-bold">{formatCurrency(currentRestaurant.monthlyFee)}</div>
+                <div className="text-gold-500 font-bold">{formatCurrency(currentRestaurant.monthlyFee || 0)}</div>
               </div>
             </div>
           </div>
@@ -170,7 +224,7 @@ export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ chi
                 </div>
                 <div>
                   <div className="text-slate-500 mb-1">Account Title:</div>
-                  <div className="bg-slate-950 border border-slate-800 rounded p-2 text-slate-300">Fireflow Solutions</div>
+                  <div className="bg-slate-950 border border-slate-800 rounded p-2 text-slate-300">Cravex Solutions</div>
                 </div>
               </div>
               <div className="space-y-3">
@@ -180,7 +234,7 @@ export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ chi
                 </div>
                 <div>
                   <div className="text-slate-500 mb-1">Reference:</div>
-                  <div className="bg-slate-950 border border-slate-800 rounded p-2 text-slate-300 font-mono">{currentRestaurant.slug}</div>
+                  <div className="bg-slate-950 border border-slate-800 rounded p-2 text-slate-300 font-mono">{currentRestaurant.slug || 'N/A'}</div>
                 </div>
               </div>
             </div>
@@ -203,11 +257,18 @@ export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ chi
     );
   }
 
-  // CASE 3: EXPIRING SOON (7 days or less)
+  // CASE 3: EXPIRING SOON (7 days or less) - Add banner but allow app access
   if (daysUntilExpiry <= 7 && daysUntilExpiry > 0 && isSubscriptionActive) {
     return (
       <>
-        <div className="fixed top-0 left-0 right-0 z-[60] bg-yellow-900/90 backdrop-blur-sm border-b border-yellow-900/50 px-4 md:px-6 py-3">
+        {/* Offline Warning Banner */}
+        {isOffline && (
+          <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-900/80 border-b border-yellow-500/50 px-4 py-2 text-center text-yellow-300 text-xs">
+            ⚠️ Offline mode — subscription validation unavailable. Connect to internet to verify your subscription.
+          </div>
+        )}
+
+        <div className={`fixed top-0 left-0 right-0 z-[60] bg-yellow-900/90 backdrop-blur-sm border-b border-yellow-900/50 px-4 md:px-6 py-3 ${isOffline ? 'mt-10' : ''}`}>
           <div className="flex flex-col md:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <AlertCircle className="text-yellow-500 shrink-0" size={20} />
@@ -243,5 +304,52 @@ export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ chi
     );
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {/* Offline Warning Banner */}
+      {isOffline && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-900/80 border-b border-yellow-500/50 px-4 py-2 text-center text-yellow-300 text-xs">
+          ⚠️ Offline mode — subscription validation unavailable. Connect to internet to verify your subscription.
+        </div>
+      )}
+
+      {/* Trial Expiry Warning Banner */}
+      {cloudStatus === 'trial' &&
+        daysUntilExpiry <= 5 &&
+        daysUntilExpiry > 0 &&
+        !sessionStorage.getItem('trial_banner_dismissed') &&
+        !bannerDismissed && (
+          <div className={`fixed top-0 left-0 right-0 z-50 bg-amber-500 px-4 py-2 flex items-center justify-between ${isOffline ? 'mt-10' : ''}`}>
+            <span className="text-slate-900 font-semibold text-sm">
+              ⚠️ Your trial ends in {daysUntilExpiry} day{daysUntilExpiry !== 1 ? 's' : ''}. Submit payment to continue uninterrupted.
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowPaymentModal(true)}
+                className="bg-slate-900 text-white text-xs px-3 py-1 rounded font-bold hover:bg-slate-800"
+              >
+                Pay Now
+              </button>
+              <button
+                onClick={() => {
+                  sessionStorage.setItem('trial_banner_dismissed', 'true');
+                  setBannerDismissed(true);
+                }}
+                className="text-slate-900 hover:text-slate-700 font-bold text-lg leading-none"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+      <div className="flex-1 flex flex-col overflow-hidden">{children}</div>
+
+      {showPaymentModal && (
+        <div className="fixed inset-0 z-[110] bg-black/95 animate-in fade-in duration-300">
+          <PaymentSubmissionView onClose={() => setShowPaymentModal(false)} isModal={true} />
+        </div>
+      )}
+    </>
+  );
 };

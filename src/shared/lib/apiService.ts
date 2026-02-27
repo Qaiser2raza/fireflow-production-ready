@@ -1,4 +1,4 @@
-import { Table, Order } from '@/types';
+import { Table } from '../types';
 
 export class ApiService {
     private static baseUrl = 'http://localhost:3001/api';

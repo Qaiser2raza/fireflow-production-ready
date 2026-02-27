@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { DollarSign, Users, ChefHat, Clock, FileText } from 'lucide-react';
+import { Banknote, Users, ChefHat, Clock, FileText } from 'lucide-react';
 import { Order, Table, Staff } from '../../../shared/types';
 
 interface MetricsDashboardProps {
@@ -14,26 +14,28 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({ orders, tabl
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        // Revenue: Today's total from all non-cancelled orders
+        // Revenue: Today's total from all closed or paid orders
         const todaysOrders = orders.filter(o => {
             const orderDate = new Date(o.created_at);
-            return orderDate >= today && o.status !== 'CANCELLED';
+            return orderDate >= today && o.status !== 'CANCELLED' && o.status !== 'VOIDED';
         });
-        const revenue = todaysOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+        const revenue = todaysOrders
+            .filter(o => o.status === 'CLOSED' || o.payment_status === 'PAID')
+            .reduce((sum, o) => sum + (o.total || 0), 0);
 
         // Active Tables %
         const occupiedCount = tables.filter(t => t.status === 'OCCUPIED').length;
         const totalTables = tables.filter(t => !t.is_virtual && t.is_active !== false).length;
         const activePercentage = totalTables > 0 ? Math.round((occupiedCount / totalTables) * 100) : 0;
 
-        // Pending KDS: Orders in FIRED or PREPARING state
+        // Pending KDS: Orders in ACTIVE state that aren't READY yet
         const pendingKDS = orders.filter(o =>
-            o.status === 'FIRED' || o.status === 'PREPARING'
+            o.status === 'ACTIVE'
         ).length;
 
-        // Avg Turn Time: Average duration of completed orders today
+        // Avg Turn Time: Average duration of closed orders today
         const completedToday = todaysOrders.filter(o =>
-            o.status === 'PAID' || o.status === 'COMPLETED'
+            o.status === 'CLOSED' || o.payment_status === 'PAID'
         );
         const avgTurnTime = completedToday.length > 0
             ? Math.round(
@@ -45,8 +47,8 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({ orders, tabl
             )
             : 0;
 
-        // Draft Orders: Orders saved but not fired yet
-        const draftOrders = orders.filter(o => o.status === 'DRAFT').length;
+        // Draft Orders: New orders without items yet
+        const draftOrders = orders.filter(o => o.status === 'ACTIVE' && (o.order_items || []).length === 0).length;
 
         return { revenue, activePercentage, pendingKDS, avgTurnTime, draftOrders };
     }, [orders, tables]);
@@ -59,9 +61,9 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({ orders, tabl
             {/* Revenue - Only for Manager/Cashier */}
             {canSeeRevenue && (
                 <MetricCard
-                    icon={DollarSign}
+                    icon={Banknote}
                     label="REVENUE"
-                    value={`$${metrics.revenue.toLocaleString()}`}
+                    value={`Rs. ${metrics.revenue.toLocaleString()}`}
                     colorClass="border-gold-500/30 bg-gold-500/5"
                     iconColor="text-gold-500"
                 />

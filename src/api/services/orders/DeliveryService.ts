@@ -14,13 +14,65 @@ export class DeliveryService extends BaseOrderService {
     }
 
     protected async createExtension(tx: Prisma.TransactionClient, orderId: string, data: CreateOrderDTO): Promise<void> {
+        let customerId: string | undefined;
+
+        if (data.customer_phone && data.restaurant_id) {
+            const customer = await tx.customers.upsert({
+                where: {
+                    restaurant_id_phone: {
+                        restaurant_id: data.restaurant_id,
+                        phone: data.customer_phone
+                    }
+                },
+                update: {
+                    name: data.customer_name || undefined,
+                    address: data.delivery_address || undefined
+                },
+                create: {
+                    restaurant_id: data.restaurant_id,
+                    phone: data.customer_phone,
+                    name: data.customer_name,
+                    address: data.delivery_address
+                }
+            });
+            customerId = customer.id;
+
+            // Update main order customer_id
+            await tx.orders.update({
+                where: { id: orderId },
+                data: { customer_id: customerId }
+            });
+
+            // Also ensure address is in address book if it's new
+            if (data.delivery_address) {
+                const existingAddress = await tx.customer_addresses.findFirst({
+                    where: {
+                        customer_id: customerId,
+                        full_address: data.delivery_address
+                    }
+                });
+
+                if (!existingAddress) {
+                    await tx.customer_addresses.create({
+                        data: {
+                            customer_id: customerId,
+                            label: 'Last Used',
+                            full_address: data.delivery_address,
+                            is_default: true
+                        }
+                    });
+                }
+            }
+        }
+
         await tx.delivery_orders.create({
             data: {
                 order_id: orderId,
                 customer_name: data.customer_name,
                 customer_phone: data.customer_phone,
                 delivery_address: data.delivery_address,
-                driver_id: data.driver_id
+                driver_id: data.driver_id,
+                customer_id: customerId
             }
         });
     }

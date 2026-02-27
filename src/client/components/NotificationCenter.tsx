@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, DollarSign, Clock, AlertCircle } from 'lucide-react';
+import { Bell, Banknote, Clock, AlertCircle } from 'lucide-react';
 
 interface Notification {
     id: string;
@@ -26,7 +26,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
     const getIcon = (type: Notification['type']) => {
         switch (type) {
             case 'bill_request':
-                return <DollarSign size={16} className="text-yellow-500" />;
+                return <Banknote size={16} className="text-yellow-500" />;
             case 'order_ready':
                 return <Bell size={16} className="text-green-500" />;
             case 'alert':

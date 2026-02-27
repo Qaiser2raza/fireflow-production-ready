@@ -14,12 +14,18 @@ class SocketIOClient {
     connect() {
         if (this.socket) return; // Already connecting or connected
 
+        // Get JWT token for authentication
+        const accessToken = sessionStorage.getItem('accessToken');
+
         this.socket = io(SOCKET_URL, {
             transports: ['websocket', 'polling'], // Prefer websockets
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
-            reconnectionAttempts: Infinity // Keep trying
+            reconnectionAttempts: Infinity, // Keep trying
+            extraHeaders: accessToken ? {
+                'Authorization': `Bearer ${accessToken}`
+            } : {}
         });
 
         this.socket.on('connect', () => {

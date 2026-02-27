@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Order, OrderStatus } from '../../../shared/types';
-import { X, Clock, FileText, ChevronRight, History, Trash2, Lock } from 'lucide-react';
+import { X, Clock, FileText, ChevronRight, History, Trash2 } from 'lucide-react';
 
 interface RecallModalProps {
     orders: Order[];
@@ -14,7 +14,7 @@ interface RecallModalProps {
 export const RecallModal: React.FC<RecallModalProps> = ({ orders, isOpen, onClose, onSelectOrder, onDeleteOrder, currentUser }) => {
     const draftOrders = useMemo(() => {
         return orders
-            .filter(o => o.status === OrderStatus.DRAFT)
+            .filter(o => o.status === OrderStatus.ACTIVE)
             .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }, [orders]);
 
