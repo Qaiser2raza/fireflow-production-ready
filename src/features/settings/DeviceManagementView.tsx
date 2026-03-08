@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../../client/App';
 import { useRestaurant } from '../../client/RestaurantContext';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 interface RegisteredDevice {
     id: string;
@@ -67,7 +68,7 @@ export const DeviceManagementView: React.FC = () => {
         if (!currentRestaurant?.id) return;
 
         try {
-            const response = await fetch(`/api/registered_devices?restaurant_id=${currentRestaurant.id}`);
+            const response = await fetchWithAuth(`/api/registered_devices?restaurant_id=${currentRestaurant.id}`);
             const data = await response.json();
             setDevices(data);
         } catch (error) {
@@ -100,7 +101,7 @@ export const DeviceManagementView: React.FC = () => {
 
     const toggleDeviceAuthorization = async (deviceId: string, currentAuth: boolean) => {
         try {
-            await fetch(`/api/registered_devices/upsert`, {
+            await fetchWithAuth(`/api/registered_devices/upsert`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -119,7 +120,7 @@ export const DeviceManagementView: React.FC = () => {
         if (!confirm('Are you sure you want to remove this device?')) return;
 
         try {
-            await fetch(`/api/registered_devices?id=${deviceId}`, {
+            await fetchWithAuth(`/api/registered_devices?id=${deviceId}`, {
                 method: 'DELETE'
             });
             fetchDevices();

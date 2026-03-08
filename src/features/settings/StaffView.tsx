@@ -9,6 +9,7 @@ import { Card } from '../../shared/ui/Card';
 import { Button } from '../../shared/ui/Button';
 import { Modal } from '../../shared/ui/Modal';
 import { Input } from '../../shared/ui/Input';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const API_URL = 'http://localhost:3001/api';
 
@@ -80,13 +81,13 @@ export const StaffView: React.FC = () => {
     const headers = { 'Content-Type': 'application/json' };
 
     if (editingStaff) {
-      await fetch(url, {
+      await fetchWithAuth(url, {
         method: 'PATCH',
         headers,
         body: JSON.stringify({ ...payload, id: editingStaff.id })
       });
     } else {
-      await fetch(url, {
+      await fetchWithAuth(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload)
@@ -99,7 +100,7 @@ export const StaffView: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to terminate this staff member?')) {
-      await fetch(`${API_URL}/staff?id=${id}`, { method: 'DELETE' });
+      await fetchWithAuth(`${API_URL}/staff?id=${id}`, { method: 'DELETE' });
       if (fetchInitialData) fetchInitialData();
     }
   };

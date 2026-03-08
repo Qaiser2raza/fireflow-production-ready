@@ -5,9 +5,10 @@ interface LoginViewProps {
   onLogin: (pin: string) => void;
   onStartRegistration?: () => void;
   onStartPairing?: () => void;
+  restaurantName?: string;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, onStartRegistration }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, onStartRegistration, restaurantName }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -119,8 +120,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, o
               </div>
             </div>
 
-            <h2 className="text-white text-xl font-bold tracking-wide">Terminal Access</h2>
-            <p className="text-slate-500 text-xs uppercase tracking-widest mt-2">Enter 4-6 Digit Security PIN</p>
+            <h2 className="text-white text-xl font-bold tracking-wide">
+              {restaurantName ? `Terminal: ${restaurantName}` : 'Terminal Access'}
+            </h2>
+            <p className="text-slate-500 text-[10px] uppercase font-black tracking-widest mt-2">Enter 4-6 Digit Security PIN</p>
           </div>
 
           <div className="mb-6 lg:mb-8 flex justify-center gap-3 h-12 lg:h-16 items-center">

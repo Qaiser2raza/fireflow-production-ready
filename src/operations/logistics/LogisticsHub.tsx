@@ -6,6 +6,7 @@ import {
    X, ChevronRight, TrendingUp, RefreshCw,
    User, AlertTriangle
 } from 'lucide-react';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 /* ─────────────────────────── helpers ─────────────────────────── */
 const fmt = (n: number) => `Rs. ${Number(n).toLocaleString()}`;
@@ -76,7 +77,7 @@ export const LogisticsHub: React.FC = () => {
       setIsProcessing(true);
       try {
          for (const orderId of selectedOrderIds) {
-            const res = await fetch(`${API}/orders/${orderId}/assign-driver`, {
+            const res = await fetchWithAuth(`${API}/orders/${orderId}/assign-driver`, {
                method: 'POST',
                headers: { 'Content-Type': 'application/json', 'x-staff-id': currentUser?.id || '', 'x-restaurant-id': currentUser?.restaurant_id || '' },
                body: JSON.stringify({ driverId: dispatchRiderId, processedBy: currentUser?.id }),
@@ -96,7 +97,7 @@ export const LogisticsHub: React.FC = () => {
    const handleMarkDelivered = async (orderId: string) => {
       setIsProcessing(true);
       try {
-         const res = await fetch(`${API}/orders/${orderId}/mark-delivered`, {
+         const res = await fetchWithAuth(`${API}/orders/${orderId}/mark-delivered`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-staff-id': currentUser?.id || '' },
             body: JSON.stringify({ processedBy: currentUser?.id }),
@@ -112,7 +113,7 @@ export const LogisticsHub: React.FC = () => {
       if (!shiftModal.riderId) return;
       setIsProcessing(true);
       try {
-         const res = await fetch(`${API}/riders/shift/open`, {
+         const res = await fetchWithAuth(`${API}/riders/shift/open`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-restaurant-id': currentUser?.restaurant_id || '' },
             body: JSON.stringify({ riderId: shiftModal.riderId, openedBy: currentUser?.id, openingFloat: Number(shiftAmount), notes: shiftNotes }),
@@ -132,7 +133,7 @@ export const LogisticsHub: React.FC = () => {
       if (!rider?.active_shift) return;
       setIsProcessing(true);
       try {
-         const res = await fetch(`${API}/riders/shift/close`, {
+         const res = await fetchWithAuth(`${API}/riders/shift/close`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ shiftId: rider.active_shift.id, closedBy: currentUser?.id, closingCash: Number(shiftAmount), notes: shiftNotes }),

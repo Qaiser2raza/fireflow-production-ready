@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { journalEntryService } from './JournalEntryService';
 
 const prisma = new PrismaClient();
 
@@ -103,6 +104,14 @@ export class AccountingService {
                 processedBy: order.last_action_by
             }, db);
         }
+
+        // ── Double-Entry: Post to Chart of Accounts journal ──────────────
+        try {
+            await journalEntryService.recordOrderSaleJournal(orderId, db);
+        } catch (jeErr) {
+            // Journal posting is non-blocking — legacy ledger entry already recorded above
+            console.error('[JE] recordOrderSaleJournal failed (non-fatal):', jeErr);
+        }
     }
 
     /**
@@ -142,6 +151,19 @@ export class AccountingService {
             description: `Rider debt reduced for ${data.orderIds.length} orders`,
             processedBy: data.processedBy
         }, db);
+
+        // ── Double-Entry Journal ─────────────────────────────────────────
+        try {
+            await journalEntryService.recordRiderSettlementJournal({
+                restaurantId: data.restaurantId,
+                riderId: data.riderId,
+                amount: data.amountReceived,
+                settlementId: data.settlementId || `settle-${Date.now()}`,
+                processedBy: data.processedBy
+            }, db);
+        } catch (jeErr) {
+            console.error('[JE] recordRiderSettlementJournal failed (non-fatal):', jeErr);
+        }
     }
 
     /**
@@ -351,6 +373,20 @@ export class AccountingService {
                 processedBy: data.staffId,
                 referenceId: payout.id
             }, tx);
+
+            // ── Double-Entry Journal ─────────────────────────────────────
+            try {
+                await journalEntryService.recordPayoutJournal({
+                    restaurantId: data.restaurantId,
+                    amount: data.amount,
+                    payoutId: payout.id,
+                    category: data.category,
+                    notes: data.notes,
+                    processedBy: data.staffId
+                }, tx);
+            } catch (jeErr) {
+                console.error('[JE] recordPayoutJournal failed (non-fatal):', jeErr);
+            }
 
             return payout;
         });

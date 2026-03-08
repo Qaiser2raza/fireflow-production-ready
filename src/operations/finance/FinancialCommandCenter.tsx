@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import { useAppContext as useApp } from '../../client/contexts/AppContext';
 import { ZReportModal } from '../../shared/components/ZReportModal';
+import { ChartOfAccountsModal } from './components/ChartOfAccountsModal';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const FinancialCommandCenter: React.FC = () => {
     const { currentUser } = useApp();
@@ -30,6 +32,7 @@ const FinancialCommandCenter: React.FC = () => {
     const [showOpenModal, setShowOpenModal] = useState(false);
     const [showCloseModal, setShowCloseModal] = useState(false);
     const [showReportModal, setShowReportModal] = useState(false);
+    const [showCOAModal, setShowCOAModal] = useState(false);
     const [activeReport, setActiveReport] = useState<any>(null);
 
     // Form states
@@ -46,8 +49,8 @@ const FinancialCommandCenter: React.FC = () => {
     const fetchSession = async () => {
         try {
             const [sessionRes, ledgerRes] = await Promise.all([
-                fetch(`http://localhost:3001/api/accounting/session/${restaurantId}`),
-                fetch(`http://localhost:3001/api/accounting/ledger/${restaurantId}?limit=50`)
+                fetchWithAuth('http://localhost:3001/api/accounting/session'),
+                fetchWithAuth('http://localhost:3001/api/accounting/ledger?limit=50')
             ]);
 
             const sessionData = await sessionRes.json();
@@ -76,8 +79,8 @@ const FinancialCommandCenter: React.FC = () => {
             const endOfDay = new Date().toISOString();
 
             const [mixRes, velRes] = await Promise.all([
-                fetch(`http://localhost:3001/api/reports/product-mix?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`),
-                fetch(`http://localhost:3001/api/reports/velocity?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`)
+                fetchWithAuth(`http://localhost:3001/api/reports/product-mix?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`),
+                fetchWithAuth(`http://localhost:3001/api/reports/velocity?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`)
             ]);
 
             const mixData = await mixRes.json();
@@ -95,7 +98,7 @@ const FinancialCommandCenter: React.FC = () => {
 
     const handleOpenSession = async () => {
         try {
-            const res = await fetch('http://localhost:3001/api/accounting/session/open', {
+            const res = await fetchWithAuth('http://localhost:3001/api/accounting/session/open', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -116,7 +119,7 @@ const FinancialCommandCenter: React.FC = () => {
 
     const handlePayout = async () => {
         try {
-            const res = await fetch('http://localhost:3001/api/accounting/payout', {
+            const res = await fetchWithAuth('http://localhost:3001/api/accounting/payout', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -140,7 +143,7 @@ const FinancialCommandCenter: React.FC = () => {
 
     const handleCloseSession = async () => {
         try {
-            const res = await fetch('http://localhost:3001/api/accounting/session/close', {
+            const res = await fetchWithAuth('http://localhost:3001/api/accounting/session/close', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -153,7 +156,7 @@ const FinancialCommandCenter: React.FC = () => {
             const data = await res.json();
             if (data.success) {
                 // Fetch report for display
-                const reportRes = await fetch(`http://localhost:3001/api/accounting/z-report/${activeSession?.id}`);
+                const reportRes = await fetchWithAuth(`http://localhost:3001/api/accounting/z-report/${activeSession?.id}`);
                 const reportData = await reportRes.json();
 
                 if (reportData.success) {
@@ -273,14 +276,22 @@ const FinancialCommandCenter: React.FC = () => {
 
             {/* Detailed Ledger Section */}
             <div className="flex-1 bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] overflow-hidden flex flex-col">
-                <div className="p-8 border-b border-slate-800/50 flex justify-between items-center">
+                <div className="p-8 border-b border-slate-800/50 flex justify-between items-center bg-[#0B0F19]">
                     <div className="flex items-center gap-3">
                         <History className="text-white" size={20} />
                         <h2 className="text-sm font-black text-white uppercase tracking-widest">Real-time General Ledger</h2>
                     </div>
-                    <button className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300">
-                        Export Journal (PDF)
-                    </button>
+                    <div className="flex gap-4">
+                        <button
+                            onClick={() => setShowCOAModal(true)}
+                            className="text-[10px] font-black text-emerald-400 uppercase tracking-widest hover:text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg bg-emerald-500/10"
+                        >
+                            Configure COA
+                        </button>
+                        <button className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 px-3 py-1.5">
+                            Export Journal (PDF)
+                        </button>
+                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4">
@@ -513,6 +524,9 @@ const FinancialCommandCenter: React.FC = () => {
                 onClose={() => setShowReportModal(false)}
                 report={activeReport}
             />
+
+            {/* COA MODAL */}
+            {showCOAModal && <ChartOfAccountsModal onClose={() => setShowCOAModal(false)} />}
         </div>
     );
 };

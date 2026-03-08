@@ -6,10 +6,11 @@ import { ZonesPanel } from './config/ZonesPanel';
 import { TablesPanel } from './config/TablesPanel';
 import { VendorsPanel } from './config/VendorsPanel';
 import { FloorPlanConfigView } from './config/FloorPlanConfigView';
+import { PrintersPanel } from './config/PrintersPanel';
 
 export const SettingsView: React.FC = () => {
   const { currentUser } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'OPERATIONS' | 'ZONES' | 'TABLES' | 'VENDORS' | 'FLOOR'>('OPERATIONS');
+  const [activeTab, setActiveTab] = useState<'OPERATIONS' | 'ZONES' | 'TABLES' | 'VENDORS' | 'FLOOR' | 'PRINTERS'>('OPERATIONS');
 
   if (currentUser?.role !== 'ADMIN' && currentUser?.role !== 'SUPER_ADMIN' && currentUser?.role !== 'MANAGER') {
     return (
@@ -46,7 +47,8 @@ export const SettingsView: React.FC = () => {
             { id: 'ZONES', label: 'Zones', icon: null },
             { id: 'TABLES', label: 'Tables', icon: null },
             { id: 'FLOOR', label: 'Floor Plan', icon: null },
-            { id: 'VENDORS', label: 'Vendors', icon: null }
+            { id: 'VENDORS', label: 'Vendors', icon: null },
+            { id: 'PRINTERS', label: 'Printers', icon: null }
           ].map(tab => (
             <button
               key={tab.id}
@@ -70,6 +72,7 @@ export const SettingsView: React.FC = () => {
           {activeTab === 'TABLES' && <TablesPanel />}
           {activeTab === 'FLOOR' && <FloorPlanConfigView />}
           {activeTab === 'VENDORS' && <VendorsPanel />}
+          {activeTab === 'PRINTERS' && <PrintersPanel />}
         </div>
       </div>
     </div>

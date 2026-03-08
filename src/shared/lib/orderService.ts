@@ -1,5 +1,6 @@
 
 import { Order } from '@/types';
+import { fetchWithAuth } from './authInterceptor';
 
 const API_URL = 'http://localhost:3001/api';
 
@@ -20,7 +21,7 @@ const API_URL = 'http://localhost:3001/api';
 
 export const orderService = {
     fetchOrders: async (restaurantId: string): Promise<Order[]> => {
-        const res = await fetch(`${API_URL}/orders?restaurant_id=${restaurantId}`);
+        const res = await fetchWithAuth(`${API_URL}/orders?restaurant_id=${restaurantId}`);
         if (!res.ok) {
             const error = await res.json().catch(() => ({}));
             throw new Error(`Failed to fetch orders: ${error.error || res.statusText}`);
@@ -42,7 +43,7 @@ export const orderService = {
             throw new Error('status is required');
         }
 
-        const res = await fetch(`${API_URL}/orders/upsert`, {
+        const res = await fetchWithAuth(`${API_URL}/orders/upsert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
@@ -67,7 +68,7 @@ export const orderService = {
             throw new Error('Order ID is required');
         }
 
-        const res = await fetch(`${API_URL}/orders/upsert`, {
+        const res = await fetchWithAuth(`${API_URL}/orders/upsert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id, ...data })

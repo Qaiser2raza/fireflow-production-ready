@@ -14,10 +14,10 @@ interface AURAAssistantProps {
   };
 }
 
-export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }) => {
+export const FIREFLOWAI: React.FC<AURAAssistantProps> = ({ onClose, context }) => {
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<{ role: 'user' | 'aura', content: string }[]>([
-    { role: 'aura', content: `Identity Verified. AURA Intelligence stands by for ${context.currentUser?.name || 'Authorized User'}. How may I optimize your operations?` }
+  const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: string }[]>([
+    { role: 'ai', content: `Identity Verified. FIREFLOW Intelligence stands by for ${context.currentUser?.name || 'Authorized User'}. How may I help you?` }
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -37,7 +37,7 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const systemPrompt = `
-        You are AURA (Autonomous Unified Restaurant Architect), the intelligence core of a high-performance restaurant system.
+        You are FIREFLOW AI, the intelligence core of a high-performance restaurant system.
         Current Restaurant Context:
         - Active Orders: ${context.orders.length}
         - Total Tables: ${context.tables.length}
@@ -46,10 +46,10 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
         - User: ${context.currentUser?.name} (Role: ${context.currentUser?.role})
 
         Instructions:
-        1. Be concise, precise, and professional (Luxury/Elite tone).
+        1. Be concise, precise, and professional.
         2. Provide actionable insights. 
         3. If asked about revenue, analyze the ${context.orders.length} active orders and their totals.
-        4. Refer to yourself as AURA. Use terms like "optimizing," "throughput," "topology," and "provisioning."
+        4. Refer to yourself as FIREFLOW AI.
       `;
 
       const response = await ai.models.generateContent({
@@ -58,9 +58,9 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
         config: { systemInstruction: systemPrompt }
       });
 
-      setMessages(prev => [...prev, { role: 'aura', content: response.text || "Error processing intelligence stream." }]);
+      setMessages(prev => [...prev, { role: 'ai', content: response.text || "Error processing intelligence stream." }]);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'aura', content: "AURA communication relay failed. Check engine connectivity." }]);
+      setMessages(prev => [...prev, { role: 'ai', content: "FIREFLOW AI communication relay failed. Check connectivity." }]);
     } finally {
       setIsLoading(false);
     }
@@ -77,10 +77,10 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
               <Bot size={24} className="text-slate-950" />
             </div>
             <div>
-              <h2 className="text-white font-serif text-xl font-bold tracking-wider">AURA INTELLIGENCE</h2>
+              <h2 className="text-white font-serif text-xl font-bold tracking-wider uppercase">FIREFLOW AI</h2>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Neural Link Active</span>
+                <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Link Active</span>
               </div>
             </div>
           </div>
@@ -97,7 +97,7 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
                 ? 'bg-gold-500 text-slate-950 font-medium'
                 : 'bg-slate-900/80 border border-slate-800 text-slate-200'
                 }`}>
-                {msg.role === 'aura' && <div className="text-[9px] font-black uppercase tracking-widest opacity-40 mb-1">AURA Protocol</div>}
+                {msg.role === 'ai' && <div className="text-[9px] font-black uppercase tracking-widest opacity-40 mb-1">FIREFLOW Protocol</div>}
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
               </div>
             </div>
@@ -106,7 +106,7 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
             <div className="flex justify-start">
               <div className="bg-slate-900/50 border border-slate-800 p-4 rounded-full flex items-center gap-3">
                 <Loader2 size={16} className="text-gold-500 animate-spin" />
-                <span className="text-[10px] font-black text-gold-500 uppercase tracking-widest">Analyzing topology...</span>
+                <span className="text-[10px] font-black text-gold-500 uppercase tracking-widest">Thinking...</span>
               </div>
             </div>
           )}
@@ -120,7 +120,7 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
             </div>
             <input
               className="flex-1 bg-transparent border-none outline-none text-white text-sm placeholder-slate-600 font-medium"
-              placeholder="Query AURA Core..."
+              placeholder="Ask FIREFLOW AI..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
@@ -134,9 +134,9 @@ export const AURAAssistant: React.FC<AURAAssistantProps> = ({ onClose, context }
             </button>
           </div>
           <div className="mt-3 flex justify-center gap-4">
-            <span className="text-[9px] text-slate-600 font-bold uppercase tracking-widest">Shift Link Encrypted</span>
+            <span className="text-[9px] text-slate-600 font-bold uppercase tracking-widest">Secure Link</span>
             <span className="text-[9px] text-slate-600 font-bold uppercase tracking-widest">•</span>
-            <span className="text-[9px] text-slate-600 font-bold uppercase tracking-widest">v4.1 Neural Engine</span>
+            <span className="text-[9px] text-slate-600 font-bold uppercase tracking-widest">FIREFLOW v4.1</span>
           </div>
         </div>
       </div>

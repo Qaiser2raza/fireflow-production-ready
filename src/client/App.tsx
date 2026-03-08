@@ -19,6 +19,7 @@ import { FloorManagementView as OrderCommandHub } from '../operations/dashboard/
 import { KDSView } from '../operations/kds/KDSView';
 import { LogisticsHub } from '../operations/logistics/LogisticsHub';
 import { SuperAdminView } from '../features/saas-hq/SuperAdminView';
+import { ActivationView } from '../features/activation/ActivationView';
 import { CustomersView } from '../operations/customers/CustomersView';
 import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
@@ -27,11 +28,12 @@ import { StaffView } from '../features/settings/StaffView';
 import { SettingsView } from '../features/settings/SettingsView';
 import { BillingView } from '../features/restaurant/BillingView';
 import FinancialCommandCenter from '../operations/finance/FinancialCommandCenter';
+import { fetchWithAuth } from '../shared/lib/authInterceptor';
 import { RoleContextBar } from './components/RoleContextBar';
 import { CommandPalette } from './components/CommandPalette';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { PreferencesProvider } from './contexts/PreferencesContext';
-import { RestaurantProvider } from './RestaurantContext';
+import { RestaurantProvider, useRestaurant } from './RestaurantContext';
 
 // Services
 import { tableService } from '../shared/lib/tableService';
@@ -72,28 +74,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const TAX_ENABLED = true;
   const DEFAULT_DELIVERY_FEE = 250;
 
-  // Helper: Get Authorization header with JWT token
-  const getAuthHeaders = () => {
-    const accessToken = sessionStorage.getItem('accessToken');
-    const expiry = sessionStorage.getItem('accessTokenExpiry');
 
-    // Debug log to verify token exists
-    console.log('[Auth] Token present:', !!accessToken);
-
-    // Check if token is expired
-    if (expiry && Date.now() > parseInt(expiry)) {
-      console.log('[Auth] Token expired, clearing session');
-      sessionStorage.removeItem('accessToken');
-      sessionStorage.removeItem('refreshToken');
-      sessionStorage.removeItem('accessTokenExpiry');
-      return { 'Content-Type': 'application/json' };
-    }
-
-    return {
-      'Content-Type': 'application/json',
-      ...(accessToken && { 'Authorization': `Bearer ${accessToken}` })
-    };
-  };
 
   const fetchInitialData = async (userOverride?: any) => {
     const user = userOverride || currentUser;
@@ -112,19 +93,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       console.log('[Fetch] Using restaurant ID:', restaurantId);
 
-      const headers = getAuthHeaders();
-
       const fetches = [
-        fetch(`${API_URL}/orders?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/tables?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/sections?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/menu_items?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/menu_categories?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/staff?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/transactions?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/customers?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/vendors?restaurant_id=${restaurantId}`, { headers }),
-        fetch(`${API_URL}/stations?restaurant_id=${restaurantId}`, { headers })
+        fetchWithAuth(`${API_URL}/orders?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/tables?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/sections?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/menu_items?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/menu_categories?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/staff?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/transactions?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/customers?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/vendors?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/stations?restaurant_id=${restaurantId}`)
       ];
 
       const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, vendDataRes, stationRes] = await Promise.all(fetches);
@@ -238,6 +217,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCurrentUser(user);
       if (user.role === 'SUPER_ADMIN') {
         setActiveView('SUPER_ADMIN');
+      } else if (user.role === 'WAITER') {
+        setActiveView('ORDER_HUB');
+      } else if (user.role === 'CHEF') {
+        setActiveView('KITCHEN');
+      } else if (user.role === 'RIDER' || user.role === 'DRIVER') {
+        setActiveView('LOGISTICS');
       } else {
         setActiveView('DASHBOARD');
       }
@@ -463,7 +448,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       for (const draft of oldDrafts) {
         try {
-          await fetch(`${API_URL}/orders/${draft.id}`, { method: 'DELETE' });
+          await fetchWithAuth(`${API_URL}/orders/${draft.id}`, {
+            method: 'DELETE'
+          });
           console.log(`Auto-deleted old empty active order: ${draft.id}`);
         } catch (err) {
           console.error(`Failed to delete order ${draft.id}:`, err);
@@ -533,7 +520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
-      const res = await fetch(`${API_URL}/floor/seat-party`, {
+      const res = await fetchWithAuth(`${API_URL}/floor/seat-party`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -584,7 +571,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       addOrder: async (order: any) => {
         const restaurant_id = currentUser?.restaurant_id || localStorage.getItem('restaurant_id');
-        const res = await fetch(`${API_URL}/orders`, {
+        const res = await fetchWithAuth(`${API_URL}/orders`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...order, restaurant_id })
@@ -596,7 +583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       updateOrder: async (order: any) => {
         const restaurant_id = currentUser?.restaurant_id || localStorage.getItem('restaurant_id');
-        const res = await fetch(`${API_URL}/orders/${order.id}`, {
+        const res = await fetchWithAuth(`${API_URL}/orders/${order.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...order, restaurant_id })
@@ -610,11 +597,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return result;
       },
       updateOrderStatus: async (id: string, status: OrderStatus) => {
-        await fetch(`${API_URL}/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+        await fetchWithAuth(`${API_URL}/orders/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status })
+        });
         fetchInitialData();
       },
       assignDriverToOrder: async (orderId: string, driverId: string) => {
-        await fetch(`${API_URL}/orders/${orderId}`, {
+        await fetchWithAuth(`${API_URL}/orders/${orderId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -631,42 +622,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         fetchInitialData();
       },
-      addMenuItem: async (item: any) => { await fetch(`${API_URL}/menu_items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      addMenuItem: async (item: any) => { await fetchWithAuth(`${API_URL}/menu_items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
       updateMenuItem: async (item: any) => {
-        const res = await fetch(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) });
+        const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) });
         if (!res.ok) console.error('[App] updateMenuItem failed:', await res.text());
         await fetchInitialData();
       },
-      deleteMenuItem: async (id: string) => { await fetch(`${API_URL}/menu_items?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
+      deleteMenuItem: async (id: string) => { await fetchWithAuth(`${API_URL}/menu_items?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
       toggleItemAvailability: async (id: string) => {
         const item = menuItems.find(i => i.id === id);
         if (item) {
-          await fetch(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, restaurant_id: currentUser?.restaurant_id, is_available: !item.is_available }) });
+          await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, restaurant_id: currentUser?.restaurant_id, is_available: !item.is_available }) });
           await fetchInitialData();
         }
       },
-      addMenuCategory: async (cat: any) => { await fetch(`${API_URL}/menu_categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      updateMenuCategory: async (cat: any) => { await fetch(`${API_URL}/menu_categories`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      deleteMenuCategory: async (id: string) => { await fetch(`${API_URL}/menu_categories?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
-      addSection: async (sec: any) => { await fetch(`${API_URL}/sections`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      updateSection: async (sec: any) => { await fetch(`${API_URL}/sections`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      deleteSection: async (id: string) => { await fetch(`${API_URL}/sections?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
-      addTable: async (tbl: any) => { await fetch(`${API_URL}/tables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      updateTable: async (tbl: any) => { await fetch(`${API_URL}/tables`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      deleteTable: async (id: string) => { await fetch(`${API_URL}/tables?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
-      addVendor: async (v: any) => { await fetch(`${API_URL}/vendors`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      addCustomer: async (c: any) => { await fetch(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      updateCustomer: async (c: any) => { await fetch(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      deleteCustomer: async (id: string) => { await fetch(`${API_URL}/customers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
+      addMenuCategory: async (cat: any) => { await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      updateMenuCategory: async (cat: any) => { await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      deleteMenuCategory: async (id: string) => { await fetchWithAuth(`${API_URL}/menu_categories?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
+      addSection: async (sec: any) => { await fetchWithAuth(`${API_URL}/sections`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      updateSection: async (sec: any) => { await fetchWithAuth(`${API_URL}/sections`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      deleteSection: async (id: string) => { await fetchWithAuth(`${API_URL}/sections?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
+      addTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      updateTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      deleteTable: async (id: string) => { await fetchWithAuth(`${API_URL}/tables?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
+      addVendor: async (v: any) => { await fetchWithAuth(`${API_URL}/vendors`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      addCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      updateCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      deleteCustomer: async (id: string) => { await fetchWithAuth(`${API_URL}/customers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
 
       // Stations CRUD
       stations,
-      addStation: async (s: any) => { await fetch(`${API_URL}/stations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      updateStation: async (s: any) => { await fetch(`${API_URL}/stations`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) }); fetchInitialData(); },
-      deleteStation: async (id: string) => { await fetch(`${API_URL}/stations?id=${id}`, { method: 'DELETE' }); fetchInitialData(); },
+      addStation: async (s: any) => { await fetchWithAuth(`${API_URL}/stations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      updateStation: async (s: any) => { await fetchWithAuth(`${API_URL}/stations`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) }); fetchInitialData(); },
+      deleteStation: async (id: string) => { await fetchWithAuth(`${API_URL}/stations?id=${id}`, { method: 'DELETE' }); fetchInitialData(); },
       cancelOrder: async (id: string, reason: string, notes?: string) => {
         try {
-          const res = await fetch(`${API_URL}/orders/${id}`, {
+          const res = await fetchWithAuth(`${API_URL}/orders/${id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -689,7 +680,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       voidOrder: async (id: string, reason: string, notes: string, refundMethod: string, managerPin: string) => {
         try {
           // 1. Verify Manager PIN first
-          const verifyRes = await fetch(`${API_URL}/auth/verify-pin`, {
+          const verifyRes = await fetchWithAuth(`${API_URL}/auth/verify-pin`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pin: managerPin, requiredRole: 'MANAGER' })
@@ -703,7 +694,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const { staff: manager } = await verifyRes.json();
 
           // 2. Perform Void
-          const res = await fetch(`${API_URL}/orders/${id}`, {
+          const res = await fetchWithAuth(`${API_URL}/orders/${id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -727,7 +718,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       processPayment: async (orderId: string, transaction: any) => {
         try {
-          const res = await fetch(`${API_URL}/orders/${orderId}/settle`, {
+          const res = await fetchWithAuth(`${API_URL}/orders/${orderId}/settle`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -757,6 +748,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 // --- 3. THE UI CONTENT WRAPPER ---
 const AppContent = () => {
   const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables } = useAppContext();
+  const { currentRestaurant } = useRestaurant();
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [showDevicePairing, setShowDevicePairing] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -765,41 +757,19 @@ const AppContent = () => {
   const { theme, toggleTheme } = useTheme();
 
   // Activation gate: check if this machine is set up
-  const [setupStatus, setSetupStatus] = useState<'checking' | 'needs-activation' | 'activated'>('checking');
+  const [setupStatus, setSetupStatus] = useState<{ status: 'checking' | 'needs-activation' | 'activated', restaurant_name?: string }>({ status: 'checking' });
 
   useEffect(() => {
     fetch('http://localhost:3001/api/setup/status')
       .then(r => r.json())
-      .then(data => setSetupStatus(data.activated ? 'activated' : 'needs-activation'))
-      .catch(() => setSetupStatus('activated')); // fallback: show login if server unreachable
+      .then(data => setSetupStatus({
+        status: data.activated ? 'activated' : 'needs-activation',
+        restaurant_name: data.restaurant_name
+      }))
+      .catch(() => setSetupStatus({ status: 'activated' })); // fallback: show login if server unreachable
   }, []);
 
-  // While we check setup status, show a minimal loading screen
-  if (setupStatus === 'checking') {
-    return (
-      <div className="min-h-screen bg-[#020617] flex items-center justify-center">
-        <div className="flex items-center gap-4 text-slate-500">
-          <div className="w-8 h-8 border-2 border-gold-500/30 border-t-gold-500 rounded-full animate-spin" />
-          <span className="text-sm font-black uppercase tracking-widest">Starting FireFlow...</span>
-        </div>
-      </div>
-    );
-  }
-
-  // Show activation screen if this machine has never been set up
-  if (setupStatus === 'needs-activation') {
-    const { ActivationView } = require('../features/activation/ActivationView');
-    return (
-      <ActivationView
-        onActivationComplete={() => {
-          setSetupStatus('activated');
-        }}
-      />
-    );
-  }
-
   // Live clock update
-
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
@@ -821,6 +791,29 @@ const AppContent = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // While we check setup status, show a minimal loading screen
+  if (setupStatus.status === 'checking') {
+    return (
+      <div className="min-h-screen bg-[#020617] flex items-center justify-center">
+        <div className="flex items-center gap-4 text-slate-500">
+          <div className="w-8 h-8 border-2 border-gold-500/30 border-t-gold-500 rounded-full animate-spin" />
+          <span className="text-sm font-black uppercase tracking-widest">Starting FireFlow...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Show activation screen if this machine has never been set up
+  if (setupStatus.status === 'needs-activation') {
+    return (
+      <ActivationView
+        onActivationComplete={() => {
+          setSetupStatus({ status: 'activated' });
+        }}
+      />
+    );
+  }
+
   if (showDevicePairing) {
     const { DevicePairingVerificationView } = require('../auth/views/DevicePairingVerificationView');
     return (
@@ -835,25 +828,61 @@ const AppContent = () => {
     );
   }
 
-  if (!currentUser) return <LoginView onLogin={login} onStartPairing={() => setShowDevicePairing(true)} />;
+  if (!currentUser) return (
+    <LoginView
+      onLogin={login}
+      onStartPairing={() => setShowDevicePairing(true)}
+      restaurantName={setupStatus.restaurant_name}
+    />
+  );
 
-  const menuItems = currentUser.role === 'SUPER_ADMIN' ? [
-    { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
-  ] : [
-    { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
-    { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
-    { id: 'POS', icon: Grid, label: 'POS Control' },
-    { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
-    { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
-    { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
-    { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
-    { id: 'REGISTER', icon: CreditCard, label: 'Register' },
-    { id: 'BILLING', icon: CreditCard, label: 'Billing' },
-    { id: 'STAFF', icon: Users, label: 'Personnel' },
-    { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
-    { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
-    { id: 'SETTINGS', icon: Settings, label: 'System' },
-  ];
+  let menuItems: any[] = [];
+  if (currentUser.role === 'SUPER_ADMIN') {
+    menuItems = [
+      { id: 'SUPER_ADMIN', icon: Shield, label: 'Super Admin' },
+    ];
+  } else if (currentUser.role === 'WAITER') {
+    menuItems = [
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Hub' },
+      { id: 'POS', icon: Grid, label: 'POS' },
+      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Activity' },
+    ];
+  } else if (currentUser.role === 'CASHIER') {
+    menuItems = [
+      { id: 'DASHBOARD', icon: Layout, label: 'Dashboard' },
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Hub' },
+      { id: 'POS', icon: Grid, label: 'POS' },
+      { id: 'LOGISTICS', icon: Bike, label: 'Delivery' },
+      { id: 'REGISTER', icon: CreditCard, label: 'Register' },
+      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Activity' },
+      { id: 'CUSTOMERS', icon: Users, label: 'Customers' },
+    ];
+  } else if (currentUser.role === 'CHEF') {
+    menuItems = [
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS' },
+    ];
+  } else if (currentUser.role === 'RIDER' || currentUser.role === 'DRIVER') {
+    menuItems = [
+      { id: 'LOGISTICS', icon: Bike, label: 'Delivery' },
+    ];
+  } else {
+    // ADMIN or MANAGER get everything
+    menuItems = [
+      { id: 'DASHBOARD', icon: Layout, label: 'Dashboard' },
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Hub' },
+      { id: 'POS', icon: Grid, label: 'POS' },
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS' },
+      { id: 'LOGISTICS', icon: Bike, label: 'Delivery' },
+      { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
+      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Activity' },
+      { id: 'REGISTER', icon: CreditCard, label: 'Register' },
+      { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+      { id: 'STAFF', icon: Users, label: 'Staff' },
+      { id: 'CUSTOMERS', icon: Users, label: 'Customers' },
+      { id: 'MENU', icon: Coffee, label: 'Menu' },
+      { id: 'SETTINGS', icon: Settings, label: 'Settings' },
+    ];
+  }
 
   // Command palette commands
   const commands = [
@@ -883,8 +912,12 @@ const AppContent = () => {
         onMouseLeave={() => setSidebarExpanded(false)}
       >
         <div className="p-4 flex items-center gap-3 overflow-hidden border-b border-slate-800">
-          <div className="bg-gold-500 p-2 rounded-lg text-black font-bold shrink-0">⚡</div>
-          <h1 className={`font-serif text-2xl font-bold text-white tracking-tight whitespace-nowrap transition-opacity duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0'}`}>FIREFLOW</h1>
+          <div className="bg-gold-500 p-2 rounded-lg text-black font-bold shrink-0">
+            {currentRestaurant?.logo_url ? <img src={currentRestaurant.logo_url} className="w-5 h-5 rounded object-cover" /> : '⚡'}
+          </div>
+          <div className={`transition-opacity duration-300 ${sidebarExpanded ? 'opacity-100 flex-1' : 'opacity-0 w-0'}`}>
+            <h1 className="font-serif text-lg font-bold text-white tracking-tight truncate">{currentRestaurant?.name || 'FIREFLOW'}</h1>
+          </div>
         </div>
         <nav className="flex-1 px-2 space-y-1 py-4 overflow-y-auto custom-scrollbar">
           {menuItems.map((item) => (
@@ -914,6 +947,13 @@ const AppContent = () => {
                 <div className="text-gold-500 text-[8px] font-black uppercase tracking-widest">{currentUser?.role}</div>
               </div>
             </div>
+          </div>
+
+          {/* Cravex Branding */}
+          <div className={`transition-all duration-300 py-2 border-y border-slate-800/50 ${sidebarExpanded ? 'opacity-100 mx-2 block' : 'opacity-0 w-0 hidden'}`}>
+            <div className="text-[9px] text-slate-500 font-medium">Powered By</div>
+            <div className="text-[10px] font-bold text-gold-500">Fireflow</div>
+            <div className="text-[9px] text-slate-600">Cravex Solutions, Pakistan</div>
           </div>
 
           <button onClick={() => fetchInitialData()} className="w-full flex items-center gap-3 px-3 py-2 text-slate-500 hover:text-white text-[10px] font-black uppercase rounded-lg hover:bg-slate-800 transition-all">

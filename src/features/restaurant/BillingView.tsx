@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useRestaurant, formatCurrency } from '../../client/RestaurantContext';
-import { useAppContext } from '../../client/App';
 import { getPaymentHistory, getSubscriptionStatus } from '../../shared/lib/cloudClient';
 import {
   CreditCard,
@@ -8,12 +7,9 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
-  ChevronRight,
   Calendar,
-  DollarSign,
   Building2,
   Zap,
-  ArrowRight,
   Loader2
 } from 'lucide-react';
 import { PaymentSubmissionView } from '../../operations/pos/PaymentSubmissionView';
@@ -31,7 +27,7 @@ interface PaymentRecord {
 }
 
 export const BillingView: React.FC = () => {
-  const { currentRestaurant, daysUntilExpiry, isSubscriptionActive, hasPendingPayment } = useRestaurant();
+  const { currentRestaurant, daysUntilExpiry } = useRestaurant();
   const [paymentHistory, setPaymentHistory] = useState<PaymentRecord[]>([]);
   const [cloudStatus, setCloudStatus] = useState<'trial' | 'active' | 'expired' | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,13 +93,12 @@ export const BillingView: React.FC = () => {
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-bold text-white uppercase tracking-wider">Current Plan</h2>
                 <div
-                  className={`text-xs font-bold uppercase px-3 py-1 rounded-full border ${
-                    statusDisplay === 'trial'
-                      ? 'bg-amber-900/20 text-amber-400 border-amber-900/50'
-                      : statusDisplay === 'active'
-                        ? 'bg-green-900/20 text-green-400 border-green-900/50'
-                        : 'bg-red-900/20 text-red-400 border-red-900/50'
-                  }`}
+                  className={`text-xs font-bold uppercase px-3 py-1 rounded-full border ${statusDisplay === 'trial'
+                    ? 'bg-amber-900/20 text-amber-400 border-amber-900/50'
+                    : statusDisplay === 'active'
+                      ? 'bg-green-900/20 text-green-400 border-green-900/50'
+                      : 'bg-red-900/20 text-red-400 border-red-900/50'
+                    }`}
                 >
                   {statusDisplay === 'trial' ? 'Trial' : statusDisplay === 'active' ? 'Active' : 'Expired'}
                 </div>
@@ -207,11 +202,11 @@ export const BillingView: React.FC = () => {
                 <div className="space-y-2 text-xs">
                   <div>
                     <div className="text-slate-500 mb-1">JazzCash / EasyPaisa:</div>
-                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 font-mono text-gold-400">03XX-1234567</div>
+                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 font-mono text-gold-400">0332-9150000</div>
                   </div>
                   <div>
                     <div className="text-slate-500 mb-1">Account Name:</div>
-                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 text-slate-300">Fireflow Solutions</div>
+                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 text-slate-300">Cravex Solutions</div>
                   </div>
                 </div>
               </div>
@@ -220,10 +215,8 @@ export const BillingView: React.FC = () => {
                 <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-3">Bank Transfer</h3>
                 <div className="space-y-2 text-xs">
                   <div>
-                    <div className="text-slate-500 mb-1">IBAN (Meezan Bank):</div>
-                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 font-mono text-gold-400 text-[10px]">
-                      PK36MEZN0003240103123456
-                    </div>
+                    <div className="text-slate-500 mb-1">Bank Name:</div>
+                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 text-slate-300">Meezan Bank / Bank Alfalah</div>
                   </div>
                   <div>
                     <div className="text-slate-500 mb-1">Reference:</div>
@@ -275,13 +268,12 @@ export const BillingView: React.FC = () => {
                         <td className="px-6 py-4 text-sm text-slate-400">{payment.payment_method}</td>
                         <td className="px-6 py-4 text-sm">
                           <div
-                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold uppercase border ${
-                              payment.status === 'verified'
-                                ? 'bg-green-900/20 text-green-400 border-green-900/50'
-                                : payment.status === 'pending'
-                                  ? 'bg-amber-900/20 text-amber-400 border-amber-900/50'
-                                  : 'bg-red-900/20 text-red-400 border-red-900/50'
-                            }`}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold uppercase border ${payment.status === 'verified'
+                              ? 'bg-green-900/20 text-green-400 border-green-900/50'
+                              : payment.status === 'pending'
+                                ? 'bg-amber-900/20 text-amber-400 border-amber-900/50'
+                                : 'bg-red-900/20 text-red-400 border-red-900/50'
+                              }`}
                           >
                             {payment.status === 'verified' && <CheckCircle2 size={12} />}
                             {payment.status === 'pending' && <Clock size={12} />}
@@ -356,9 +348,8 @@ export const BillingView: React.FC = () => {
 
 const FeatureItem: React.FC<{ label: string; included: boolean }> = ({ label, included }) => (
   <div
-    className={`flex items-center gap-3 p-3 rounded-lg border ${
-      included ? 'bg-green-900/10 border-green-900/30 text-green-400' : 'bg-slate-800/50 border-slate-700 text-slate-500'
-    }`}
+    className={`flex items-center gap-3 p-3 rounded-lg border ${included ? 'bg-green-900/10 border-green-900/30 text-green-400' : 'bg-slate-800/50 border-slate-700 text-slate-500'
+      }`}
   >
     {included ? <CheckCircle2 size={18} className="shrink-0" /> : <XCircle size={18} className="shrink-0" />}
     <span className="text-sm font-medium">{label}</span>

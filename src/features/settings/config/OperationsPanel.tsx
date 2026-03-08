@@ -11,10 +11,10 @@ import { Save, Banknote, Percent, Users, Truck, Loader2, WifiOff } from 'lucide-
 // Import from src/lib/ (NOT src/shared/lib/)
 import { cacheSet, cacheGet, isOnline, getOperationsConfigKey, initializeCache } from '../../../lib/offlineCache';
 import { createAuditLog } from '../../../lib/auditLog';
-import { fetchJSONWithRetry } from '../../../lib/fetchRetry';
+import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 
 // API base URL for backend requests
-const API_BASE_URL = `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:3001/api`;
+const API_BASE_URL = 'http://localhost:3001/api';
 
 interface OperationsConfig {
   taxEnabled: boolean;
@@ -132,23 +132,22 @@ export const OperationsPanel: React.FC = () => {
         const cached = await cacheGet<OperationsConfig>('configs', cacheKey);
         if (cached) {
           setConfig(cached);
-          addNotification('info', 'Loaded offline configuration');
+          addNotification('info', 'Loaded offline configuration from Fireflow cloud');
           setIsLoading(false);
           return;
         }
       }
 
       // Fetch from API (will return defaults)
-      const data = await fetchJSONWithRetry<ConfigResponse>(
-        `${API_BASE_URL}/operations/config/${restaurantId}`,
-        undefined,
-        {
-          retries: 3,
-          onRetry: (attempt) => {
-            console.log(`Retrying config fetch (attempt ${attempt})...`);
-          }
-        }
+      const response = await fetchWithAuth(
+        `${API_BASE_URL}/operations/config/${restaurantId}`
       );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: Failed to load configuration`);
+      }
+
+      const data: ConfigResponse = await response.json();
 
       if (!data.success || !data.config) {
         throw new Error(data.error || 'Failed to load configuration');
@@ -229,11 +228,10 @@ export const OperationsPanel: React.FC = () => {
 
       setHasChanges(false);
 
-      // Try to notify backend (best effort, don't fail if it errors)
+      // Try to notify backend
       try {
-        await fetch(`${API_BASE_URL}/operations/config/${restaurantId}`, {
+        await fetchWithAuth(`${API_BASE_URL}/operations/config/${restaurantId}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ...config,
             staffId: currentUser.id
@@ -578,7 +576,7 @@ export const OperationsPanel: React.FC = () => {
               onClick={async () => {
                 if (confirm('Are you ABSOLUTELY SURE? This will WIPE ALL DATA (Orders, Customers, Sales). This cannot be undone.')) {
                   try {
-                    await fetch(`${API_BASE_URL}/system/dev-reset`, { method: 'POST' });
+                    await fetchWithAuth(`${API_BASE_URL}/system/dev-reset`, { method: 'POST' });
                     window.location.reload();
                   } catch (e) {
                     alert('Reset failed');

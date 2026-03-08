@@ -18,6 +18,9 @@ import deliveryRoutes from './routes/deliveryRoutes';
 import accountingRoutes from './routes/accountingRoutes';
 import customerRoutes from './routes/customerRoutes';
 import reportRoutes from './routes/reportRoutes';
+import coaRoutes from './routes/coaRoutes';
+import printerRoutes from './routes/printerRoutes';
+import { journalEntryService } from './services/JournalEntryService';
 import { jwtService } from './services/auth/JwtService';
 import { authMiddleware } from './middleware/authMiddleware';
 import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
@@ -266,29 +269,8 @@ app.post('/api/setup/activate', async (req, res) => {
         // Step 5: Activate the license key in Supabase (marks it as used)
         await activateLicenseKey(licenseKey.trim().toUpperCase(), restaurantId);
 
-        // Step 6: Write identity to .env file (persists across server restarts)
-        const fs = await import('fs');
-        const path = await import('path');
-        const envPath = path.resolve(process.cwd(), '.env');
-        let envContent = '';
-        try {
-            envContent = fs.readFileSync(envPath, 'utf8');
-        } catch {
-            // .env didn't exist; will create it
-        }
-
-        // Remove any existing RESTAURANT_ID or LICENSE_KEY lines then append
-        const filtered = envContent
-            .split('\n')
-            .filter(line => !line.startsWith('RESTAURANT_ID=') && !line.startsWith('LICENSE_KEY='))
-            .join('\n');
-
-        const newContent = `${filtered.trim()}\n\n# Written by FireFlow Activation\nRESTAURANT_ID=${restaurantId}\nLICENSE_KEY=${licenseKey.trim().toUpperCase()}\n`;
-        fs.writeFileSync(envPath, newContent, 'utf8');
-
-        // Step 7: Update process.env in memory so it takes effect immediately (no restart needed)
-        process.env.RESTAURANT_ID = restaurantId;
-        process.env.LICENSE_KEY = licenseKey.trim().toUpperCase();
+        // The .env write and process.env update is moved to create-manager 
+        // to prevent Vite from reloading the frontend prematurely!
 
         console.log(`[SETUP] ✅ Activation complete. Restaurant "${restaurantName}" registered with ID: ${restaurantId}`);
 
@@ -312,10 +294,10 @@ app.post('/api/setup/activate', async (req, res) => {
  * Only works if there are no existing staff for this restaurant.
  */
 app.post('/api/setup/create-manager', async (req, res) => {
-    const { name, pin, restaurantId } = req.body;
+    const { name, pin, restaurantId, licenseKey } = req.body;
 
-    if (!name || !pin || !restaurantId) {
-        return res.status(400).json({ error: 'name, pin, and restaurantId are required' });
+    if (!name || !pin || !restaurantId || !licenseKey) {
+        return res.status(400).json({ error: 'name, pin, restaurantId, and licenseKey are required' });
     }
 
     if (!/^\d{4,6}$/.test(pin)) {
@@ -341,6 +323,30 @@ app.post('/api/setup/create-manager', async (req, res) => {
                 status: 'ACTIVE',
             }
         });
+
+        // Step 6 & 7: Write identity to .env file now that manager is fully created!
+        const fs = await import('fs');
+        const path = await import('path');
+        const envPath = path.resolve(process.cwd(), '.env');
+        let envContent = '';
+        try {
+            envContent = fs.readFileSync(envPath, 'utf8');
+        } catch {
+            // .env didn't exist; will create it
+        }
+
+        // Remove any existing RESTAURANT_ID or LICENSE_KEY lines then append
+        const filtered = envContent
+            .split('\n')
+            .filter(line => !line.startsWith('RESTAURANT_ID=') && !line.startsWith('LICENSE_KEY='))
+            .join('\n');
+
+        const newContent = `${filtered.trim()}\n\n# Written by FireFlow Activation\nRESTAURANT_ID=${restaurantId}\nLICENSE_KEY=${licenseKey.trim().toUpperCase()}\n`;
+        fs.writeFileSync(envPath, newContent, 'utf8');
+
+        // Update process.env in memory so it takes effect immediately
+        process.env.RESTAURANT_ID = restaurantId;
+        process.env.LICENSE_KEY = licenseKey.trim().toUpperCase();
 
         console.log(`[SETUP] ✅ First manager created: ${manager.name} for restaurant ${restaurantId}`);
 
@@ -412,12 +418,24 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // Fetch specialized restaurant details for branding
-        const restaurant = await prisma.restaurants.findUnique({
-            where: { id: user.restaurant_id },
-            select: { id: true, name: true, slug: true, logo_url: true as any }
+        // Fetch specialized restaurant details for branding and billing
+        const restaurantRaw = await prisma.restaurants.findUnique({
+            where: { id: user.restaurant_id }
         });
 
+        const restaurant = restaurantRaw ? {
+            id: restaurantRaw.id,
+            name: restaurantRaw.name,
+            slug: restaurantRaw.slug,
+            logo_url: restaurantRaw.logo_url,
+            subscriptionStatus: restaurantRaw.subscription_status,
+            subscriptionPlan: restaurantRaw.subscription_plan,
+            subscriptionExpiresAt: restaurantRaw.subscription_expires_at,
+            trialEndsAt: restaurantRaw.trial_ends_at,
+            monthlyFee: restaurantRaw.monthly_fee ? Number(restaurantRaw.monthly_fee) : 0,
+            currency: restaurantRaw.currency,
+            createdAt: restaurantRaw.created_at
+        } : null;
 
         // Update last login timestamp
         const updatedUser = await prisma.staff.update({
@@ -703,7 +721,7 @@ app.post('/api/auth/refresh', async (req, res) => {
             where: { id: decoded.payload.staffId }
         });
 
-        if (!staff || staff.status !== 'active') {
+        if (!staff || staff.status?.toLowerCase() !== 'active') {
             return res.status(401).json({
                 error: 'Staff member is no longer active',
                 code: 'STAFF_INACTIVE'
@@ -987,6 +1005,77 @@ app.patch('/api/orders/:id', authMiddleware, async (req, res) => {
     }
 });
 
+// Unlock Order (Manager only)
+app.post('/api/orders/:id/unlock', authMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const staffId = req.staffId;
+        const restaurantId = req.restaurantId!;
+
+        // Ensure user is Manager/Admin
+        const staff = await prisma.staff.findUnique({ where: { id: staffId } });
+        if (!staff || !['ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(staff.role)) {
+            return res.status(403).json({ error: 'Only Managers can unlock orders.' });
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+            const order = await tx.orders.findFirst({
+                where: { id, restaurant_id: restaurantId }
+            });
+            if (!order) throw new Error('Order not found');
+
+            // 1. Update Order
+            const updatedOrder = await tx.orders.update({
+                where: { id },
+                data: {
+                    status: 'ACTIVE',
+                    payment_status: 'UNPAID',
+                    closed_at: null
+                }
+            });
+
+            // 2. Void Transactions
+            await tx.transactions.updateMany({
+                where: { order_id: id },
+                data: { status: 'VOIDED' }
+            });
+
+            // 3. Re-occupy Table if Dine-in
+            if (order.type === 'DINE_IN' && order.table_id) {
+                const table = await tx.tables.findUnique({ where: { id: order.table_id } });
+                if (table && table.status === 'AVAILABLE') {
+                    await tx.tables.update({
+                        where: { id: order.table_id },
+                        data: { status: 'OCCUPIED', active_order_id: id }
+                    });
+                }
+            }
+
+            // 4. Audit Log
+            await tx.audit_logs.create({
+                data: {
+                    restaurant_id: restaurantId,
+                    staff_id: staffId,
+                    action_type: 'ORDER_UNLOCKED',
+                    entity_type: 'orders',
+                    entity_id: id,
+                    details: { reason: reason || 'Manager unlocked order' }
+                }
+            });
+
+            return updatedOrder;
+        });
+
+        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', id });
+        res.json({ success: true, order: result });
+    } catch (e: any) {
+        console.error("POST /api/orders/:id/unlock error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+
 app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
@@ -1141,11 +1230,66 @@ app.post('/api/floor/seat-party', authMiddleware, async (req, res) => {
     }
 });
 
-// Mount delivery/rider routes (SaaS Protected)
-app.use('/api', authMiddleware, deliveryRoutes);
-app.use('/api', authMiddleware, customerRoutes);
-app.use('/api/accounting', authMiddleware, accountingRoutes);
-app.use('/api/reports', authMiddleware, reportRoutes);
+// Mount delivery/rider routes (SaaS Protected internally)
+app.use('/api', deliveryRoutes);
+app.use('/api', customerRoutes);
+app.use('/api/accounting', accountingRoutes);
+app.use('/api/accounting/coa', coaRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/api/printers', printerRoutes);
+
+// ─── Accounting / COA / Trial Balance routes ──────────────────────────────
+
+/** POST /api/accounting/coa/seed — One-time seeder for default chart of accounts */
+app.post('/api/accounting/coa/seed', authMiddleware, async (req, res) => {
+    try {
+        const restaurantId = req.restaurantId!;
+        const seeded = await journalEntryService.seedDefaultCOA(restaurantId);
+        res.json({ success: true, seeded: seeded.length, message: seeded.length ? `${seeded.length} accounts created` : 'COA already seeded' });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** GET /api/accounting/trial-balance — Returns aggregate DR/CR per account */
+app.get('/api/accounting/trial-balance', authMiddleware, async (req, res) => {
+    try {
+        const restaurantId = req.restaurantId!;
+        const { from, to } = req.query;
+        const rows = await journalEntryService.getTrialBalance(
+            restaurantId,
+            from ? new Date(from as string) : undefined,
+            to ? new Date(to as string) : undefined
+        );
+        res.json({ success: true, data: rows });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** GET /api/accounting/journals — Paginated journal entries with their lines */
+app.get('/api/accounting/journals', authMiddleware, async (req, res) => {
+    try {
+        const restaurantId = req.restaurantId!;
+        const page = parseInt((req.query.page as string) || '1');
+        const limit = parseInt((req.query.limit as string) || '25');
+        const prismaClient = (await import('@prisma/client')).PrismaClient;
+        const db = new prismaClient();
+        const [entries, total] = await Promise.all([
+            db.journal_entries.findMany({
+                where: { restaurant_id: restaurantId },
+                orderBy: { date: 'desc' },
+                skip: (page - 1) * limit,
+                take: limit,
+                include: { lines: { include: { chart_of_accounts: { select: { code: true, name: true, type: true } } } } }
+            }),
+            db.journal_entries.count({ where: { restaurant_id: restaurantId } })
+        ]);
+        res.json({ success: true, data: entries, total, page, pages: Math.ceil(total / limit) });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 /**
  * PATCH /api/orders/:id/guest-count
@@ -1253,6 +1397,24 @@ app.get('/api/super-admin/licenses', authMiddleware, async (req, res) => {
     }
 });
 
+// Delete license key (Hard delete)
+app.delete('/api/super-admin/licenses', authMiddleware, async (req, res) => {
+    console.log(`[HQ] DELETE request for license key: ${req.query.id}`);
+    if (req.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Super Admin privileges required' });
+    }
+    try {
+        const { id } = req.query;
+        if (!id) return res.status(400).json({ error: 'Missing ID' });
+        const result = await superAdminService.deleteLicenseKey(String(id));
+        res.json(result);
+    } catch (e: any) {
+        console.error('[HQ] License deletion error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Revoke license key (Soft delete/status change)
 app.delete('/api/super-admin/licenses/revoke', authMiddleware, async (req, res) => {
     if (req.role !== 'SUPER_ADMIN') {
         return res.status(403).json({ error: 'Super Admin privileges required' });
@@ -1387,22 +1549,24 @@ app.post('/api/menu_items', async (req, res) => {
         io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: item });
         res.json(item);
     } catch (e: any) {
+        console.error('POST /api/menu_items ERROR:', e);
         res.status(500).json({ error: e.message });
     }
 });
 
 app.patch('/api/menu_items', async (req, res) => {
-    const { id, restaurant_id, ...data } = req.body;
-    if (!id || !restaurant_id) return res.status(400).json({ error: 'Missing id or restaurant_id' });
     try {
-        // Security: Ensure item belongs to restaurant
+        const { id, ...data } = req.body;
+        if (!id) return res.status(400).json({ error: 'Item ID is required' });
+
         const item = await prisma.menu_items.update({
-            where: { id, restaurant_id }, // strict check
-            data
+            where: { id: String(id) },
+            data: data
         });
         io.emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: item });
         res.json(item);
     } catch (e: any) {
+        console.error('PATCH /api/menu_items ERROR:', e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -2690,6 +2854,12 @@ server.on('error', (err: NodeJS.ErrnoException) => {
     } else {
         throw err;
     }
+});
+
+// 404 Catch-all (Must be after all other routes)
+app.use((req, res, next) => {
+    console.warn(`[NOT_FOUND] 404: ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ error: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
 server.listen(PORT, '0.0.0.0', async () => {

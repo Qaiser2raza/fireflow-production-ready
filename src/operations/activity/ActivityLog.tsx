@@ -1,15 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App';
 import { Order, OrderType } from '../../shared/types';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 import {
    Search, Clock, Receipt, ArrowRight, ShoppingBag,
    Truck, Utensils, XCircle, CheckCircle2, History,
    FileText, Calendar, Wallet, HandCoins, Timer,
-   LayoutGrid, List as ListIcon, MoreHorizontal
+   LayoutGrid, List as ListIcon, MoreHorizontal, Unlock
 } from 'lucide-react';
 
 export const ActivityLog: React.FC = () => {
-   const { orders, tables, setOrderToEdit, setActiveView } = useAppContext();
+   const { orders, tables, setOrderToEdit, setActiveView, currentUser, addNotification, fetchInitialData } = useAppContext();
 
    // States
    const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED'>('ALL');
@@ -123,6 +124,28 @@ export const ActivityLog: React.FC = () => {
    const handleEditOrder = (order: Order) => {
       setOrderToEdit(order);
       setActiveView('POS');
+   };
+
+   const handleUnlockOrder = async (order: Order) => {
+      if (!confirm(`Are you sure you want to unlock Order #${order.order_number || order.id.slice(-4)}? This will void all associated transactions.`)) return;
+      try {
+         const res = await fetchWithAuth(`http://localhost:3001/api/orders/${order.id}/unlock`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: 'Manager manual unlock' })
+         });
+
+         if (!res.ok) {
+            const result = await res.json();
+            throw new Error(result.error || 'Failed to unlock order');
+         }
+
+         addNotification('success', 'Order unlocked and returned to ACTIVE state.');
+         setSelectedOrder(null);
+         fetchInitialData();
+      } catch (err: any) {
+         addNotification('error', err.message);
+      }
    };
 
    return (
@@ -554,16 +577,25 @@ export const ActivityLog: React.FC = () => {
                </div>
 
                {/* Command Override */}
-               {activeStatuses.includes(selectedOrder.status as string) && (
-                  <div className="p-6 border-t border-slate-800 bg-slate-950 shadow-[0_-10px_20_rgba(0,0,0,0.5)]">
+               <div className="p-6 border-t border-slate-800 bg-slate-950 shadow-[0_-10px_20_rgba(0,0,0,0.5)]">
+                  {activeStatuses.includes(selectedOrder.status as string) ? (
                      <button
                         onClick={() => handleEditOrder(selectedOrder)}
                         className="w-full py-5 bg-gradient-to-r from-gold-600 to-gold-400 text-slate-950 font-black uppercase tracking-[0.2em] rounded-2xl hover:from-gold-500 hover:to-gold-300 transition-all shadow-xl shadow-gold-500/20 flex items-center justify-center gap-3 active:scale-95 transition-transform"
                      >
                         <Receipt size={18} /> Recall Transaction
                      </button>
-                  </div>
-               )}
+                  ) : (
+                     ['ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(currentUser?.role || '') && (
+                        <button
+                           onClick={() => handleUnlockOrder(selectedOrder)}
+                           className="w-full py-5 bg-gradient-to-r from-rose-600/20 to-rose-400/20 text-rose-500 border border-rose-500/50 font-black uppercase tracking-[0.2em] rounded-2xl hover:bg-rose-500/30 transition-all shadow-xl flex items-center justify-center gap-3 active:scale-95 transition-transform"
+                        >
+                           <Unlock size={18} /> Unlock Order
+                        </button>
+                     )
+                  )}
+               </div>
             </div>
          )}
       </div>

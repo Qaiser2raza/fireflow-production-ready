@@ -38,7 +38,7 @@ interface Customer {
     addresses?: CustomerAddress[];
     // Intelligence Metrics (Mocked for now, will be linked to backend)
     ltv?: number;
-    aura_score?: number;
+    loyalty_score?: number;
     segment?: 'VIP' | 'REGULAR' | 'CHURN_RISK' | 'NEW';
 }
 
@@ -147,7 +147,7 @@ export const CustomersView: React.FC = () => {
 
             if (!response.ok) throw new Error('Failed to add address');
 
-            addNotification?.('success', 'Address added to Aura index');
+            addNotification?.('success', 'Address added to Fireflow index');
             setShowAddressModal(false);
             loadCustomers();
             setAddressForm({ label: 'Home', full_address: '', landmarks: '', is_default: false });
@@ -157,7 +157,7 @@ export const CustomersView: React.FC = () => {
     };
 
     const handleDeletePatron = async () => {
-        if (!selectedCustomerId || !window.confirm('Erase this patron from Aura Index? This action is permanent.')) return;
+        if (!selectedCustomerId || !window.confirm('Erase this patron from Fireflow Index? This action is permanent.')) return;
         try {
             const response = await fetchWithAuth(`${API_URL}/customers/${selectedCustomerId}`, { method: 'DELETE' });
             if (!response.ok) throw new Error('Delete failed');
@@ -247,7 +247,7 @@ export const CustomersView: React.FC = () => {
                             { label: 'Total Base', value: stats.total, icon: Users, color: 'text-blue-400', bg: 'bg-blue-500/10' },
                             { label: 'VIP Segments', value: stats.vips, icon: Award, color: 'text-amber-400', bg: 'bg-amber-500/10' },
                             { label: 'Retention Rate', value: '84%', icon: TrendingUp, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
-                            { label: 'Aura Rating', value: '4.8', icon: Zap, color: 'text-indigo-400', bg: 'bg-indigo-500/10' }
+                            { label: 'Loyalty Rating', value: '4.8', icon: Zap, color: 'text-indigo-400', bg: 'bg-indigo-500/10' }
                         ].map((stat, i) => (
                             <div key={i} className="bg-slate-900/40 border border-slate-800/50 p-6 rounded-[2rem] flex items-center gap-5 hover:border-indigo-500/30 transition-all group">
                                 <div className={`w-14 h-14 rounded-2xl ${stat.bg} flex items-center justify-center ${stat.color} group-hover:scale-110 transition-transform`}>
@@ -322,10 +322,10 @@ export const CustomersView: React.FC = () => {
                                         <p className="text-sm font-black text-white">Rs. {customer.ltv?.toLocaleString()}</p>
                                     </div>
                                     <div className="text-right">
-                                        <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-1">Aura Score</p>
+                                        <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-1">Loyalty Score</p>
                                         <div className="flex items-center justify-end gap-1">
                                             <Zap size={12} className="text-indigo-400 fill-indigo-400" />
-                                            <p className="text-sm font-black text-indigo-400">{customer.aura_score}</p>
+                                            <p className="text-sm font-black text-indigo-400">{customer.loyalty_score}</p>
                                         </div>
                                     </div>
                                 </div>
@@ -473,7 +473,7 @@ export const CustomersView: React.FC = () => {
                         <div className="p-10 border-b border-slate-800 bg-slate-900/20 flex justify-between items-center">
                             <div>
                                 <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Mission History</h2>
-                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">{selectedCustomer?.name}'s Aura Logs</p>
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">{selectedCustomer?.name}'s Activity Logs</p>
                             </div>
                             <button onClick={() => setShowHistory(false)} className="p-4 bg-slate-800 hover:bg-slate-700 rounded-2xl transition-all">
                                 <Trash2 size={20} className="rotate-45" />
@@ -509,7 +509,7 @@ export const CustomersView: React.FC = () => {
                     <div className="bg-[#0c111d] border border-slate-800 w-full max-w-xl rounded-[3rem] shadow-3xl overflow-hidden animate-in zoom-in-95 duration-300">
                         <div className="p-10 border-b border-slate-800 bg-slate-900/20">
                             <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Edit Identity</h2>
-                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">Modify Patron Aura Index</p>
+                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">Modify Patron Identity Index</p>
                         </div>
                         <form onSubmit={handleUpdatePatron} className="p-10 space-y-6">
                             <div className="grid grid-cols-2 gap-6">
@@ -547,7 +547,7 @@ export const CustomersView: React.FC = () => {
                     <div className="bg-[#0c111d] border border-slate-800 w-full max-w-xl rounded-[3rem] shadow-3xl overflow-hidden animate-in zoom-in-95 duration-300">
                         <div className="p-10 border-b border-slate-800 bg-slate-900/20">
                             <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Patron Registration</h2>
-                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">Create new profile in Aura database</p>
+                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">Create new profile in Fireflow database</p>
                         </div>
                         <form onSubmit={handleAddCustomer} className="p-10 space-y-6">
                             <div className="grid grid-cols-2 gap-6">

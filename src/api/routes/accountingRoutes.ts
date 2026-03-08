@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { AccountingService } from '../services/AccountingService';
 import { z } from 'zod';
+import { authMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
+router.use(authMiddleware);
 // const prisma = new PrismaClient(); // Unused
 const accounting = new AccountingService();
 

@@ -20,6 +20,7 @@ import {
   Lock,
   FileText
 } from 'lucide-react';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 // Custom components from your UI library
 import { Modal } from '../../shared/ui/Modal';
@@ -430,7 +431,7 @@ export const OrdersView: React.FC = () => {
               onClick={async () => {
                 // Verify PIN
                 try {
-                  const res = await fetch('/api/auth/verify-pin', {
+                  const res = await fetchWithAuth('/api/auth/verify-pin', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ pin: managerPin, requiredRole: 'MANAGER' })

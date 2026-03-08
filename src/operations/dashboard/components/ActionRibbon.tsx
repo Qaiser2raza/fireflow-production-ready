@@ -70,7 +70,7 @@ export const ActionRibbon: React.FC<ActionRibbonProps> = ({
 
                 <div className="flex items-center gap-6">
                     <div className="flex flex-col items-end">
-                        <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Aura Performance</span>
+                        <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">System Performance</span>
                         <div className="flex items-center gap-2">
                             <div className="flex gap-1">
                                 {[1, 2, 3, 4, 5].map(i => (

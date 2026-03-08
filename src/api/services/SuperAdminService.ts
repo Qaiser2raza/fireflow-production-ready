@@ -127,6 +127,9 @@ export class SuperAdminService {
      */
     async revokeLicenseKey(id: string) {
         const { revokeLicenseKey: cloudRevoke } = await import('../../shared/lib/cloudClient');
+
+        // Check if it's unused, if so we might want to delete instead of just revoke
+        // For simplicity, we'll offer a separate delete method, but here we just revoke
         const cloudResult = await cloudRevoke(id);
 
         if (cloudResult.error) {
@@ -137,6 +140,25 @@ export class SuperAdminService {
         await prisma.license_keys.updateMany({
             where: { id: id },
             data: { is_active: false }
+        });
+        return { success: true };
+    }
+
+    /**
+     * Delete a license key (Hard delete)
+     */
+    async deleteLicenseKey(id: string) {
+        const { deleteLicenseKey: cloudDelete } = await import('../../shared/lib/cloudClient');
+
+        // 1. Delete from Cloud
+        const cloudResult = await cloudDelete(id);
+        if (cloudResult.error) {
+            throw new Error(`Cloud Deletion Failed: ${cloudResult.error}`);
+        }
+
+        // 2. Delete from local if exists
+        await prisma.license_keys.deleteMany({
+            where: { id: id }
         });
 
         return { success: true };

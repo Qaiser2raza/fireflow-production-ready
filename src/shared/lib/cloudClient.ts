@@ -20,14 +20,14 @@ export interface RestaurantRegistrationData {
   phone: string;
   city: string;
   slug: string;
-  subscriptionPlan: 'BASIC' | 'STANDARD' | 'PREMIUM';
+  subscriptionPlan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
 }
 
 export interface LicenseKeyResponse {
   data: {
     id: string;
     key: string;
-    plan: 'BASIC' | 'STANDARD' | 'PREMIUM';
+    plan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
     status: 'unused' | 'active' | 'revoked';
   } | null;
   error: string | null;
@@ -57,7 +57,7 @@ export interface RegisterRestaurantResponse {
 export interface SubscriptionStatusResponse {
   data: {
     status: 'trial' | 'active' | 'expired';
-    plan: 'BASIC' | 'STANDARD' | 'PREMIUM';
+    plan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
     expiryDate: string | null;
     monthlyFee: number;
     currency: string;
@@ -80,7 +80,7 @@ export interface PaymentProofResponse {
 export interface LicenseKey {
   id: string;
   key: string;
-  plan: 'BASIC' | 'STANDARD' | 'PREMIUM';
+  plan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
   status: 'unused' | 'active' | 'revoked';
   restaurant_id: string | null;
   restaurant_name: string | null;
@@ -539,7 +539,7 @@ export async function submitPaymentProof(
  * Generate a new license key in format: FIRE-XXXX-XXXX-XXXX
  * Safe characters exclude: 0, O, 1, I (confusing)
  */
-export async function generateLicenseKey(plan: 'BASIC' | 'STANDARD' | 'PREMIUM'): Promise<{ data: { key: string; id: string } | null; error: string | null }> {
+export async function generateLicenseKey(plan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE'): Promise<{ data: { key: string; id: string } | null; error: string | null }> {
   try {
     const SAFE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -699,6 +699,41 @@ export async function revokeLicenseKey(keyId: string): Promise<{ data: boolean |
 }
 
 /**
+ * Permanently delete a license key from the cloud
+ * (Only allowed for unused or revoked keys)
+ */
+export async function deleteLicenseKey(keyId: string): Promise<{ data: boolean | null; error: string | null }> {
+  try {
+    const client = getCloudClient();
+
+    const { error } = await client
+      .from('license_keys')
+      .delete()
+      .eq('id', keyId);
+
+    if (error) {
+      return {
+        data: null,
+        error: `Failed to delete license key: ${error.message}`
+      };
+    }
+
+    console.log(`[CLOUD] Permanently deleted license key: ${keyId}`);
+
+    return {
+      data: true,
+      error: null
+    };
+  } catch (error: any) {
+    console.error('[CLOUD] deleteLicenseKey error:', error.message);
+    return {
+      data: null,
+      error: 'Failed to delete license key'
+    };
+  }
+}
+
+/**
  * Get payment history for a restaurant
  */
 export async function getPaymentHistory(restaurantId: string): Promise<{ data: any[] | null; error: string | null }> {
@@ -739,13 +774,14 @@ export async function getPaymentHistory(restaurantId: string): Promise<{ data: a
 /**
  * Get monthly subscription fee based on plan
  */
-function getMonthlyFeeForPlan(plan: 'BASIC' | 'STANDARD' | 'PREMIUM'): number {
+function getMonthlyFeeForPlan(plan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE'): number {
   const fees: Record<string, number> = {
-    BASIC: 4999,      // Rs. 4,999
-    STANDARD: 9999,   // Rs. 9,999
-    PREMIUM: 19999    // Rs. 19,999
+    BASIC: 5000,      // Rs. 5,000
+    STANDARD: 10000,  // Rs. 10,000 (Updated from 8000)
+    PREMIUM: 18000,   // Rs. 18,000 (Updated from 15000)
+    ENTERPRISE: 35000 // Rs. 35,000 (New Tier)
   };
-  return fees[plan] || 4999;
+  return fees[plan] || 5000;
 }
 
 /**

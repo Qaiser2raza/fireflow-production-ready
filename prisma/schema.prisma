@@ -404,6 +404,9 @@ model restaurants {
   parked_orders          parked_orders[]
   rider_settlements      rider_settlements[]
   system_logs            system_logs[]
+  printers               printers[]
+  chart_of_accounts      chart_of_accounts[]
+  journal_entries        journal_entries[]
 
   @@index([slug])
 }
@@ -553,6 +556,7 @@ model stations {
   created_at    DateTime      @default(now())
   menu_items    menu_items[]
   order_items   order_items[]
+  printers      printers[]
   restaurants   restaurants   @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
   @@unique([restaurant_id, name])
@@ -666,6 +670,14 @@ enum TableStatus {
   OUT_OF_SERVICE
 }
 
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
 model ledger_entries {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id    String   @db.Uuid
@@ -706,4 +718,63 @@ model cash_sessions {
   status           String    @default("OPEN") @db.VarChar(20)
   notes            String?
   restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
+model printers {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String       @db.Uuid
+  name             String       @db.VarChar(50)
+  ip_address       String       @db.VarChar(50)
+  port             Int          @default(9100)
+  station_id       String       @db.Uuid
+  is_active        Boolean      @default(true)
+  created_at       DateTime     @default(now()) @db.Timestamp(6)
+  updated_at       DateTime     @default(now()) @db.Timestamp(6)
+  restaurants      restaurants  @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  stations         stations     @relation(fields: [station_id], references: [id])
+
+  @@unique([restaurant_id, ip_address])
+}
+
+model chart_of_accounts {
+  id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String               @db.Uuid
+  code             String               @db.VarChar(20)
+  name             String               @db.VarChar(100)
+  type             AccountType
+  description      String?
+  parent_id        String?              @db.Uuid
+  is_active        Boolean              @default(true)
+  created_at       DateTime             @default(now()) @db.Timestamp(6)
+  updated_at       DateTime             @default(now()) @db.Timestamp(6)
+  restaurants      restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  parent           chart_of_accounts?   @relation("SubAccounts", fields: [parent_id], references: [id])
+  children         chart_of_accounts[]  @relation("SubAccounts")
+  journal_entry_lines journal_entry_lines[]
+
+  @@unique([restaurant_id, code])
+}
+
+model journal_entries {
+  id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String               @db.Uuid
+  reference_type   String               @db.VarChar(50)
+  reference_id     String?              @db.Uuid
+  date             DateTime             @db.Timestamp(6)
+  description      String?
+  processed_by     String?              @db.Uuid
+  created_at       DateTime             @default(now()) @db.Timestamp(6)
+  restaurants      restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  lines            journal_entry_lines[]
+}
+
+model journal_entry_lines {
+  id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  journal_entry_id String               @db.Uuid
+  account_id       String               @db.Uuid
+  description      String?
+  debit            Decimal              @default(0) @db.Decimal(15, 4)
+  credit           Decimal              @default(0) @db.Decimal(15, 4)
+  journal_entries  journal_entries      @relation(fields: [journal_entry_id], references: [id], onDelete: Cascade)
+  chart_of_accounts chart_of_accounts   @relation(fields: [account_id], references: [id])
 }

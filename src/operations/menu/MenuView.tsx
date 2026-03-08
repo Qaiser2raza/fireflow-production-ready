@@ -141,10 +141,11 @@ export const MenuView: React.FC = () => {
     e.preventDefault();
     const payload = {
       ...formData,
-      price: parseFloat(formData.price),
-      cost_price: parseFloat(formData.cost_price),
+      price: parseFloat(formData.price) || 0,
+      cost_price: parseFloat(formData.cost_price) || 0,
       daily_stock: parseInt(formData.daily_stock) || 0,
       station: stations.find(s => s.id === formData.station_id)?.name || formData.station || 'KITCHEN',
+      category: menuCategories.find(c => c.id === formData.category_id)?.name || 'General',
       id: editingItem?.id
     };
 

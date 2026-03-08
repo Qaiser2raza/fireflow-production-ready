@@ -1,15 +1,18 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAppContext } from '../../client/contexts/AppContext';
+import { useRestaurant } from '../../client/RestaurantContext';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 import {
-  TrendingUp, Users, Activity,
+  TrendingUp, Users, Activity, Clock, HeartPulse,
   Banknote, ShoppingBag, AlertCircle, Bike, Zap, Navigation
 } from 'lucide-react';
 import { Card } from '../../shared/ui/Card';
+import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 
 export const DashboardView: React.FC = () => {
   const { currentUser } = useAppContext();
+  const { currentRestaurant } = useRestaurant();
   const [stats, setStats] = useState<any>({
     totalSales: 0,
     totalTransactions: 0,
@@ -22,6 +25,8 @@ export const DashboardView: React.FC = () => {
       deliveredToday: 0
     }
   });
+  const [productMix, setProductMix] = useState<any[]>([]);
+  const [velocity, setVelocity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchAnalytics = async () => {
@@ -36,6 +41,19 @@ export const DashboardView: React.FC = () => {
       if (data && data.totalSales !== undefined) {
         setStats(data);
       }
+      const todayStr = new Date().toISOString().split('T')[0];
+      const resMix = await fetchWithAuth(`http://localhost:3001/api/reports/product-mix?start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
+      const resVel = await fetchWithAuth(`http://localhost:3001/api/reports/velocity?start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
+
+      if (resMix.ok) {
+        const pmixData = await resMix.json();
+        setProductMix(pmixData.data?.slice(0, 5) || []);
+      }
+      if (resVel.ok) {
+        const velData = await resVel.json();
+        setVelocity(velData.data || []);
+      }
+
     } catch (err) {
       console.error("Failed to load analytics", err);
     } finally {
@@ -81,15 +99,18 @@ export const DashboardView: React.FC = () => {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
-            <span className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em]">System Online</span>
+            <span className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em]">{currentUser?.restaurant_id ? 'Live System' : 'Offline Mode'}</span>
           </div>
-          <h1 className="text-4xl font-serif font-black text-white tracking-tighter">AURA <span className="text-slate-500 font-normal">Command</span></h1>
+          <h1 className="text-4xl font-serif font-black text-white tracking-tighter uppercase transition-all">
+            {currentRestaurant?.name || 'FireFlow'} <span className="text-slate-500 font-normal">Dashboard</span>
+          </h1>
+          <p className="text-[9px] text-slate-600 font-bold uppercase tracking-[0.2em] mt-1">Cravex Solutions Pakistan</p>
         </div>
 
         <div className="flex gap-3">
           <div className="bg-slate-900/50 border border-slate-800 px-4 py-2 rounded-xl text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-black">Local Server</div>
-            <div className="text-xs font-mono text-emerald-400">0.0.0.0:3001</div>
+            <div className="text-[10px] text-slate-500 uppercase font-black">Fireflow POS</div>
+            <div className="text-xs font-mono text-emerald-400">Ver 3.0.1 - {currentRestaurant?.slug || 'POS-01'}</div>
           </div>
         </div>
       </div>
@@ -183,6 +204,67 @@ export const DashboardView: React.FC = () => {
           </Card>
         </div>
 
+      </div>
+
+      {/* CHARTS SECTION */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8 pb-10">
+
+        {/* VELOCITY CHART */}
+        <div className="bg-[#0B0F19]/50 border border-slate-800/80 rounded-2xl p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <HeartPulse size={16} className="text-rose-400" />
+            <h3 className="text-white text-xs font-black uppercase tracking-[0.2em]">Sales Velocity (Today)</h3>
+          </div>
+          <div className="h-64">
+            {velocity.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-slate-500 font-mono text-xs">Awaiting data...</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={velocity}>
+                  <defs>
+                    <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="hour" stroke="#334155" fontSize={10} tickFormatter={(val) => `${val}:00`} />
+                  <YAxis stroke="#334155" fontSize={10} tickFormatter={(val) => `Rs.${val / 1000}k`} />
+                  <RechartsTooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '12px' }}
+                    itemStyle={{ color: '#10b981', fontWeight: 'bold' }}
+                  />
+                  <Area type="monotone" dataKey="revenue" stroke="#10b981" fillOpacity={1} fill="url(#colorSales)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        {/* PMIX CHART */}
+        <div className="bg-[#0B0F19]/50 border border-slate-800/80 rounded-2xl p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <TrendingUp size={16} className="text-gold-500" />
+            <h3 className="text-white text-xs font-black uppercase tracking-[0.2em]">Product Mix (Top 5)</h3>
+          </div>
+          <div className="h-64">
+            {productMix.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-slate-500 font-mono text-xs">Awaiting data...</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={productMix} layout="vertical" margin={{ left: -20 }}>
+                  <XAxis type="number" stroke="#334155" fontSize={10} />
+                  <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={10} width={120} tick={{ fill: '#94a3b8' }} />
+                  <RechartsTooltip
+                    cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '12px' }}
+                    itemStyle={{ color: '#eab308', fontWeight: 'bold' }}
+                  />
+                  <Bar dataKey="quantity" fill="#eab308" radius={[0, 4, 4, 0]} barSize={20} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* FOOTER ALERT BAR */}

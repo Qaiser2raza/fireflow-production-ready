@@ -17,12 +17,23 @@ interface RestaurantWithOwner {
   name: string;
   city: string;
   subscription_status: 'trial' | 'active' | 'expired';
-  subscription_plan: 'BASIC' | 'STANDARD' | 'PREMIUM';
+  subscription_plan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
   ownerName?: string;
   staffCount: number;
   orderCount: number;
   createdAt: string;
 }
+
+// ==========================================
+// CONSTANTS
+// ==========================================
+
+const PLAN_COSTS = {
+  BASIC: 5000,
+  STANDARD: 10000,
+  PREMIUM: 18000,
+  ENTERPRISE: 35000
+};
 
 // ==========================================
 // SUPER ADMIN VIEW
@@ -39,7 +50,7 @@ export const SuperAdminView: React.FC = () => {
   // License management state
   const [licenses, setLicenses] = useState<LicenseKey[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
-  const [selectedPlan, setSelectedPlan] = useState<'BASIC' | 'STANDARD' | 'PREMIUM'>('BASIC');
+  const [selectedPlan, setSelectedPlan] = useState<'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE'>('BASIC');
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isVerifying, setIsVerifying] = useState<string | null>(null);
@@ -153,6 +164,45 @@ export const SuperAdminView: React.FC = () => {
     }
   };
 
+  const handleDeleteLicense = async (id: string) => {
+    if (!window.confirm('Permanently delete this license key? This action cannot be undone.')) return;
+
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/super-admin/licenses?id=${id}`, {
+        method: 'DELETE'
+      });
+
+      if (res.ok) {
+        setLicenses(prev => prev.filter(l => l.id !== id));
+      } else {
+        // Try to parse JSON, fallback to status text
+        let errorMessage = 'Failed to delete license';
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const data = await res.json();
+          errorMessage = data.error || errorMessage;
+        } else {
+          const text = await res.text();
+          if (res.status === 404) {
+            errorMessage = 'Endpoint not found (404). Please ensure the backend server has been restarted to apply the new routes.';
+          } else {
+            errorMessage = `Server Error (${res.status}): ${text.substring(0, 100)}`;
+          }
+        }
+        alert(errorMessage);
+      }
+    } catch (err: any) {
+      console.error('License delete error:', err);
+      alert('Network error or server unavailable. Check if the backend is running on port 3001.');
+    }
+  };
+
+  const handleManageRestaurant = (r: RestaurantWithOwner) => {
+    // In a full implementation, this could open a shell to that restaurant
+    // For now, let's show an insight summary
+    alert(`Establishing Secure Management Link to ${r.name}...\nLocation: ${r.city}\nActive Orders: ${r.orderCount}\nPlan: ${r.subscription_plan}`);
+  };
+
   const filteredRestaurants = restaurants.filter(r =>
     r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     r.city?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -160,7 +210,7 @@ export const SuperAdminView: React.FC = () => {
 
   const monthlyRevenue = restaurants
     .filter(r => r.subscription_status === 'active')
-    .reduce((acc, r) => acc + (r.subscription_plan === 'PREMIUM' ? 15000 : r.subscription_plan === 'STANDARD' ? 8000 : 5000), 0);
+    .reduce((acc, r) => acc + (PLAN_COSTS[r.subscription_plan] || 0), 0);
 
   if (loading) return (
     <div className="min-h-screen bg-[#020617] flex items-center justify-center">
@@ -216,11 +266,31 @@ export const SuperAdminView: React.FC = () => {
 
       <main className="flex-1 max-w-7xl mx-auto w-full p-6 overflow-y-auto">
         {activeTab === 'overview' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <KPICard title="Total Partners" value={restaurants.length} icon={<Building2 size={20} />} color="text-blue-500" bgColor="bg-blue-500/10" />
-            <KPICard title="Projected ARR" value={`Rs. ${(monthlyRevenue * 12).toLocaleString()}`} icon={<Banknote size={20} />} color="text-gold-500" bgColor="bg-gold-500/10" />
-            <KPICard title="Active Licenses" value={licenses.filter(l => l.status === 'active').length} icon={<Zap size={20} />} color="text-purple-500" bgColor="bg-purple-500/10" />
-            <StatusDistribution restaurants={restaurants} />
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <KPICard title="Total Partners" value={restaurants.length} icon={<Building2 size={20} />} color="text-blue-500" bgColor="bg-blue-500/10" />
+              <KPICard title="Projected ARR" value={`Rs. ${(monthlyRevenue * 12).toLocaleString()}`} icon={<Banknote size={20} />} color="text-gold-500" bgColor="bg-gold-500/10" />
+              <KPICard title="Active Licenses" value={licenses.filter(l => l.status === 'active').length} icon={<Zap size={20} />} color="text-purple-500" bgColor="bg-purple-500/10" />
+              <StatusDistribution restaurants={restaurants} />
+            </div>
+
+            {/* Plan Cost Breakdown Card */}
+            <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <Shield className="text-gold-500" size={24} />
+                <h2 className="text-xl font-serif font-bold text-white uppercase tracking-tight">SaaS Subscription Plans</h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                {Object.entries(PLAN_COSTS).map(([plan, cost]) => (
+                  <div key={plan} className="bg-slate-950/50 border border-slate-800 rounded-xl p-6 hover:border-gold-500/30 transition-all">
+                    <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] mb-1">{plan} TIER</p>
+                    <p className="text-2xl font-serif font-black text-white">Rs. {cost.toLocaleString()}<span className="text-xs text-slate-500 font-medium font-sans"> /mo</span></p>
+                    <div className="mt-4 h-1 w-12 bg-gold-500/50 rounded-full"></div>
+                    <p className="mt-4 text-xs text-slate-400 font-medium">Standard billing cycle applied to all active establishments on this tier.</p>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
@@ -268,7 +338,10 @@ export const SuperAdminView: React.FC = () => {
                     >
                       {isDeleting === r.id ? <Loader2 size={20} className="animate-spin" /> : <Trash2 size={20} />}
                     </button>
-                    <button className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-bold flex items-center gap-2 transition-all">
+                    <button
+                      onClick={() => handleManageRestaurant(r)}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-bold flex items-center gap-2 transition-all"
+                    >
                       Manage <ChevronRight size={16} />
                     </button>
                   </div>
@@ -376,8 +449,8 @@ export const SuperAdminView: React.FC = () => {
                     <p className="text-slate-500 text-sm mt-2">Generate cryptographically secure keys for enterprise partners.</p>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-3">
-                    {['BASIC', 'STANDARD', 'PREMIUM'].map(plan => (
+                  <div className="grid grid-cols-4 gap-3">
+                    {['BASIC', 'STANDARD', 'PREMIUM', 'ENTERPRISE'].map(plan => (
                       <button
                         key={plan}
                         onClick={() => setSelectedPlan(plan as any)}
@@ -461,31 +534,20 @@ export const SuperAdminView: React.FC = () => {
                         </td>
                         <td className="px-6 py-5 text-slate-400 font-medium">{lic.restaurant_name || '—'}</td>
                         <td className="px-6 py-5 text-right">
-                          <div className="flex justify-end gap-2">
+                          <div className="flex justify-end gap-2 text-right">
                             <button
                               onClick={() => navigator.clipboard.writeText(lic.key)}
                               className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all"
                             >
                               <Copy size={16} />
                             </button>
-                            {lic.status !== 'revoked' && (
-                              <button
-                                onClick={async () => {
-                                  if (window.confirm('Revoke this license? Cloud access will immediately terminate.')) {
-                                    try {
-                                      await fetchWithAuth(`${API_BASE}/super-admin/licenses/revoke?id=${lic.id}`, { method: 'DELETE' });
-                                      fetchLicenses();
-                                    } catch (err) {
-                                      console.error('Revocation error:', err);
-                                    }
-                                  }
-                                }}
-                                className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
-                                title="Revoke Key"
-                              >
-                                <XCircle size={18} />
-                              </button>
-                            )}
+                            <button
+                              onClick={() => handleDeleteLicense(lic.id)}
+                              className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                              title="Delete License Key"
+                            >
+                              <Trash2 size={18} />
+                            </button>
                           </div>
                         </td>
                       </tr>

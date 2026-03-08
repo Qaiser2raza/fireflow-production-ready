@@ -113,6 +113,7 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
                     name: state.managerName.trim(),
                     pin: state.managerPin,
                     restaurantId: state.activatedRestaurantId,
+                    licenseKey: state.licenseKey
                 })
             });
 
@@ -121,6 +122,10 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
                 setError(result.error || 'Failed to create manager account');
                 return;
             }
+
+            // Clear any stale local data before finishing
+            localStorage.clear();
+            sessionStorage.clear();
 
             setStep('done');
         } catch (err) {
@@ -162,10 +167,10 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
                         <div
                             key={s}
                             className={`rounded-full transition-all duration-500 ${s === step
-                                    ? 'w-6 h-2 bg-gold-500'
-                                    : ['key', 'details', 'activating', 'manager-setup', 'done'].indexOf(step) > i
-                                        ? 'w-2 h-2 bg-green-500'
-                                        : 'w-2 h-2 bg-slate-700'
+                                ? 'w-6 h-2 bg-gold-500'
+                                : ['key', 'details', 'activating', 'manager-setup', 'done'].indexOf(step) > i
+                                    ? 'w-2 h-2 bg-green-500'
+                                    : 'w-2 h-2 bg-slate-700'
                                 }`}
                         />
                     ))}

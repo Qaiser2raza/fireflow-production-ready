@@ -181,8 +181,8 @@ function startServer() {
         });
     } else {
         console.log('Starting server in PRODUCTION mode (spawn)');
-        // Use 'npm run server' to handle TS execution via tsx, preserving production environment
-        serverProcess = spawn(cmd, ['run', 'server'], {
+        // In production, execute the bundled server directly
+        serverProcess = spawn('node', ['server.cjs'], {
             env: { ...process.env, NODE_ENV: 'production' },
             stdio: 'inherit',
             shell: true

@@ -1,16 +1,17 @@
 import { Table } from '../types';
+import { fetchWithAuth } from './authInterceptor';
 
 const API_URL = 'http://localhost:3001/api';
 
 export const tableService = {
     fetchTables: async (restaurantId: string): Promise<Table[]> => {
-        const res = await fetch(`${API_URL}/tables?restaurant_id=${restaurantId}`);
+        const res = await fetchWithAuth(`${API_URL}/tables?restaurant_id=${restaurantId}`);
         if (!res.ok) throw new Error('Failed to fetch tables');
         return res.json();
     },
 
     createTable: async (data: Partial<Table>): Promise<Table> => {
-        const res = await fetch(`${API_URL}/tables`, {
+        const res = await fetchWithAuth(`${API_URL}/tables`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
@@ -20,7 +21,7 @@ export const tableService = {
     },
 
     updateTable: async (id: string, data: Partial<Table>): Promise<Table> => {
-        const res = await fetch(`${API_URL}/tables`, {
+        const res = await fetchWithAuth(`${API_URL}/tables`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id, ...data })
@@ -30,7 +31,7 @@ export const tableService = {
     },
 
     deleteTable: async (id: string): Promise<void> => {
-        const res = await fetch(`${API_URL}/tables?id=${id}`, { method: 'DELETE' });
+        const res = await fetchWithAuth(`${API_URL}/tables?id=${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Failed to delete table');
     }
 };

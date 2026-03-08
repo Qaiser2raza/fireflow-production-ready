@@ -83,8 +83,9 @@ export interface Restaurant {
     name: string;
     phone?: string;
     address?: string;
+    logo_url?: string;
     subscriptionStatus: 'trial' | 'active' | 'expired' | 'cancelled';
-    subscriptionPlan: 'BASIC' | 'STANDARD' | 'PREMIUM';
+    subscriptionPlan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
     subscriptionExpiresAt: Date;
     trialEndsAt?: Date;
     createdAt: Date;

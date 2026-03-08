@@ -2,8 +2,10 @@
 import { Router } from 'express';
 import * as ReportsService from '../services/ReportsService';
 import { z } from 'zod';
+import { authMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
+router.use(authMiddleware);
 
 const reportQuerySchema = z.object({
     start: z.string().datetime(),
