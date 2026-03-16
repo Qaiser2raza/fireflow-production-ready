@@ -503,8 +503,8 @@ export class AccountingService {
     }
 
     /**
-     * GENREATE FULL Z-REPORT (End of Day Summary)
-     * Provides category breakdowns, payment methods, and hourly velocity.
+     * GENERATE FULL Z-REPORT (End of Day Summary)
+     * Full audit-grade report with staff, tax, voids, velocity, and payout breakdown.
      */
     async getZReport(sessionId: string) {
         const session = await prisma.cash_sessions.findUnique({
@@ -516,93 +516,170 @@ export class AccountingService {
         const startTime = session.opened_at;
         const endTime = session.closed_at || new Date();
 
-        // 1. Fetch all orders in this session window
-        const orders = await prisma.orders.findMany({
-            where: {
-                restaurant_id: session.restaurant_id,
-                created_at: { gte: startTime, lte: endTime },
-                status: 'CLOSED'
-            },
-            include: {
-                order_items: true,
-                transactions: true
-            } as any
+        // --- Fetch all data in parallel ---
+        const [orders, ledgerEntries, payoutsData, voidedOrders, cancelledOrders, opener, closer] = await Promise.all([
+            prisma.orders.findMany({
+                where: {
+                    restaurant_id: session.restaurant_id,
+                    created_at: { gte: startTime, lte: endTime },
+                    status: 'CLOSED'
+                },
+                include: { order_items: true, transactions: true } as any
+            }),
+            prisma.ledger_entries.findMany({
+                where: {
+                    restaurant_id: session.restaurant_id,
+                    created_at: { gte: startTime, lte: endTime }
+                }
+            }),
+            prisma.payouts.findMany({
+                where: {
+                    restaurant_id: session.restaurant_id,
+                    created_at: { gte: startTime, lte: endTime }
+                }
+            }),
+            prisma.orders.findMany({
+                where: {
+                    restaurant_id: session.restaurant_id,
+                    created_at: { gte: startTime, lte: endTime },
+                    status: 'VOIDED'
+                },
+                select: { id: true, total: true, type: true, voided_at: true, void_reason: true }
+            }),
+            prisma.orders.findMany({
+                where: {
+                    restaurant_id: session.restaurant_id,
+                    created_at: { gte: startTime, lte: endTime },
+                    status: 'CANCELLED'
+                },
+                select: { id: true, total: true, type: true, cancelled_at: true, cancellation_reason: true }
+            }),
+            session.opened_by ? prisma.staff.findUnique({ where: { id: session.opened_by }, select: { name: true } }) : null,
+            session.closed_by ? prisma.staff.findUnique({ where: { id: session.closed_by }, select: { name: true } }) : null,
+        ]);
+
+        // --- Initialise accumulators ---
+        const summary = {
+            gross_sales: new Decimal(0),
+            net_sales: new Decimal(0),
+            total_tax: new Decimal(0),
+            total_sc: new Decimal(0),
+            total_delivery_fees: new Decimal(0),
+            total_discounts: new Decimal(0),
+            order_count: orders.length,
+            avg_order_value: new Decimal(0),
+        };
+
+        const paymentMethods: Record<string, Decimal> = {};
+        const orderTypes: Record<string, { count: number; revenue: Decimal }> = {};
+        const categoryBreakdown: Record<string, Decimal> = {};
+        const hourlyVelocity: Record<number, { count: number; revenue: Decimal }> = {};
+
+        // --- Process closed orders ---
+        orders.forEach((order: any) => {
+            const total = new Decimal(order.total.toString());
+            const tax = new Decimal((order.tax || 0).toString());
+            const sc = new Decimal((order.service_charge || 0).toString());
+            const df = new Decimal((order.delivery_fee || 0).toString());
+            const disc = new Decimal((order.discount || 0).toString());
+
+            summary.gross_sales = summary.gross_sales.plus(total);
+            summary.total_tax = summary.total_tax.plus(tax);
+            summary.total_sc = summary.total_sc.plus(sc);
+            summary.total_delivery_fees = summary.total_delivery_fees.plus(df);
+            summary.total_discounts = summary.total_discounts.plus(disc);
+
+            // Order type breakdown
+            if (!orderTypes[order.type]) orderTypes[order.type] = { count: 0, revenue: new Decimal(0) };
+            orderTypes[order.type].count += 1;
+            orderTypes[order.type].revenue = orderTypes[order.type].revenue.plus(total);
+
+            // Category breakdown
+            order.order_items.forEach((item: any) => {
+                const cat = item.category || 'Uncategorized';
+                if (!categoryBreakdown[cat]) categoryBreakdown[cat] = new Decimal(0);
+                categoryBreakdown[cat] = categoryBreakdown[cat].plus(new Decimal(item.total_price.toString()));
+            });
+
+            // Payment methods
+            order.transactions.forEach((t: any) => {
+                const method = t.payment_method;
+                if (!paymentMethods[method]) paymentMethods[method] = new Decimal(0);
+                paymentMethods[method] = paymentMethods[method].plus(new Decimal(t.amount.toString()));
+            });
+
+            // Hourly velocity
+            const hour = new Date(order.created_at).getHours();
+            if (!hourlyVelocity[hour]) hourlyVelocity[hour] = { count: 0, revenue: new Decimal(0) };
+            hourlyVelocity[hour].count += 1;
+            hourlyVelocity[hour].revenue = hourlyVelocity[hour].revenue.plus(total);
         });
 
-        // 2. Fetch all ledger entries (for payouts and settlements)
-        const ledgerEntries = await prisma.ledger_entries.findMany({
-            where: {
-                restaurant_id: session.restaurant_id,
-                created_at: { gte: startTime, lte: endTime }
+        // Net sales = gross - discounts
+        summary.net_sales = summary.gross_sales.minus(summary.total_discounts);
+        summary.avg_order_value = orders.length > 0 ? summary.gross_sales.dividedBy(orders.length) : new Decimal(0);
+
+        // --- Cash flow ---
+        const cashFlow = {
+            opening_float: session.opening_balance,
+            payouts: new Decimal(0),
+            rider_settlements: new Decimal(0),
+            actual_cash: session.actual_balance || 0,
+            expected_cash: session.expected_balance || 0
+        };
+
+        ledgerEntries.forEach((entry: any) => {
+            const amt = new Decimal(entry.amount.toString());
+            if (entry.reference_type === 'PAYOUT') cashFlow.payouts = cashFlow.payouts.plus(amt);
+            if (entry.reference_type === 'SETTLEMENT' && !entry.account_id) {
+                if (entry.transaction_type === 'DEBIT') cashFlow.rider_settlements = cashFlow.rider_settlements.plus(amt);
+                else cashFlow.rider_settlements = cashFlow.rider_settlements.minus(amt);
             }
         });
 
-        const report = {
+        // --- Payout categories breakdown ---
+        const payoutsByCategory: Record<string, Decimal> = {};
+        payoutsData.forEach((p: any) => {
+            const cat = p.category;
+            if (!payoutsByCategory[cat]) payoutsByCategory[cat] = new Decimal(0);
+            payoutsByCategory[cat] = payoutsByCategory[cat].plus(new Decimal(p.amount.toString()));
+        });
+
+        // --- Void / Cancel summary ---
+        const voidSummary = {
+            count: voidedOrders.length,
+            total_value: voidedOrders.reduce((s, o) => s.plus(new Decimal(o.total.toString())), new Decimal(0))
+        };
+
+        const cancelSummary = {
+            count: cancelledOrders.length,
+            total_value: cancelledOrders.reduce((s, o) => s.plus(new Decimal(o.total.toString())), new Decimal(0))
+        };
+
+        return {
             metadata: {
                 id: session.id,
                 opened_at: session.opened_at,
                 closed_at: session.closed_at,
                 status: session.status,
-                variance: session.variance
+                variance: session.variance,
+                opened_by: opener?.name || 'Unknown',
+                closed_by: closer?.name || 'Pending',
+                duration_minutes: session.closed_at
+                    ? Math.round((new Date(session.closed_at).getTime() - new Date(session.opened_at).getTime()) / 60000)
+                    : null,
             },
-            summary: {
-                gross_sales: new Decimal(0),
-                net_sales: new Decimal(0),
-                total_tax: new Decimal(0),
-                total_sc: new Decimal(0),
-                total_delivery_fees: new Decimal(0),
-                total_discounts: new Decimal(0),
-                order_count: orders.length
-            },
-            payment_methods: {} as Record<string, Decimal>,
-            order_types: {} as Record<string, number>,
-            category_breakdown: {} as Record<string, Decimal>,
-            cash_flow: {
-                opening_float: session.opening_balance,
-                payouts: new Decimal(0),
-                rider_settlements: new Decimal(0),
-                actual_cash: session.actual_balance || 0,
-                expected_cash: session.expected_balance || 0
-            }
+            summary,
+            payment_methods: paymentMethods,
+            order_types: orderTypes,
+            category_breakdown: categoryBreakdown,
+            cash_flow: cashFlow,
+            payouts_breakdown: payoutsByCategory,
+            void_summary: voidSummary,
+            cancel_summary: cancelSummary,
+            hourly_velocity: hourlyVelocity,
         };
-
-        // Process Orders
-        orders.forEach((order: any) => {
-            report.summary.gross_sales = report.summary.gross_sales.plus(new Decimal(order.total.toString()));
-            report.summary.total_tax = report.summary.total_tax.plus(new Decimal((order.tax || 0).toString()));
-            report.summary.total_sc = report.summary.total_sc.plus(new Decimal((order.service_charge || 0).toString()));
-            report.summary.total_delivery_fees = report.summary.total_delivery_fees.plus(new Decimal((order.delivery_fee || 0).toString()));
-            report.summary.total_discounts = report.summary.total_discounts.plus(new Decimal((order.discount || 0).toString()));
-
-            // Type counts
-            report.order_types[order.type] = (report.order_types[order.type] || 0) + 1;
-
-            // Categories
-            order.order_items.forEach((item: any) => {
-                const cat = item.category || 'Uncategorized';
-                report.category_breakdown[cat] = (report.category_breakdown[cat] || new Decimal(0)).plus(new Decimal(item.total_price.toString()));
-            });
-
-            // Payments
-            order.transactions.forEach((t: any) => {
-                const method = t.payment_method;
-                report.payment_methods[method] = (report.payment_methods[method] || new Decimal(0)).plus(new Decimal(t.amount.toString()));
-            });
-        });
-
-        // Process Ledger for cash flow
-        ledgerEntries.forEach(entry => {
-            const amt = new Decimal(entry.amount.toString());
-            if (entry.reference_type === 'PAYOUT') {
-                report.cash_flow.payouts = report.cash_flow.payouts.plus(amt);
-            }
-            if (entry.reference_type === 'SETTLEMENT' && !entry.account_id) {
-                // Net settlement in the drawer
-                if (entry.transaction_type === 'DEBIT') report.cash_flow.rider_settlements = report.cash_flow.rider_settlements.plus(amt);
-                else report.cash_flow.rider_settlements = report.cash_flow.rider_settlements.minus(amt);
-            }
-        });
-
-        return report;
     }
 }
+
+

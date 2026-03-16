@@ -31,7 +31,7 @@ export const RoleContextBar: React.FC<RoleContextBarProps> = ({
         </>
     );
 
-    const renderWaiterContext = () => (
+    const renderServerContext = () => (
         <>
             <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
                 <Utensils size={16} className="text-blue-500" />
@@ -68,7 +68,7 @@ export const RoleContextBar: React.FC<RoleContextBarProps> = ({
     // Determine if we have anything to show
     const hasContent =
         ((role === 'CASHIER' || role === 'MANAGER') && pendingBills > 0) ||
-        (role === 'WAITER') ||
+        (role === 'SERVER') ||
         (role === 'CHEF' && pendingOrders > 0);
 
     if (!hasContent) return null;
@@ -76,7 +76,7 @@ export const RoleContextBar: React.FC<RoleContextBarProps> = ({
     return (
         <div className="bg-[#0B0F19]/80 border-b border-slate-800/50 px-6 py-2.5 flex items-center gap-3 animate-in slide-in-from-top-2 duration-200">
             {(role === 'CASHIER' || role === 'MANAGER') && renderCashierContext()}
-            {role === 'WAITER' && renderWaiterContext()}
+            {role === 'SERVER' && renderServerContext()}
             {role === 'CHEF' && renderChefContext()}
         </div>
     );

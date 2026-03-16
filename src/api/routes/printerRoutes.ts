@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../../shared/lib/prisma';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/authMiddleware';
+import { PrinterService } from '../services/PrinterService';
 
 const router = Router();
 router.use(authMiddleware);
@@ -82,6 +83,32 @@ router.delete('/:id', async (req, res) => {
         res.json({ success: true });
     } catch (e: any) {
         res.status(400).json({ error: e.message });
+    }
+});
+
+// POST test printer connection
+router.post('/test-connection', async (req, res) => {
+    try {
+        const { ip_address, port } = req.body;
+        if (!ip_address || !port) return res.status(400).json({ error: 'IP and Port required' });
+        
+        const result = await PrinterService.testConnection(ip_address, port);
+        res.json(result);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST send test print
+router.post('/test-print', async (req, res) => {
+    try {
+        const { ip_address, port, name } = req.body;
+        if (!ip_address || !port) return res.status(400).json({ error: 'IP and Port required' });
+
+        const result = await PrinterService.sendTestPrint(ip_address, port, name || 'Test Printer');
+        res.json(result);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
     }
 });
 

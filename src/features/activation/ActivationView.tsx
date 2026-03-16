@@ -61,7 +61,7 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
         setError(null);
 
         try {
-            const res = await fetch('http://localhost:3001/api/setup/activate', {
+            const res = await fetch(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/setup/activate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -106,7 +106,7 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
         setError(null);
 
         try {
-            const res = await fetch('http://localhost:3001/api/setup/create-manager', {
+            const res = await fetch(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/setup/create-manager`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

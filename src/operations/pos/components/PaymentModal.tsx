@@ -6,7 +6,7 @@ interface PaymentModalProps {
     order: Order;
     breakdown: PaymentBreakdown; // We should pass the calculated breakdown
     onClose: () => void;
-    onProcessPayment: (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET', tenderedAmount?: number) => Promise<void>;
+    onProcessPayment: (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET', tenderedAmount?: number, discountReason?: string) => Promise<void>;
 }
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({
@@ -19,25 +19,20 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     const [tenderedAmount, setTenderedAmount] = useState<string>('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [completed, setCompleted] = useState(false);
+    const [discountReason, setDiscountReason] = useState<string>(order.breakdown?.discountReason || '');
 
     // Toggles for adjustments
-    const [applyTax, setApplyTax] = useState(true);
-    const [applyServiceCharge, setApplyServiceCharge] = useState(true);
     const [roundToNearest10, setRoundToNearest10] = useState(true);
 
     // Dynamic Total Calculation
     const finalTotal = useMemo(() => {
-        let total = breakdown.subtotal;
-        if (applyTax) total += breakdown.tax;
-        if (applyServiceCharge) total += breakdown.serviceCharge;
-        total -= breakdown.discount;
-        total += breakdown.deliveryFee;
+        let total = breakdown.total;
 
         if (roundToNearest10) {
             return Math.ceil(total / 10) * 10;
         }
         return total;
-    }, [breakdown, applyTax, applyServiceCharge, roundToNearest10]);
+    }, [breakdown, roundToNearest10]);
 
     // Initialize tendered to exact amount when switching to non-cash
     useEffect(() => {
@@ -87,8 +82,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
         setIsProcessing(true);
         try {
-            await onProcessPayment(finalTotal, method, parsedTendered);
+            await onProcessPayment(finalTotal, method, parsedTendered, discountReason);
             setCompleted(true);
+            
+
             setTimeout(() => {
                 onClose();
             }, 2000);
@@ -100,7 +97,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
     if (completed) {
         return (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 flex flex-col items-center text-center shadow-2xl scale-100 animate-in zoom-in-95 duration-200">
                     <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center mb-6">
                         <CheckCircle2 size={48} className="text-green-500" />
@@ -113,7 +110,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     }
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
             <div className="w-full max-w-6xl h-[90vh] bg-[#0B0F19] border border-slate-800 rounded-3xl shadow-2xl flex overflow-hidden">
 
                 {/* LEFT COLUMN: Order Summary & Settings */}
@@ -140,25 +137,24 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                     <div className="p-6 border-t border-slate-800 bg-slate-900/30 space-y-3">
                         <div className="flex items-center justify-between">
                             <label className="text-sm text-slate-400 flex items-center gap-2 cursor-pointer select-none">
-                                <input type="checkbox" checked={applyTax} onChange={e => setApplyTax(e.target.checked)} className="rounded bg-slate-800 border-slate-700 text-gold-500 focus:ring-0" />
-                                Apply Tax
-                            </label>
-                            <span className="text-slate-500 text-xs font-mono">{breakdown.tax.toLocaleString()}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                            <label className="text-sm text-slate-400 flex items-center gap-2 cursor-pointer select-none">
-                                <input type="checkbox" checked={applyServiceCharge} onChange={e => setApplyServiceCharge(e.target.checked)} className="rounded bg-slate-800 border-slate-700 text-gold-500 focus:ring-0" />
-                                Service Charge
-                            </label>
-                            <span className="text-slate-500 text-xs font-mono">{breakdown.serviceCharge.toLocaleString()}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                            <label className="text-sm text-slate-400 flex items-center gap-2 cursor-pointer select-none">
                                 <input type="checkbox" checked={roundToNearest10} onChange={e => setRoundToNearest10(e.target.checked)} className="rounded bg-slate-800 border-slate-700 text-gold-500 focus:ring-0" />
                                 Round to 10
                             </label>
                             <Settings2 size={12} className="text-slate-600" />
                         </div>
+
+                        {breakdown.discount > 0 && (
+                            <div className="space-y-2 pt-2 animate-in slide-in-from-top-2 duration-300">
+                                <label className="text-[10px] text-gold-500/70 font-black uppercase tracking-widest block">Discount Reason</label>
+                                <input
+                                    type="text"
+                                    className="w-full bg-black border border-slate-800 rounded px-3 py-2 text-xs text-white outline-none focus:border-gold-500"
+                                    placeholder="e.g. Manager Override, Promo Code"
+                                    value={discountReason}
+                                    onChange={e => setDiscountReason(e.target.value)}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     {/* Totals */}

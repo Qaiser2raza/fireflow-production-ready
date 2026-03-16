@@ -98,8 +98,8 @@ export const RestaurantProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       // Check for pending payments
       await refreshPendingStatus();
 
-      // If expired but status is still active/trial, we need to update it locally
-      if (now > expiry && currentRestaurant.subscriptionStatus !== 'expired' && currentRestaurant.subscriptionStatus !== 'trial') {
+      // If expired but status is still active/trial, update it locally
+      if (now > expiry && currentRestaurant.subscriptionStatus !== 'expired') {
         setCurrentRestaurant(prev => prev ? {
           ...prev,
           subscriptionStatus: 'expired'
@@ -209,7 +209,8 @@ export const formatPlanName = (plan: Restaurant['subscriptionPlan']): string => 
   const planMap = {
     BASIC: 'Basic',
     STANDARD: 'Standard',
-    PREMIUM: 'Premium'
+    PREMIUM: 'Premium',
+    ENTERPRISE: 'Enterprise'
   };
   return planMap[plan] || plan;
 };

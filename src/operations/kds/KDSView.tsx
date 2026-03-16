@@ -4,7 +4,7 @@ import { Order, Station } from '../../shared/types';
 import { Clock, AlertCircle, CheckCircle2, ChefHat, Bike, ShoppingBag, CheckSquare, RotateCcw, Circle } from 'lucide-react';
 
 export const KDSView: React.FC = () => {
-  const { orders, updateOrder, stations, tables, addNotification } = useAppContext();
+  const { orders, updateOrder, cancelOrder, stations, tables, addNotification, currentUser } = useAppContext();
   const [activeStationId, setActiveStationId] = useState<string>('ALL');
   const [undoStack, setUndoStack] = useState<{ order: Order, items: any[], status: any }[]>([]);
   const [showSafetyModal, setShowSafetyModal] = useState<{ show: boolean, order?: Order }>({ show: false });
@@ -87,7 +87,9 @@ export const KDSView: React.FC = () => {
 
     setUndoStack(prev => [...prev.slice(-10), { order, items: order.order_items || [], status: order.status }]);
 
-    const allReady = updatedItems.every(i => i.item_status === 'DONE' || i.item_status === 'SERVED');
+    const allReady = updatedItems.every(i => 
+      ['DONE', 'SERVED', 'SKIPPED', 'CANCELLED', 'VOIDED'].includes(i.item_status)
+    );
     const anyPreparing = updatedItems.some(i => i.item_status === 'PREPARING');
 
     let orderStatus: any = order.status;
@@ -124,7 +126,9 @@ export const KDSView: React.FC = () => {
       return item;
     });
 
-    const allReady = updatedItems.every(i => i.item_status === 'DONE' || i.item_status === 'SERVED');
+    const allReady = updatedItems.every(i => 
+      ['DONE', 'SERVED', 'SKIPPED', 'CANCELLED', 'VOIDED'].includes(i.item_status)
+    );
 
     try {
       await updateOrder({
@@ -148,8 +152,16 @@ export const KDSView: React.FC = () => {
             <ChefHat size={18} />
           </div>
           <div>
-            <h1 className="text-white text-xl font-serif tracking-tight leading-none">KDS ACTIVE</h1>
-            <p className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Live Feed</p>
+            <h1 className="text-white text-lg xl:text-xl font-serif tracking-tight leading-none uppercase flex items-center gap-2">
+              {currentUser?.name || 'Chef'}
+              <span className="text-gold-500 font-sans text-[10px] font-black tracking-widest bg-gold-500/10 px-2.5 py-1 rounded-lg border border-gold-500/20 shadow-[0_0_10px_rgba(234,179,8,0.2)]">
+                {currentUser?.role || 'LINE COOK'}
+              </span>
+            </h1>
+            <p className="text-[9px] uppercase tracking-widest text-slate-500 font-bold mt-1.5 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+              Live Kitchen Feed
+            </p>
           </div>
         </div>
 
@@ -204,6 +216,11 @@ export const KDSView: React.FC = () => {
               tables={tables}
               onReadyAll={() => confirmReadyAll(order)}
               onToggleItem={(idx) => handleItemToggle(order, idx)}
+              onVoidOrder={async () => {
+                const ok = await cancelOrder(order.id, 'Voided from KDS');
+                if (ok) addNotification('success', `Order #${order.order_number || order.id.split('-').pop()} voided`);
+              }}
+              userRole={currentUser?.role || ''}
             />
           ))}
 
@@ -269,7 +286,9 @@ const KDSTicket: React.FC<{
   tables: any[];
   onReadyAll: () => void;
   onToggleItem: (idx: number) => void;
-}> = ({ order, activeStationId, stations, tables, onReadyAll, onToggleItem }) => {
+  onVoidOrder: () => void;
+  userRole: string;
+}> = ({ order, activeStationId, stations, tables, onReadyAll, onToggleItem, onVoidOrder, userRole }) => {
   const elapsed = Math.floor((Date.now() - new Date(order.created_at || (order as any).timestamp || Date.now()).getTime()) / 60000);
   const isUrgent = elapsed > 15;
   const isCritical = elapsed > 25;
@@ -315,10 +334,10 @@ const KDSTicket: React.FC<{
       <div className={`p-4 flex justify-between items-start ${isCritical ? 'bg-red-600' : isUrgent ? 'bg-orange-500' : 'bg-slate-800'
         }`}>
         <div className="flex-1">
-          <div className="text-[9px] font-black uppercase tracking-[0.2em] text-white/60 mb-1">
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/80 mb-1 drop-shadow-md">
             #{order.id.split('-').pop()?.toUpperCase()}
           </div>
-          <div className="font-serif text-2xl text-white leading-none mb-1">{getIdentifier()}</div>
+          <div className="font-serif text-2xl xl:text-3xl font-bold text-white leading-none mb-1 drop-shadow-lg">{getIdentifier()}</div>
 
           {/* Display Token Prominently for Takeaway */}
           {takeawayToken && (
@@ -348,9 +367,9 @@ const KDSTicket: React.FC<{
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar max-h-[400px]">
-        {visibleItems.map((item, idx) => (
+        {visibleItems.map((item) => (
           <div
-            key={idx}
+            key={item.id || `${item.menu_item_id}-${item.originalIndex}`}
             onClick={() => onToggleItem(item.originalIndex)}
             className={`p-3 rounded-xl border transition-all duration-300 cursor-pointer group flex items-start gap-3 ${item.item_status === 'DONE'
               ? 'bg-green-500/10 border-green-500/20 opacity-50'
@@ -385,8 +404,8 @@ const KDSTicket: React.FC<{
               </div>
 
               {item.special_instructions && (
-                <div className="mt-1.5 text-[9px] text-orange-400/80 italic bg-orange-400/5 p-2 rounded-lg border border-orange-400/10">
-                  {item.special_instructions}
+                <div className="mt-2 text-[10px] font-black tracking-[0.1em] text-red-400 uppercase bg-red-500/10 px-3 py-2 rounded-lg border border-red-500/30 flex items-center gap-2 shadow-[0_0_15px_rgba(239,68,68,0.15)]">
+                  <AlertCircle size={14} className="text-red-500" /> {item.special_instructions}
                 </div>
               )}
             </div>
@@ -394,13 +413,30 @@ const KDSTicket: React.FC<{
         ))}
       </div>
 
-      <div className="p-4 bg-slate-900/80 border-t border-slate-800">
+      <div className="p-4 bg-slate-900/90 border-t border-slate-800 flex flex-col gap-3">
         <button
           onClick={onReadyAll}
-          className="w-full h-12 rounded-xl bg-green-600 hover:bg-green-500 text-white font-black uppercase tracking-[0.2em] text-xs transition-all shadow-xl shadow-green-900/20 active:scale-[0.98] flex items-center justify-center gap-2"
+          className="w-full h-14 sm:h-12 rounded-xl bg-green-500 hover:bg-green-400 text-slate-950 font-black uppercase tracking-[0.2em] text-sm sm:text-xs transition-all shadow-[0_0_20px_rgba(34,197,94,0.3)] hover:shadow-[0_0_25px_rgba(34,197,94,0.5)] active:scale-[0.98] flex items-center justify-center gap-2 focus:outline-none focus:ring-4 focus:ring-green-500/50"
         >
-          <CheckCircle2 size={18} /> Clear Station
+          <CheckCircle2 size={24} className="sm:w-5 sm:h-5" /> BUMP / READY
         </button>
+
+        {['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(userRole) && (
+          <div className="flex gap-2">
+            <button
+              onClick={onVoidOrder}
+              className="flex-1 h-10 bg-slate-800 hover:bg-red-900/30 text-slate-400 hover:text-red-400 font-bold uppercase text-[9px] tracking-[0.15em] rounded-lg transition-colors border border-slate-700/50 hover:border-red-500/50"
+            >
+              Void Ticket
+            </button>
+            <button
+              onClick={() => alert('Reassign coming in next update')}
+              className="flex-1 h-10 bg-slate-800 hover:bg-blue-900/30 text-slate-400 hover:text-blue-400 font-bold uppercase text-[9px] tracking-[0.15em] rounded-lg transition-colors border border-slate-700/50 hover:border-blue-500/50"
+            >
+              Reassign
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

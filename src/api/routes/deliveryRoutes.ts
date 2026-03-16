@@ -61,13 +61,30 @@ router.post('/riders/shift/open', async (req, res) => {
 router.post('/riders/shift/close', async (req, res) => {
     try {
         const validated = closeShiftSchema.parse(req.body);
+        const restaurantId = req.restaurantId!;
 
         const shift = await shiftService.closeShift(validated);
 
         const io = req.app.get('io');
         if (io) {
             io.emit('db_change', { table: 'rider_shifts', eventType: 'UPDATE', data: shift });
-            io.emit('db_change', { table: 'staff', eventType: 'UPDATE', id: shift.rider_id });
+
+            // Emit updated staff (shift is now null for this rider)
+            const freshStaff = await prisma.staff.findUnique({
+                where: { id: shift.rider_id },
+                include: { rider_shifts: { where: { status: 'OPEN' }, take: 1 } }
+            });
+            if (freshStaff) {
+                const { pin, ...sanitized } = freshStaff;
+                io.emit('db_change', {
+                    table: 'staff',
+                    eventType: 'UPDATE',
+                    data: { ...sanitized, active_shift: freshStaff.rider_shifts?.[0] || null }
+                });
+            }
+
+            // Signal a full order list refresh — auto-settled DELIVERED→CLOSED orders need to appear
+            io.emit('db_change', { table: 'orders', eventType: 'BATCH_UPDATE', data: { restaurantId } });
         }
 
         res.json({ success: true, shift });
@@ -274,10 +291,14 @@ router.post('/orders/:orderId/mark-delivered', async (req, res) => {
             return updatedOrder;
         });
 
-        // 7. Emit Socket Update
+        // 7. Emit Socket Update — fetch full order with delivery context for Settlement tab
         const io = req.app.get('io');
         if (io) {
-            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
+            const fullOrder = await prisma.orders.findUnique({
+                where: { id: orderId },
+                include: { order_items: true, delivery_orders: true }
+            });
+            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: fullOrder || result, id: orderId });
         }
 
         res.json({
@@ -292,6 +313,228 @@ router.post('/orders/:orderId/mark-delivered', async (req, res) => {
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error'
         });
+    }
+});
+
+// POST /api/orders/:orderId/mark-failed
+router.post('/orders/:orderId/mark-failed', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { reason, processedBy } = req.body;
+
+        const result = await prisma.$transaction(async (tx) => {
+            const order = await tx.orders.findFirst({
+                where: {
+                    id: orderId,
+                    restaurant_id: req.restaurantId // SaaS Security
+                },
+                include: { delivery_orders: true }
+            });
+
+            if (!order) throw new Error('Order not found or unauthorized');
+
+            // Update order: Reset status to READY and unlink driver/shift
+            const updatedOrder = await tx.orders.update({
+                where: { id: orderId },
+                data: {
+                    status: 'READY',
+                    assigned_driver_id: null,
+                    rider_shift_id: null,
+                    last_action_by: processedBy,
+                    last_action_desc: `Delivery Failed: ${reason}`,
+                    last_action_at: new Date()
+                } as any
+            });
+
+            // Update delivery_orders: Set failed reason and clear dispatch time
+            if (order.delivery_orders) {
+                await tx.delivery_orders.update({
+                    where: { order_id: orderId },
+                    data: {
+                        failed_reason: reason,
+                        dispatched_at: null,
+                        driver_id: null
+                    }
+                });
+            }
+
+            // Create audit log
+            await tx.audit_logs.create({
+                data: {
+                    action_type: 'ORDER_DELIVERY_FAILED',
+                    entity_type: 'ORDER',
+                    entity_id: orderId,
+                    staff_id: processedBy,
+                    details: { reason }
+                }
+            });
+
+            return updatedOrder;
+        });
+
+        // Emit Socket Update
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
+        }
+
+        res.json({
+            success: true,
+            order: result,
+            message: 'Order marked as failed and reset to READY'
+        });
+
+    } catch (error) {
+        console.error('Mark failed error:', error);
+        res.status(400).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+// POST /api/orders/:orderId/settle
+router.post('/orders/:orderId/settle', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { processedBy } = req.body;
+        const restaurantId = req.restaurantId!;
+
+        const result = await prisma.$transaction(async (tx) => {
+            const order = await tx.orders.findFirst({
+                where: { id: orderId, restaurant_id: restaurantId },
+                include: { delivery_orders: true }
+            });
+
+            if (!order) throw new Error('Order not found');
+            if (order.status !== 'DELIVERED') throw new Error('Only delivered orders can be settled');
+
+            const updatedOrder = await tx.orders.update({
+                where: { id: orderId },
+                data: {
+                    status: 'CLOSED',
+                    payment_status: 'PAID',
+                    last_action_by: processedBy,
+                    last_action_desc: 'Order settled (partial)',
+                    last_action_at: new Date()
+                },
+                include: {
+                    delivery_orders: true,
+                    order_items: true
+                }
+            });
+
+            await accounting.recordRiderSettlement({
+                restaurantId,
+                riderId: order.assigned_driver_id!,
+                amountReceived: order.total,
+                orderIds: [orderId],
+                processedBy,
+                settlementId: orderId  // orderId is already a UUID — safe for ledger reference_id
+            }, tx);
+
+            return updatedOrder;
+        });
+
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
+            // Fetch fresh staff with shift to ensure socket update is complete
+            const freshStaff = await prisma.staff.findUnique({
+                where: { id: result.assigned_driver_id! },
+                include: { rider_shifts: { where: { status: 'OPEN' }, take: 1 } }
+            });
+            if (freshStaff) {
+                const { pin, ...sanitized } = freshStaff;
+                io.emit('db_change', {
+                    table: 'staff',
+                    eventType: 'UPDATE',
+                    data: { ...sanitized, active_shift: freshStaff.rider_shifts?.[0] || null }
+                });
+            }
+        }
+
+        res.json({ success: true, order: result });
+
+    } catch (error) {
+        console.error('Order settlement error:', error);
+        res.status(400).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+// POST /api/riders/shift/deposit
+router.post('/riders/shift/deposit', async (req, res) => {
+    try {
+        const { shiftId, depositedBy, amount, notes } = req.body;
+        const restaurantId = req.restaurantId!;
+
+        if (!amount || amount <= 0) throw new Error('Deposit amount must be greater than 0');
+
+        const result = await prisma.$transaction(async (tx) => {
+            const shift = await tx.rider_shifts.findUnique({
+                where: { id: shiftId }
+            });
+
+            if (!shift || shift.status !== 'OPEN') throw new Error('Active shift not found');
+
+            // 1. Update the shift model with the dropped cash
+            await tx.rider_shifts.update({
+                where: { id: shiftId },
+                data: {
+                    cash_dropped: { increment: amount }
+                }
+            });
+
+            // Record the cash deposit in accounting (without closing shift)
+            await accounting.recordRiderSettlement({
+                restaurantId,
+                riderId: shift.rider_id,
+                amountReceived: amount,
+                orderIds: [], // Direct cash deposit, not order-specific
+                processedBy: depositedBy,
+                settlementId: shiftId  // shiftId is already a UUID — safe for ledger reference_id
+            }, tx);
+
+            // Audit log
+            await tx.audit_logs.create({
+                data: {
+                    action_type: 'RIDER_CASH_DROP',
+                    entity_type: 'RIDER_SHIFT',
+                    entity_id: shiftId,
+                    staff_id: depositedBy,
+                    details: { amount, notes }
+                }
+            });
+
+            return shift;
+        });
+
+        const io = req.app.get('io');
+        if (io) {
+            // Fresh staff update to reflect new liability
+            const freshStaff = await prisma.staff.findUnique({
+                where: { id: result.rider_id },
+                include: { rider_shifts: { where: { status: 'OPEN' }, take: 1 } }
+            });
+            if (freshStaff) {
+                const { pin, ...sanitized } = freshStaff;
+                io.emit('db_change', {
+                    table: 'staff',
+                    eventType: 'UPDATE',
+                    data: { ...sanitized, active_shift: freshStaff.rider_shifts?.[0] || null }
+                });
+            }
+        }
+
+        res.json({ success: true, message: 'Cash drop recorded successfully' });
+
+    } catch (error) {
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        console.error('Cash drop error:', errMsg, error);
+        res.status(400).json({ success: false, error: errMsg });
     }
 });
 

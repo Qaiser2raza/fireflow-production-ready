@@ -17,7 +17,7 @@ export abstract class BaseOrderService implements IOrderService {
                     },
                     order_number: order_number,
                     type: data.type,
-                    status: (data.status || 'ACTIVE') as any,
+                    status: this.mapStatusToPrisma(data.status),
                     payment_status: 'UNPAID',
                     total: data.total || 0,
                     guest_count: data.guest_count ? Number(data.guest_count) : undefined,
@@ -55,8 +55,14 @@ export abstract class BaseOrderService implements IOrderService {
             // 3. Delegate to specific implementation
             await this.createExtension(tx, order.id, data);
 
-            // 4. Calculate final totals (Tax, SC, etc)
-            await this.recalculateTotals(tx, order.id);
+            // 4. Save explicit breakdown from POS if provided, or auto-calculate
+            const breakdown = data.breakdown as any;
+            await this.recalculateTotals(tx, order.id, breakdown ? {
+                tax: breakdown.tax,
+                serviceCharge: breakdown.serviceCharge,
+                deliveryFee: breakdown.deliveryFee,
+                discount: breakdown.discount
+            } : undefined);
 
             // 5. Return full order with items for frontend sync
             return await tx.orders.findUnique({
@@ -125,7 +131,7 @@ export abstract class BaseOrderService implements IOrderService {
                 where: { id },
                 data: {
                     type: data.type, // Explicitly update type
-                    status: data.status,
+                    status: this.mapStatusToPrisma(data.status),
                     total: data.total,
                     table_id: data.table_id || undefined,
                     guest_count: data.guest_count,
@@ -163,15 +169,18 @@ export abstract class BaseOrderService implements IOrderService {
             }
 
             // AUDIT LOGIC: If guest_count is being reduced, log it
-            if (currentOrder?.dine_in_orders && data.guest_count < currentOrder.dine_in_orders.guest_count) {
+            const dineInRecord = Array.isArray(currentOrder?.dine_in_orders) 
+                ? currentOrder.dine_in_orders[0] 
+                : currentOrder?.dine_in_orders;
+            if (dineInRecord && data.guest_count != null && data.guest_count < (dineInRecord as any).guest_count) {
                 await tx.audit_logs.create({
                     data: {
                         action_type: 'GUEST_COUNT_REDUCTION',
                         entity_type: 'ORDER',
                         entity_id: id,
-                        staff_id: data.manager_id || data.authorized_by, // Pass manager_id from the PIN validation
+                        staff_id: data.manager_id || data.authorized_by,
                         details: {
-                            old_count: currentOrder.dine_in_orders.guest_count,
+                            old_count: (dineInRecord as any).guest_count,
                             new_count: data.guest_count
                         }
                     }
@@ -180,8 +189,14 @@ export abstract class BaseOrderService implements IOrderService {
 
             await this.updateExtension(tx, id, data);
 
-            // 4. Recalculate Totals (in case items or type changed)
-            await this.recalculateTotals(tx, id);
+            // 4. Recalculate Totals using POS breakdown if provided
+            const breakdown = (data as any).breakdown;
+            await this.recalculateTotals(tx, id, breakdown ? {
+                tax: breakdown.tax,
+                serviceCharge: breakdown.serviceCharge,
+                deliveryFee: breakdown.deliveryFee,
+                discount: breakdown.discount
+            } : undefined);
 
             // 5. Return full order with items for frontend sync
             return await tx.orders.findUnique({
@@ -195,6 +210,19 @@ export abstract class BaseOrderService implements IOrderService {
                 }
             }) as orders;
         });
+    }
+
+    protected mapStatusToPrisma(status: string | undefined): any {
+        if (!status) return 'ACTIVE';
+        const map: Record<string, string> = {
+            'PENDING': 'ACTIVE',
+            'PREPARING': 'ACTIVE',
+            'SERVED': 'READY',
+            'BILL_REQUESTED': 'READY',
+            'PAID': 'CLOSED',
+            'VOID': 'VOIDED'
+        };
+        return map[status] || status;
     }
 
     async getOrderDetails(id: string): Promise<orders | null> {
@@ -228,13 +256,15 @@ export abstract class BaseOrderService implements IOrderService {
     protected abstract updateExtension(tx: Prisma.TransactionClient, orderId: string, data: UpdateOrderDTO): Promise<void>;
 
     /**
-     * Centralized logic to calculate order financials (Tax, SC, Delivery Fee)
-     * This follows the rule: 
-     * - DINE_IN: +Tax, +Service Charge
-     * - TAKEAWAY: +Tax
-     * - DELIVERY: +Tax, +Delivery Fee
+     * Centralized logic to calculate order financials (Tax, SC, Delivery Fee).
+     * Priority: if the order has a pre-calculated breakdown from the POS (respecting
+     * user's on-screen toggles), use it directly. Otherwise fall back to restaurant config.
      */
-    protected async recalculateTotals(tx: Prisma.TransactionClient, orderId: string): Promise<void> {
+    protected async recalculateTotals(
+        tx: Prisma.TransactionClient,
+        orderId: string,
+        overrideBreakdown?: { tax?: number; serviceCharge?: number; deliveryFee?: number; discount?: number; total?: number }
+    ): Promise<void> {
         // 1. Fetch Order with Items and Restaurant Config
         const order = await tx.orders.findUnique({
             where: { id: orderId },
@@ -248,26 +278,28 @@ export abstract class BaseOrderService implements IOrderService {
 
         const config = order.restaurants;
         const subtotal = order.order_items.reduce((sum, item) => sum + Number(item.total_price), 0);
+        const discount = Number(order.discount || 0);
 
-        // 2. Calculate Components
         let tax = 0;
         let serviceCharge = 0;
         let deliveryFee = 0;
-        const discount = Number(order.discount || 0);
 
-        // Tax (Universal if enabled)
-        if (config.tax_enabled) {
-            tax = (subtotal * Number(config.tax_rate)) / 100;
-        }
-
-        // Service Charge (Dine-In ONLY)
-        if (order.type === 'DINE_IN' && config.service_charge_enabled) {
-            serviceCharge = (subtotal * Number(config.service_charge_rate)) / 100;
-        }
-
-        // Delivery Fee (Delivery ONLY)
-        if (order.type === 'DELIVERY') {
-            deliveryFee = Number(config.default_delivery_fee);
+        if (overrideBreakdown) {
+            // Use POS-level values (respects user toggles for tax, SC, discount)
+            tax = overrideBreakdown.tax ?? 0;
+            serviceCharge = overrideBreakdown.serviceCharge ?? 0;
+            deliveryFee = overrideBreakdown.deliveryFee ?? 0;
+        } else {
+            // Fallback: derive from restaurant config (e.g. when firing from KDS)
+            if (config.tax_enabled) {
+                tax = (subtotal * Number(config.tax_rate)) / 100;
+            }
+            if (order.type === 'DINE_IN' && config.service_charge_enabled) {
+                serviceCharge = (subtotal * Number(config.service_charge_rate)) / 100;
+            }
+            if (order.type === 'DELIVERY') {
+                deliveryFee = Number((config as any).default_delivery_fee || 0);
+            }
         }
 
         const grandTotal = subtotal + tax + serviceCharge + deliveryFee - discount;

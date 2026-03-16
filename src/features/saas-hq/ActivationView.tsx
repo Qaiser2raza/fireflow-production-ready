@@ -29,7 +29,7 @@ export const ActivationView: React.FC<ActivationProps> = ({ onSuccess }) => {
     setError('');
 
     try {
-      const res = await fetch('http://localhost:3001/api/system/activate', {
+      const res = await fetch(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/system/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)

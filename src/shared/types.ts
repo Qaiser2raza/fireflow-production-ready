@@ -2,7 +2,7 @@
 
 // --- 1. CORE ENUMS & TYPES ---
 
-export type UserRole = 'ADMIN' | 'SUPER_ADMIN' | 'MANAGER' | 'CASHIER' | 'WAITER' | 'CHEF' | 'RIDER' | 'DRIVER';
+export type UserRole = 'ADMIN' | 'SUPER_ADMIN' | 'MANAGER' | 'CASHIER' | 'SERVER' | 'CHEF' | 'RIDER';
 
 export type SectionType = 'DINING' | 'DELIVERY' | 'TAKEAWAY' | 'HIDDEN';
 
@@ -104,6 +104,15 @@ export interface Restaurant {
     monthly_fee?: number;
     currency?: string;
     city?: string;
+    fbr_enabled?: boolean;
+    fbr_pos_id?: string;
+    fbr_ims_url?: string;
+    fbr_ntn?: string;
+    type?: string;
+    ntn?: string;
+    strn?: string;
+    receipt_header_text?: string;
+    receipt_footer_text?: string;
 }
 
 export interface Staff {
@@ -135,6 +144,7 @@ export interface RiderShift {
     expected_cash?: number;
     cash_difference?: number;
     status: 'OPEN' | 'CLOSED';
+    cash_dropped?: number;
     notes?: string;
 }
 
@@ -211,6 +221,7 @@ export interface MenuItem {
     daily_stock?: number;
     description?: string;
     category_id?: string;
+    is_tax_exempt?: boolean;        // Item-level tax exemption (e.g. drinks already include tax)
     // Included relation
     category_rel?: MenuCategory;
     station_rel?: Station;
@@ -358,6 +369,17 @@ export interface Order {
     guestCount?: number;
     tableId?: string | null;
     timestamp?: Date;
+    fbr_invoice_number?: string;
+    fbr_sync_status?: 'NONE' | 'SYNCED' | 'FAILED';
+    fbr_qr_code?: string;
+    is_proforma_printed?: boolean;
+    fbr_response?: string;
+
+    // Advanced Tax Handling
+    tax_type?: 'INCLUSIVE' | 'EXCLUSIVE';
+    is_tax_exempt?: boolean;
+    discount_reason?: string;
+    discountReason?: string;
 }
 
 export interface Customer {
@@ -391,6 +413,12 @@ export interface PaymentBreakdown {
     deliveryFee: number;
     discount: number;
     total: number;
+    // Extended fields from BillEngine
+    discountAmount?: number;
+    discountPercent?: number;
+    taxableSubtotal?: number;
+    taxExemptAmount?: number;
+    discountReason?: string;
 }
 
 // Backwards-compatible alias names expected elsewhere in the codebase
@@ -482,6 +510,10 @@ export interface Notification {
     id: string;
     type: 'success' | 'error' | 'info' | 'warning';
     message: string;
+    action?: {
+        label: string;
+        onClick: () => void;
+    };
 }
 
 export interface Reservation {
@@ -496,6 +528,8 @@ export interface Reservation {
 }
 
 export interface AppContextType {
+    activeSession: any | null;
+    setActiveSession: (session: any) => void;
     currentUser: Staff | null;
     currentRestaurant: any | null;
     orders: Order[];
@@ -516,7 +550,7 @@ export interface AppContextType {
     setOrderToEdit: (order: Order | null) => void;
     login: (pin: string) => Promise<boolean>;
     logout: () => void;
-    addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string) => void;
+    addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string, action?: { label: string, onClick: () => void }) => void;
     removeNotification: (id: string) => void;
     fetchInitialData: () => Promise<void>;
     addOrder: (order: Partial<Order>) => Promise<any>;
@@ -525,7 +559,7 @@ export interface AppContextType {
     voidOrder: (id: string, reason: string, notes: string, refundMethod: string, managerPin: string) => Promise<boolean>;
     updateOrderStatus: (id: string, status: OrderStatus) => Promise<void>;
     updateOrderItemStatus: (orderId: string, itemIndex: number, status: OrderStatus) => Promise<boolean>;
-    calculateOrderTotal: (items: OrderItem[], type: OrderType, guests: number, fee: number) => PaymentBreakdown;
+    calculateOrderTotal: (items: OrderItem[], type: OrderType, guests: number, fee: number, taxSettings?: { tax_type?: 'INCLUSIVE' | 'EXCLUSIVE', is_tax_exempt?: boolean }) => PaymentBreakdown;
     addSection: (s: any) => Promise<any>;
     deleteSection: (id: string) => Promise<void>;
     updateSection: (s: any) => Promise<boolean>;
@@ -537,6 +571,7 @@ export interface AppContextType {
     processPayment: (orderId: string, transaction: Transaction) => Promise<boolean>;
     assignDriverToOrder: (orderId: string, driverId: string, floatAmount?: number) => Promise<void>;
     completeDelivery: (orderId: string) => Promise<void>;
+    failDelivery: (orderId: string, reason: string) => Promise<void>;
     settleRiderCash: (settlement: RiderSettlement) => Promise<boolean>;
     addExpense: (expense: Expense) => Promise<void>;
     updateReservationStatus: (id: string, status: string) => Promise<void>;
@@ -579,4 +614,9 @@ export interface AppContextType {
     deleteStation: (id: string) => Promise<void>;
 
     socket?: any; // Socket.IO instance
+    // Shift Management
+    openRiderShift: (data: { riderId: string, openedBy: string, openingFloat: number, notes?: string }) => Promise<boolean>;
+    closeRiderShift: (data: { shiftId: string, closedBy: string, closingCash: number, notes?: string }) => Promise<boolean>;
+    depositRiderCash: (data: { shiftId: string, depositedBy: string, amount: number, notes?: string }) => Promise<boolean>;
+    operationsConfig: any;
 }

@@ -93,35 +93,62 @@ export class RiderShiftService {
 
             const received = new Decimal(data.closingCash.toString());
 
-            // 1. Calculate Expected Cash
-            // Expected = Opening Float + Sum of all CLOSED/PAID cash delivery orders in this shift
-            const orders = await tx.orders.findMany({
+            // 1. Calculate Expected Final Handover
+            // Total Shift Value = Opening Float + ALL orders that generated cash in this shift
+            const cashOrders = await tx.orders.findMany({
                 where: {
                     rider_shift_id: shift.id,
-                    status: 'CLOSED',
-                    payment_status: 'PAID'
+                    status: { in: ['DELIVERED', 'CLOSED'] }
                 }
             });
 
-            const salesTotal = orders.reduce((sum, o) => sum.plus(new Decimal(o.total)), new Decimal(0));
-            const expected = new Decimal(shift.opening_float).plus(salesTotal);
-            const variance = received.minus(expected);
+            // What the rider was supposed to collect in total
+            const salesTotal = cashOrders.reduce((sum, o) => sum.plus(new Decimal(o.total)), new Decimal(0));
+            const totalShiftValue = new Decimal(shift.opening_float).plus(salesTotal);
 
-            // 2. Update Shift Record
+            // What the cashier has ALREADY collected from the rider during this shift
+            const alreadySettledOrdersSum = cashOrders
+                .filter(o => o.status === 'CLOSED')
+                .reduce((sum, o) => sum.plus(new Decimal(o.total)), new Decimal(0));
+            const cashDropped = new Decimal(shift.cash_dropped || 0);
+
+            const alreadyCollected = alreadySettledOrdersSum.plus(cashDropped);
+
+            const expectedFinalHandover = totalShiftValue.minus(alreadyCollected);
+            const variance = received.minus(expectedFinalHandover);
+
+            // 2. Auto-close any remaining DELIVERED orders (they've been physically settled via shift close)
+            const deliveredOrders = cashOrders.filter(o => o.status === 'DELIVERED');
+            if (deliveredOrders.length > 0) {
+                await tx.orders.updateMany({
+                    where: {
+                        id: { in: deliveredOrders.map(o => o.id) },
+                        status: 'DELIVERED'
+                    },
+                    data: {
+                        status: 'CLOSED',
+                        payment_status: 'PAID',
+                        last_action_by: data.closedBy,
+                        last_action_desc: 'Auto-settled on shift close'
+                    } as any
+                });
+            }
+
+            // 3. Update Shift Record
             const updatedShift = await tx.rider_shifts.update({
                 where: { id: data.shiftId },
                 data: {
                     closed_at: new Date(),
                     closed_by: data.closedBy,
                     closing_cash_received: received,
-                    expected_cash: expected,
+                    expected_cash: expectedFinalHandover,
                     cash_difference: variance,
                     status: 'CLOSED',
                     notes: data.notes
                 }
             });
 
-            // 3. Record Settlement in Ledger
+            // 4. Record Settlement in Ledger
             if (!received.isZero()) {
                 // Main Cash increases
                 await accounting.createLedgerEntry({
@@ -130,11 +157,11 @@ export class RiderShiftService {
                     amount: received,
                     referenceType: 'SETTLEMENT',
                     referenceId: shift.id,
-                    description: `Shift closing cash received from rider`,
+                    description: `Shift closing cash received from rider (${cashOrders.length} orders, Float + Sales)`,
                     processedBy: data.closedBy
                 }, tx);
 
-                // Rider liability decreases (Credit)
+                // Rider liability fully cleared
                 await accounting.createLedgerEntry({
                     restaurantId: shift.restaurant_id,
                     accountId: shift.rider_id,
@@ -142,7 +169,7 @@ export class RiderShiftService {
                     amount: received,
                     referenceType: 'SETTLEMENT',
                     referenceId: shift.id,
-                    description: `Shift liability cleared`,
+                    description: `Shift fully reconciled — liability cleared`,
                     processedBy: data.closedBy
                 }, tx);
             }

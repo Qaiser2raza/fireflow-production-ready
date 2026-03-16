@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { Restaurant, Server } from '../../shared/types';
 import {
   registerRestaurant,
-  activateLicenseKey,
-  type RestaurantRegistrationData
+  activateLicenseKey
 } from '../../shared/lib/cloudClient';
 import {
   Building2,
@@ -181,7 +180,7 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
         timezone: 'Asia/Karachi'
       };
 
-      const restaurantRes = await fetch('http://localhost:3001/api/restaurants', {
+      const restaurantRes = await fetch(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/restaurants`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(restaurantPayload)
@@ -203,7 +202,7 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
         status: 'active'
       };
 
-      const staffRes = await fetch('http://localhost:3001/api/staff', {
+      const staffRes = await fetch(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/staff`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(staffPayload)
@@ -212,7 +211,7 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({ onRegister }
       if (!staffRes.ok) {
         const data = await staffRes.json();
         // Cleanup: Delete the created restaurant
-        await fetch(`http://localhost:3001/api/restaurants/${newRestaurant.id}`, {
+        await fetch(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/restaurants/${newRestaurant.id}`, {
           method: 'DELETE'
         }).catch(console.error);
         throw new Error(data.error || 'Failed to create staff account');

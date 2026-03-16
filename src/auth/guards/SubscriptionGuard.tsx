@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRestaurant, formatCurrency } from '../../client/RestaurantContext';
 import { useAppContext } from '../../client/App';
-import { Lock, AlertCircle, CreditCard, Phone, Building2, Clock, Loader2, CheckCircle2, LogOut, X } from 'lucide-react';
+import { Lock, AlertCircle, CreditCard, Phone, Building2, Clock, Loader2, CheckCircle2, LogOut } from 'lucide-react';
 import { PaymentSubmissionView } from '../../operations/pos/PaymentSubmissionView';
 import { getSubscriptionStatus } from '../../shared/lib/cloudClient';
 
@@ -68,7 +68,9 @@ export const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ chi
     const interval = setInterval(validateCloud, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [currentRestaurant?.id, cacheKey]);
-  const subscriptionStatus = currentRestaurant.subscriptionStatus;
+  const subscriptionStatus = currentRestaurant?.subscriptionStatus;
+
+  if (!currentRestaurant) return <>{children}</>;
 
   // CASE 1: EXPIRED & PENDING VERIFICATION
   if (subscriptionStatus === 'expired' && hasPendingPayment) {

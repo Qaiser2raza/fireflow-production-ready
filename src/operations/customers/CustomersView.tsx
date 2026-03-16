@@ -70,7 +70,7 @@ export const CustomersView: React.FC = () => {
         is_default: false
     });
 
-    const API_URL = 'http://localhost:3001/api';
+    const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
     useEffect(() => {
         if (restaurantId) {

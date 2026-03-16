@@ -10,6 +10,7 @@ interface OrderDetailModalProps {
     onMarkServed: () => Promise<void>;
     onRequestBill: () => Promise<void>;
     onEditInPOS: () => void;
+    currentUser: any;
 }
 
 export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
@@ -19,7 +20,8 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     table,
     onMarkServed,
     onRequestBill,
-    onEditInPOS
+    onEditInPOS,
+    currentUser
 }) => {
     const elapsedMinutes = useMemo(() => {
         return Math.floor((Date.now() - new Date(order.created_at).getTime()) / 60000);
@@ -143,14 +145,16 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                                     )}
                                                 </div>
                                             </div>
-                                            <div className="text-right">
-                                                <div className="text-white font-bold">
-                                                    Rs. {(item.unit_price * item.quantity).toLocaleString()}
+                                            {['MANAGER', 'CASHIER', 'SUPER_ADMIN', 'ADMIN'].includes(currentUser?.role) && (
+                                                <div className="text-right">
+                                                    <div className="text-white font-bold">
+                                                        Rs. {(item.unit_price * item.quantity).toLocaleString()}
+                                                    </div>
+                                                    <div className="text-[10px] text-slate-500">
+                                                        @{item.unit_price}
+                                                    </div>
                                                 </div>
-                                                <div className="text-[10px] text-slate-500">
-                                                    @{item.unit_price}
-                                                </div>
-                                            </div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
@@ -197,42 +201,44 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                             </div>
 
                             {/* Financials */}
-                            <div className="bg-[#1a1f2e] rounded-xl p-4 border border-slate-800">
-                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">
-                                    Financial Summary
-                                </h3>
-                                <div className="space-y-2">
-                                    <div className="flex justify-between text-xs">
-                                        <span className="text-slate-400">Subtotal</span>
-                                        <span className="text-white font-bold">
-                                            Rs. {(order.breakdown?.subtotal || order.total).toLocaleString()}
-                                        </span>
-                                    </div>
-                                    {order.service_charge && order.service_charge > 0 && (
+                            {['MANAGER', 'CASHIER', 'SUPER_ADMIN', 'ADMIN'].includes(currentUser?.role) && (
+                                <div className="bg-[#1a1f2e] rounded-xl p-4 border border-slate-800">
+                                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">
+                                        Financial Summary
+                                    </h3>
+                                    <div className="space-y-2">
                                         <div className="flex justify-between text-xs">
-                                            <span className="text-slate-400">Service Charge</span>
+                                            <span className="text-slate-400">Subtotal</span>
                                             <span className="text-white font-bold">
-                                                Rs. {Math.round(order.service_charge).toLocaleString()}
+                                                Rs. {(order.breakdown?.subtotal || order.total).toLocaleString()}
                                             </span>
                                         </div>
-                                    )}
-                                    {order.tax && order.tax > 0 && (
-                                        <div className="flex justify-between text-xs">
-                                            <span className="text-slate-400">Tax</span>
-                                            <span className="text-white font-bold">
-                                                Rs. {Math.round(order.tax).toLocaleString()}
+                                        {order.service_charge && order.service_charge > 0 && (
+                                            <div className="flex justify-between text-xs">
+                                                <span className="text-slate-400">Service Charge</span>
+                                                <span className="text-white font-bold">
+                                                    Rs. {Math.round(order.service_charge).toLocaleString()}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {order.tax && order.tax > 0 && (
+                                            <div className="flex justify-between text-xs">
+                                                <span className="text-slate-400">Tax</span>
+                                                <span className="text-white font-bold">
+                                                    Rs. {Math.round(order.tax).toLocaleString()}
+                                                </span>
+                                            </div>
+                                        )}
+                                        <div className="h-px bg-slate-800 my-2" />
+                                        <div className="flex justify-between">
+                                            <span className="text-sm font-black text-white uppercase">Total</span>
+                                            <span className="text-lg font-black text-gold-500">
+                                                Rs. {Math.round(order.total).toLocaleString()}
                                             </span>
                                         </div>
-                                    )}
-                                    <div className="h-px bg-slate-800 my-2" />
-                                    <div className="flex justify-between">
-                                        <span className="text-sm font-black text-white uppercase">Total</span>
-                                        <span className="text-lg font-black text-gold-500">
-                                            Rs. {Math.round(order.total).toLocaleString()}
-                                        </span>
                                     </div>
                                 </div>
-                            </div>
+                            )}
 
                             {/* Quick Stats */}
                             <div className="grid grid-cols-2 gap-2">

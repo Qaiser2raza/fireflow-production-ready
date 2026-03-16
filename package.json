@@ -1,7 +1,7 @@
 {
   "name": "fireflow-restaurant-system",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "main": "electron-main.cjs",
   "scripts": {
@@ -14,7 +14,7 @@
     "lint": "echo 'Linting not configured yet'",
     "test": "echo 'Tests not configured yet'",
     "server": "node --import tsx src/api/server.ts",
-    "server:fresh": "powershell -Command \"$p=(Get-NetTCPConnection -LocalPort 3001 -EA 0).OwningProcess; if($p){Stop-Process -Id $p -Force; Start-Sleep 1}\" && node --import tsx src/api/server.ts",
+    "server:fresh": "powershell -Command \"$p=(Get-NetTCPConnection -LocalPort 3001 -EA 0).OwningProcess; if($p){Stop-Process -Id $p -Force -EA 0; Start-Sleep 2}\" && npm run server",
     "kill:3001": "powershell -Command \"$p=(Get-NetTCPConnection -LocalPort 3001 -EA 0).OwningProcess; if($p){Stop-Process -Id $p -Force; Write-Host 'Killed port 3001'}else{Write-Host 'Port 3001 is free'}\"",
     "electron": "cross-env NODE_ENV=production node scripts/launch-electron.js",
     "test:integration": "node ./scripts/integration/delivery-test.js",
@@ -23,7 +23,8 @@
     "migrate:pins": "tsx scripts/migrate-pins-to-bcrypt.ts",
     "db:seed": "prisma db seed",
     "db:reset": "prisma db seed",
-    "db:reset-orders": "tsx scripts/reset_orders.ts"
+    "db:reset-orders": "tsx scripts/reset_orders.ts",
+    "publish": "tsx scripts/publish-update.ts"
   },
   "dependencies": {
     "@google/genai": "^1.42.0",
@@ -64,6 +65,7 @@
     "@types/swagger-jsdoc": "6.0.4",
     "@types/swagger-ui-express": "4.1.8",
     "@vitejs/plugin-react": "^5.0.0",
+    "adm-zip": "^0.5.16",
     "autoprefixer": "^10.4.16",
     "concurrently": "^8.2.1",
     "cross-env": "^7.0.3",
@@ -102,7 +104,7 @@
       "package.json",
       "node_modules/**/*"
     ],
-    "asar": true,
+    "asar": false,
     "extraResources": [
       "prisma/**/*",
       ".env"

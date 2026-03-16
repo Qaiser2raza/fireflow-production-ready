@@ -45,69 +45,62 @@ export const TransactionsView: React.FC = () => {
   return (
     <div className="flex h-full w-full bg-slate-950 flex-col overflow-hidden font-sans">
 
-      {/* HEADER & STATS CARDS */}
-      <div className="p-4 md:p-8 md:pb-4 shrink-0">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+      {/* UNIFIED COMPACT HEADER & STATS */}
+      <div className="p-4 shrink-0 bg-slate-900/30 border-b border-slate-800">
+        
+        {/* Top Row: Title, Filters & Actions */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
           <div className="flex items-center gap-4">
-            <h1 className="text-xl md:text-2xl font-serif text-white tracking-wide uppercase">Register & Revenue</h1>
+            <h1 className="text-lg font-serif text-white tracking-wide uppercase">Register & Revenue</h1>
+            <div className="h-4 w-px bg-slate-800"></div>
+            <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg p-1.5 focus-within:border-slate-600 transition-colors w-64 text-sm">
+              <Search size={14} className="text-slate-500 ml-1" />
+              <input
+                className="bg-transparent border-none outline-none text-slate-300 placeholder-slate-600 w-full px-1"
+                placeholder="Search TXN..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-1">
+              {['ALL', 'CASH', 'CARD', 'RAAST'].map(method => (
+                <button
+                  key={method}
+                  onClick={() => setFilterMethod(method)}
+                  className={`px-2 py-1 rounded text-[9px] font-bold tracking-widest transition-all
+                    ${filterMethod === method
+                      ? 'bg-[#ffd900] text-black'
+                      : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}
+                    `}
+                >
+                  {method}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setActiveView('Activity')}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-[#ffd900] rounded-lg text-[10px] font-black uppercase tracking-widest border border-[#ffd900]/20 flex items-center gap-2 transition-all"
+              className="px-3 py-1.5 bg-slate-800/50 hover:bg-slate-700 text-[#ffd900] rounded text-[9px] font-black uppercase tracking-widest border border-[#ffd900]/20 flex items-center gap-2 transition-all"
             >
-              <ClipboardList size={14} /> View Full Ticket Log
+              <ClipboardList size={12} /> Ticket Log
             </button>
-          </div>
-          <div className="flex gap-2 w-full md:w-auto">
-            <button className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold uppercase tracking-wider transition-colors border border-slate-700">
-              <Calendar size={14} /> Today
+            <button className="flex items-center justify-center gap-2 px-3 py-1.5 bg-slate-800/50 hover:bg-slate-700 text-slate-300 rounded text-[9px] font-bold uppercase tracking-wider transition-colors border border-slate-700">
+              <Calendar size={12} /> Today
             </button>
-            <button className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-[#ffd900] hover:bg-[#e6c200] text-slate-900 rounded text-xs font-bold uppercase tracking-wider transition-colors shadow-lg shadow-[#ffd900]/20">
-              <Download size={14} /> Export
+            <button className="flex items-center justify-center gap-2 px-3 py-1.5 bg-[#ffd900] hover:bg-[#e6c200] text-slate-900 rounded text-[9px] font-bold uppercase tracking-wider transition-colors shadow-lg shadow-[#ffd900]/20">
+              <Download size={12} /> Export
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-          <StatCard title="Total Sales" value={totalSales} icon={<Banknote size={20} />} color="text-white" bg="bg-gradient-to-br from-slate-800 to-slate-900" border="border-slate-700" />
-          <StatCard title="Cash (In Drawer)" value={cashSales} icon={<span>💵</span>} color="text-green-400" bg="bg-slate-900" border="border-green-900/30" />
-          <StatCard title="Card Terminals" value={cardSales} icon={<CreditCard size={20} />} color="text-blue-400" bg="bg-slate-900" border="border-blue-900/30" />
-          <StatCard title="Raast / Online" value={raastSales} icon={<span className="text-xl font-serif italic font-black">R</span>} color="text-purple-400" bg="bg-slate-900" border="border-purple-900/30" />
-        </div>
-      </div>
-
-      {/* FILTERS & SEARCH */}
-      <div className="px-4 md:px-8 py-4 bg-slate-900/50 border-y border-slate-800 flex flex-col md:flex-row justify-between items-center gap-4 shrink-0">
-        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4 w-full md:w-auto">
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg p-2 w-full md:w-64 focus-within:border-slate-600 transition-colors">
-            <Search size={16} className="text-slate-500" />
-            <input
-              className="bg-transparent border-none outline-none text-slate-300 placeholder-slate-600 text-sm w-full"
-              placeholder="Search TXN or Order No..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-
-          <div className="hidden md:block h-8 w-px bg-slate-800" />
-
-          <div className="flex gap-2 overflow-x-auto pb-1 md:pb-0 no-scrollbar">
-            {['ALL', 'CASH', 'CARD', 'RAAST'].map(method => (
-              <button
-                key={method}
-                onClick={() => setFilterMethod(method)}
-                className={`px-3 py-1.5 rounded text-[10px] font-bold tracking-wider transition-all whitespace-nowrap
-                  ${filterMethod === method
-                    ? 'bg-[#ffd900] text-black shadow-lg shadow-[#ffd900]/10'
-                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}
-                  `}
-              >
-                {method}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="text-slate-500 text-[10px] font-black uppercase tracking-widest">
-          {filteredTransactions.length} Audit Records
+        {/* Bottom Row: Ultra-compact Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard title="Total Sales" value={totalSales} icon={<Banknote size={14} />} color="text-white" border="border-slate-700" />
+          <StatCard title="Cash (Drawer)" value={cashSales} icon={<span>💵</span>} color="text-green-400" border="border-green-900/30" />
+          <StatCard title="Card Terms" value={cardSales} icon={<CreditCard size={14} />} color="text-blue-400" border="border-blue-900/30" />
+          <StatCard title="Raast/Online" value={raastSales} icon={<span className="font-serif italic font-black">R</span>} color="text-purple-400" border="border-purple-900/30" />
         </div>
       </div>
 
@@ -199,14 +192,14 @@ export const TransactionsView: React.FC = () => {
 };
 
 // --- SUB-COMPONENT: STAT CARD ---
-const StatCard: React.FC<{ title: string, value: number, icon: React.ReactNode, color: string, bg: string, border: string }> = ({ title, value, icon, color, bg, border }) => (
-  <div className={`${bg} border ${border} p-5 rounded-2xl shadow-2xl flex flex-col justify-between h-28 md:h-36 transition-all hover:scale-[1.02] cursor-default group`}>
-    <div className="flex justify-between items-start">
-      <span className="text-slate-500 text-[10px] uppercase tracking-widest font-black group-hover:text-slate-300">{title}</span>
-      <div className={`${color} opacity-60 group-hover:opacity-100 group-hover:scale-110 transition-all`}>{icon}</div>
+const StatCard: React.FC<{ title: string, value: number, icon: React.ReactNode, color: string, border: string }> = ({ title, value, icon, color, border }) => (
+  <div className={`bg-slate-950 border ${border} p-3 rounded-xl shadow-lg flex items-center justify-between gap-4 transition-all hover:scale-[1.02] cursor-default group`}>
+    <div className="flex items-center gap-3">
+       <div className={`${color} opacity-60 group-hover:opacity-100 transition-all`}>{icon}</div>
+       <span className="text-slate-500 text-[9px] uppercase tracking-widest font-black group-hover:text-slate-300">{title}</span>
     </div>
-    <div className={`text-xl md:text-3xl font-serif font-medium ${color} tracking-tighter`}>
-      <span className="text-xs md:text-sm opacity-50 mr-1 uppercase font-sans">Rs.</span>
+    <div className={`text-base font-serif font-bold ${color} tracking-tighter`}>
+      <span className="text-[10px] opacity-50 mr-1 uppercase font-sans">Rs.</span>
       {(Number(value) || 0).toLocaleString()}
     </div>
   </div>

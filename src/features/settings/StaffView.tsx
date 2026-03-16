@@ -11,7 +11,7 @@ import { Modal } from '../../shared/ui/Modal';
 import { Input } from '../../shared/ui/Input';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 export const StaffView: React.FC = () => {
   const { servers, currentUser, fetchInitialData } = useAppContext();
@@ -31,7 +31,7 @@ export const StaffView: React.FC = () => {
 
   // Filter Logic
   const filteredStaff = useMemo(() => {
-    let all = servers.filter((s: any) => s.status === 'active' || !s.status);
+    let all = servers.filter((s: any) => (s.status?.toLowerCase() === 'active') || !s.status);
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       all = all.filter((s: any) => s.name.toLowerCase().includes(q) || s.role.toLowerCase().includes(q));
@@ -77,7 +77,7 @@ export const StaffView: React.FC = () => {
       image: formData.image // Ensure this is sent!
     };
 
-    const url = `http://localhost:3001/api/staff`;
+    const url = `${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/staff`;
     const headers = { 'Content-Type': 'application/json' };
 
     if (editingStaff) {
@@ -201,7 +201,7 @@ export const StaffView: React.FC = () => {
                     <option value="SERVER">Waiter</option>
                     <option value="CHEF">Chef</option>
                     <option value="RIDER">Rider</option>
-                    <option value="DRIVER">Driver</option>
+                    <option value="CASHIER">Cashier</option>
                   </select>
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
                     <LayoutGrid size={14} />
@@ -239,8 +239,8 @@ const StaffCard = ({ staff, onEdit, onDelete }: any) => {
       case 'SUPER_ADMIN':
       case 'MANAGER': return { color: 'text-gold-500', border: 'border-l-gold-500', bg: 'bg-gold-500/10', icon: Shield };
       case 'CHEF': return { color: 'text-red-500', border: 'border-l-red-500', bg: 'bg-red-500/10', icon: ChefHat };
-      case 'RIDER':
-      case 'DRIVER': return { color: 'text-blue-500', border: 'border-l-blue-500', bg: 'bg-blue-500/10', icon: Bike };
+      case 'RIDER': return { color: 'text-blue-500', border: 'border-l-blue-500', bg: 'bg-blue-500/10', icon: Bike };
+      case 'CASHIER': return { color: 'text-emerald-500', border: 'border-l-emerald-500', bg: 'bg-emerald-500/10', icon: User };
       default: return { color: 'text-purple-500', border: 'border-l-purple-500', bg: 'bg-purple-500/10', icon: User };
     }
   };

@@ -34,7 +34,7 @@ export const ChartOfAccountsModal: React.FC<COAModalProps> = ({ onClose }) => {
 
     const loadCOA = async () => {
         try {
-            const res = await fetchWithAuth('http://localhost:3001/api/accounting/coa');
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/coa`);
             if (res.ok) {
                 setAccounts(await res.json());
             }
@@ -53,7 +53,7 @@ export const ChartOfAccountsModal: React.FC<COAModalProps> = ({ onClose }) => {
         e.preventDefault();
         try {
             const isEdit = !!editingId;
-            const url = isEdit ? `http://localhost:3001/api/accounting/coa/${editingId}` : 'http://localhost:3001/api/accounting/coa';
+            const url = isEdit ? `${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/coa/${editingId}` : `${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/coa`;
             const method = isEdit ? 'PATCH' : 'POST';
 
             const res = await fetchWithAuth(url, {

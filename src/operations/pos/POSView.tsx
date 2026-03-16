@@ -1,20 +1,43 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { MenuItem, OrderItem, OrderType } from '../../shared/types';
 import { useAppContext } from '../../client/contexts/AppContext';
-import { Search, X, Edit2, Plus, Minus, Loader2, Utensils, Flame, ShoppingBag, Bike, Users, Banknote, Printer } from 'lucide-react';
+import {
+  Search,
+  X,
+  Edit2,
+  Plus,
+  Minus,
+  Loader2,
+  Utensils,
+  Flame,
+  ShoppingBag,
+  Bike,
+  Banknote,
+  Printer,
+  CreditCard,
+  Clock,
+  CheckCircle2,
+  CheckSquare,
+  History
+} from 'lucide-react';
 import { useDebounce } from '../../hooks/useDebounce';
-import { CustomerQuickAdd } from './components/CustomerQuickAdd';
+import { useThermalPrinter } from '../../hooks/useThermalPrinter';
+// import { CustomerQuickAdd } from './components/CustomerQuickAdd';
 import { TokenDisplayBanner } from './components/TokenDisplayBanner';
+import { RecallModal } from '../dashboard/components/RecallModal';
 import { MenuItemCard } from './components/MenuItemCard';
+import { FloatingCartBadge } from './components/FloatingCartBadge';
 import { PaymentModal } from './components/PaymentModal';
 import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
+import { ReceiptView } from './ReceiptView';
 import { Order } from '../../shared/types';
+import { calculateBill, getDefaultBillConfig, BillConfig } from '../../lib/billEngine';
 
 export const POSView: React.FC = () => {
   const {
-    addOrder, updateOrder, calculateOrderTotal, orders,
+    addOrder, updateOrder, orders,
     orderToEdit, setOrderToEdit, setActiveView, currentUser, menuItems, menuCategories,
-    tables, addNotification, customers, processPayment
+    tables, addNotification, customers, processPayment, addCustomer, operationsConfig
   } = useAppContext();
 
   // UI & Order State
@@ -22,15 +45,20 @@ export const POSView: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string>('trending');
   const [searchQuery, setSearchQuery] = useState('');
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [editingField, setEditingField] = useState<'discount' | 'delivery' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTokenBanner, setShowTokenBanner] = useState(false);
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
   const [estimatedPickupTime, setEstimatedPickupTime] = useState<Date | undefined>(undefined);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [showMobileCart, setShowMobileCart] = useState(false); // Mobile-only: cart bottom sheet
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768); // Mobile breakpoint detection
 
   // Order Details State
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
+  const [activeOrderNumber, setActiveOrderNumber] = useState<string | null>(null);
+  const [isRecallOpen, setIsRecallOpen] = useState(false);
   const [currentOrderItems, setCurrentOrderItems] = useState<OrderItem[]>([]);
   const [orderType, setOrderType] = useState<OrderType>(currentUser?.role === 'CASHIER' ? 'TAKEAWAY' : 'DINE_IN');
   const [selectedTableId, setSelectedTableId] = useState<string>('');
@@ -41,6 +69,70 @@ export const POSView: React.FC = () => {
   const [isCustomerLoading, setIsCustomerLoading] = useState(false);
 
   const debouncedPhone = useDebounce(customerPhone, 400);
+
+  // Bill Config — per-session billing overrides (discount, service, tax, delivery)
+  const [billConfig, setBillConfig] = useState<BillConfig>(() =>
+    getDefaultBillConfig('DINE_IN', operationsConfig || {})
+  );
+
+  // Reset bill config to order-type defaults when order type changes
+  useEffect(() => {
+    setBillConfig(getDefaultBillConfig(orderType, operationsConfig || {}));
+  }, [orderType, operationsConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track mobile breakpoint
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth >= 768) {
+        setShowMobileCart(false); // Hide mobile cart on desktop
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Global Barcode Listener
+  useEffect(() => {
+    let buffer = '';
+    let lastKeyTime = Date.now();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const currentTime = Date.now();
+      
+      // Barcode scanners are fast. If time between keys is > 100ms, it's likely manual typing.
+      if (currentTime - lastKeyTime > 100) {
+        buffer = '';
+      }
+      
+      lastKeyTime = currentTime;
+
+      if (e.key === 'Enter') {
+        if (buffer.length > 5) { // Minimum order number length
+          const scannedNumber = buffer.trim();
+          console.log('[POS] Barcode Scanned:', scannedNumber);
+          
+          // Try to find the order by order_number or ID
+          const foundry = orders.find(o => o.order_number === scannedNumber || o.id === scannedNumber);
+          if (foundry) {
+            setOrderToEdit(foundry);
+            addNotification('success', `Recalled Order: ${foundry.order_number || scannedNumber}`);
+          }
+        }
+        buffer = '';
+        return;
+      }
+
+      // Append alphanumeric keys to buffer
+      if (e.key.length === 1 && /[a-zA-Z0-9-]/.test(e.key)) {
+        buffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [orders, setOrderToEdit, addNotification]);
 
   // Load Order for Editing
   useEffect(() => {
@@ -94,9 +186,12 @@ export const POSView: React.FC = () => {
     }
   }, [orderToEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const activeOrderData = useMemo(() => activeOrderId ? orders.find(o => o.id === activeOrderId) : null, [activeOrderId, orders]);
+  const isAlreadyPaid = activeOrderData?.status === 'CLOSED' || activeOrderData?.payment_status === 'PAID';
+
   // Customer Lookup logic
   useEffect(() => {
-    const cleanPhone = debouncedPhone.replace(/\D/g, '');
+    const cleanPhone = (debouncedPhone || '').replace(/\D/g, '');
     if (cleanPhone.length >= 10 && (orderType === 'TAKEAWAY' || orderType === 'DELIVERY')) {
       setIsCustomerLoading(true);
       const match = customers?.find(c => (c.phone || '').replace(/\D/g, '') === cleanPhone);
@@ -110,47 +205,75 @@ export const POSView: React.FC = () => {
       setCustomerName('');
       setDeliveryAddress('');
     }
-  }, [debouncedPhone, orderType]); // Removed customers/addNotification from deps to prevent re-runs resetting manual name input
+  }, [debouncedPhone, orderType]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Live Sync with server (reflect KDS changes in real-time)
+  useEffect(() => {
+    if (activeOrderId && activeOrderData?.order_items) {
+      setCurrentOrderItems(prev => {
+        return prev.map(localItem => {
+          // Only sync items that already have a server-side ID
+          const serverItem = activeOrderData.order_items!.find(si => si.id === localItem.id);
+          if (serverItem) {
+            return { 
+              ...localItem, 
+              item_status: serverItem.item_status,
+              quantity: serverItem.quantity,
+              total_price: serverItem.total_price
+            };
+          }
+          return localItem;
+        });
+      });
+    }
+  }, [activeOrderData?.order_items?.map(i => i.item_status).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
-
-  const activeOrderData = activeOrderId ? orders.find(o => o.id === activeOrderId) : null;
-  const isAlreadyPaid = activeOrderData?.status === 'CLOSED' || activeOrderData?.payment_status === 'PAID';
+  const handleServeItem = async (itemId: string) => {
+    if (!activeOrderId || !activeOrderData) return;
+    setIsSubmitting(true);
+    try {
+      const updatedItems = currentOrderItems.map(i => 
+        i.id === itemId ? { ...i, item_status: 'SERVED' } : i
+      );
+      
+      const allServed = updatedItems.every(i => ['SERVED', 'VOIDED', 'CANCELLED', 'SKIPPED'].includes(i.item_status || ''));
+      
+      await updateOrder({
+        id: activeOrderId,
+        items: updatedItems,
+        status: allServed ? 'READY' : 'ACTIVE',
+        last_action_desc: 'Item served by staff'
+      } as any);
+      
+      addNotification('success', 'Item marked as served');
+    } catch (e) {
+      addNotification('error', 'Failed to serve item');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const breakdown = useMemo(() => {
-    const defaultBreakdown = { subtotal: 0, serviceCharge: 0, tax: 0, deliveryFee: 0, discount: 0, total: 0 };
-    if (typeof calculateOrderTotal !== 'function') return defaultBreakdown;
-    return calculateOrderTotal(currentOrderItems, orderType, guestCount, 250) || defaultBreakdown;
-  }, [currentOrderItems, orderType, guestCount, calculateOrderTotal]);
+    return calculateBill(currentOrderItems, billConfig);
+  }, [currentOrderItems, billConfig]);
 
   const allCategories = useMemo(() => {
     const categories: { id: string; name: string }[] = [];
     const seenNames = new Set<string>();
 
-    // 1. Add explicitly defined menu categories first
+    // Role-based category filtering logic
+
     menuCategories?.forEach(c => {
       const nameLower = c.name.toLowerCase().trim();
+      // Waiter filtering: Hide generic or sensitive categories if needed
+      // For now, we allow all except if we want to explicitly restrict some
+      // Example: if (isWaiter && c.name === 'Staff Meals') return;
       if (!seenNames.has(nameLower)) {
         categories.push({ id: c.id, name: c.name });
         seenNames.add(nameLower);
       }
     });
 
-    const derivedStatus = orderToEdit?.status || activeOrderData?.status;
-
-    // Check if there are any items that haven't been processed yet
-    const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'PENDING');
-
-    // DEBUG: Trace Status for Button
-    console.log('[POS Debug] Order Status Check:', {
-      activeOrderId,
-      activeOrderDataStatus: activeOrderData?.status,
-      orderToEditStatus: orderToEdit?.status,
-      derivedStatus,
-      hasUnfiredItems
-    });
-
-    // 2. Add categories found in items that aren't already in the list
     menuItems?.forEach(i => {
       if (i.category) {
         const nameLower = i.category.toLowerCase().trim();
@@ -162,7 +285,7 @@ export const POSView: React.FC = () => {
     });
 
     return categories;
-  }, [menuCategories, menuItems]);
+  }, [menuCategories, menuItems, currentUser]);
 
   const filteredItems = useMemo(() => {
     let items = Array.isArray(menuItems) ? menuItems : [];
@@ -199,17 +322,62 @@ export const POSView: React.FC = () => {
   const resetPad = () => {
     console.log('[POS] Resetting Pad');
     setActiveOrderId(null);
+    setActiveOrderNumber(null);
     setCurrentOrderItems([]);
-    setCustomerPhone('');
-    setCustomerName('');
-    setDeliveryAddress('');
     setOrderType(currentUser?.role === 'CASHIER' ? 'TAKEAWAY' : 'DINE_IN');
     setSelectedTableId('');
     setGuestCount(2);
-    setIsSubmitting(false);
+    setCustomerPhone('');
+    setCustomerName('');
+    setDeliveryAddress('');
+    setOrderToEdit(null);
+    setGeneratedToken(null);
+    setShowTokenBanner(false);
+  };
 
-    // Clear global edit state
-    if (setOrderToEdit) setOrderToEdit(null);
+  const { printReceipt } = useThermalPrinter();
+
+  const handlePrintToken = async () => {
+      if (!generatedToken) return;
+      
+      const readyTime = estimatedPickupTime ? estimatedPickupTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A';
+      
+      const html = `
+        <html>
+        <head>
+            <link href="https://fonts.googleapis.com/css2?family=Libre+Barcode+128&display=swap" rel="stylesheet">
+            <style>
+                body { margin: 0; padding: 0; }
+                .barcode { font-family: 'Libre Barcode 128', sans-serif; font-size: 40px; margin: 5px 0; }
+            </style>
+        </head>
+        <body>
+            <div style="font-family: 'Courier New', Courier, monospace; width: 280px; padding: 10px; text-align: center;">
+                <div style="font-size: 14px; font-weight: bold; margin-bottom: 5px;">${currentUser?.restaurant_id ? 'FIREFLOW POS' : 'TOKEN SLIP'}</div>
+                <div style="border-top: 1px dashed #000; margin: 5px 0;"></div>
+                <div style="font-size: 10px; margin-bottom: 10px;">${orderType} ORDER</div>
+                
+                <div style="font-size: 12px; margin-bottom: 2px;">TOKEN NUMBER</div>
+                <div style="font-size: 40px; font-weight: 900; margin-bottom: 5px;">${generatedToken}</div>
+                
+                <div style="font-size: 10px; margin-bottom: 15px;">Ready In (~): ${readyTime}</div>
+                
+                ${activeOrderNumber ? `
+                    <div style="margin: 15px 0; padding: 5px; border: 1px solid #eee;">
+                        <div class="barcode">${activeOrderNumber}</div>
+                        <div style="font-size: 9px; margin-top: 2px;">${activeOrderNumber}</div>
+                    </div>
+                ` : ''}
+                
+                <div style="border-top: 1px dashed #000; margin: 10px 0;"></div>
+                <div style="font-size: 9px; color: #555;">Please show this token at the counter.</div>
+                <div style="font-size: 8px; margin-top: 5px;">${new Date().toLocaleString()}</div>
+            </div>
+        </body>
+        </html>
+      `;
+      
+      await printReceipt(html);
   };
 
   const handleClose = () => {
@@ -277,6 +445,7 @@ export const POSView: React.FC = () => {
 
   const handleOrderAction = async (shouldFire: boolean = false) => {
     if (currentOrderItems.length === 0) return;
+    setIsSubmitting(true);
 
     // Validations
     if (orderType === 'DINE_IN' && !selectedTableId) {
@@ -291,6 +460,20 @@ export const POSView: React.FC = () => {
     }
 
     try {
+      // --- Customer Auto-Save Logic ---
+      if ((orderType === 'DELIVERY' || orderType === 'TAKEAWAY') && customerPhone && customerName) {
+        const existing = customers?.find(c => (c.phone || '').replace(/\D/g, '') === customerPhone.replace(/\D/g, ''));
+        if (!existing) {
+          console.log('[POS] Saving new customer auto-magically...');
+          await addCustomer({
+            name: customerName,
+            phone: customerPhone,
+            address: deliveryAddress,
+            restaurant_id: currentUser?.restaurant_id
+          } as any);
+        }
+      }
+
       // v3.0 Mapping: All flow is through ACTIVE status
       const nextStatus = 'ACTIVE';
       const updatedItems = currentOrderItems.map(item => {
@@ -312,7 +495,12 @@ export const POSView: React.FC = () => {
         customer_name: customerName,
         customer_phone: customerPhone,
         delivery_address: deliveryAddress,
-        total: breakdown.total
+        total: breakdown.total,
+        discount: breakdown.discount,
+        service_charge: breakdown.serviceCharge,
+        tax: breakdown.tax,
+        delivery_fee: breakdown.deliveryFee,
+        breakdown: breakdown
       };
 
       const result = activeOrderId
@@ -332,6 +520,7 @@ export const POSView: React.FC = () => {
           const backendToken = result.takeaway_orders?.[0]?.token_number || result.takeaway_orders?.token_number;
           const token = backendToken || Math.floor(1000 + Math.random() * 9000).toString();
 
+          setActiveOrderNumber(result.order_number || null);
           setGeneratedToken(token);
           setEstimatedPickupTime(new Date(Date.now() + 25 * 60000));
           setShowTokenBanner(true);
@@ -354,6 +543,36 @@ export const POSView: React.FC = () => {
       addNotification('error', 'Failed to submit order');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePrint = async () => {
+    const el = document.getElementById('receipt-print-area');
+    if (el) {
+        // Clone the element and force it visible so its HTML is fully renderable
+        const clone = el.cloneNode(true) as HTMLElement;
+        clone.style.display = 'block';
+        clone.style.visibility = 'visible';
+        clone.style.position = 'absolute';
+        clone.style.top = '-9999px';
+        document.body.appendChild(clone);
+
+        // Collect print-specific styles from the page
+        const printStyles = Array.from(document.querySelectorAll('style'))
+            .map(s => s.innerHTML)
+            .join('\n');
+        
+        const content = `<html><head><style>
+            body { margin: 0; padding: 0; background: white; }
+            ${printStyles}
+            /* Force visible for thermal capture */
+            #receipt-print-area { display: block !important; visibility: visible !important; }
+        </style></head><body>${clone.innerHTML}</body></html>`;
+        
+        document.body.removeChild(clone);
+        await printReceipt(content);
+    } else {
+        window.print();
     }
   };
 
@@ -390,6 +609,14 @@ export const POSView: React.FC = () => {
           </div>
 
           <button
+            onClick={() => setIsRecallOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-900 border border-slate-800 hover:border-blue-500/50 rounded-xl text-blue-500 transition-all font-black uppercase text-[10px] tracking-widest shadow-lg mr-2"
+          >
+            <History size={16} />
+            Recall
+          </button>
+
+          <button
             onClick={() => setActiveCategory('all')}
             className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeCategory === 'all' ? 'bg-white text-black' : 'bg-slate-900 text-slate-500 hover:text-white'}`}
           >
@@ -413,7 +640,10 @@ export const POSView: React.FC = () => {
               <MenuItemCard
                 key={item.id}
                 item={item}
-                onSelect={() => addToOrder(item)}
+                onSelect={() => {
+                  addToOrder(item);
+                  if (isMobile) setShowMobileCart(true);
+                }}
               />
             ))}
           </div>
@@ -421,118 +651,230 @@ export const POSView: React.FC = () => {
       </div>
 
       {/* RIGHT: CART & CHECKOUT */}
-      <div className="w-[420px] bg-[#0B0F19] flex flex-col h-full shrink-0 z-20 shadow-2xl relative">
+      <div className="w-[320px] lg:w-[350px] bg-[#0B0F19] flex flex-col h-full shrink-0 z-20 shadow-2xl relative transition-all">
 
         {/* Cart Header */}
-        <div className="p-6 border-b border-white/5 bg-slate-950/50 backdrop-blur-md">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-serif font-bold text-white">Current Order</h2>
-            {activeOrderId ? (
-              <span className="px-2 py-1 bg-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-lg">EDITING</span>
-            ) : (
-              <span className="px-2 py-1 bg-green-500/20 text-green-400 text-[10px] font-black uppercase tracking-widest rounded-lg">NEW</span>
-            )}
-            <button
-              onClick={handleClose}
-              className="ml-2 p-1.5 bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-500 rounded-lg transition-colors"
-              title="Close"
-            >
-              <X size={16} />
-            </button>
+        <div className="p-3 md:p-4 border-b border-white/5 bg-slate-950/50 backdrop-blur-md pb-2">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="text-lg font-serif font-bold text-white">Current Order</h2>
+            <div className="flex gap-2 items-center">
+              {activeOrderId ? (
+                <span className="px-2 py-1 bg-blue-500/20 text-blue-400 text-[9px] font-black uppercase tracking-widest rounded-lg">EDITING</span>
+              ) : (
+                <span className="px-2 py-1 bg-green-500/20 text-green-400 text-[9px] font-black uppercase tracking-widest rounded-lg">NEW</span>
+              )}
+              <button onClick={handleClose} className="p-1.5 bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-500 rounded-lg transition-colors" title="Close"><X size={14} /></button>
+            </div>
           </div>
 
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowDetailsModal(true)}
-              className="flex-1 bg-slate-900 border border-slate-800 p-3 rounded-xl flex items-center justify-between group hover:border-gold-500/50 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-gold-500">
-                  {orderType === 'DINE_IN' ? <Utensils size={16} /> : orderType === 'DELIVERY' ? <Bike size={16} /> : <ShoppingBag size={16} />}
-                </div>
-                <div className="text-left">
-                  <div className="text-[9px] text-slate-500 font-black uppercase tracking-widest">Type</div>
-                  <div className="text-xs font-bold text-white uppercase">{orderType.replace('_', ' ')}</div>
-                </div>
+          <button
+            onClick={() => setShowDetailsModal(true)}
+            className="w-full bg-slate-900 border border-slate-800 p-2 rounded-lg flex items-center justify-between group hover:border-gold-500/50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-md bg-slate-800 flex items-center justify-center text-gold-500">
+                {orderType === 'DINE_IN' ? <Utensils size={12} /> : orderType === 'DELIVERY' ? <Bike size={12} /> : <ShoppingBag size={12} />}
               </div>
-              <Edit2 size={14} className="text-slate-600 group-hover:text-gold-500" />
-            </button>
-
-            {orderType === 'DINE_IN' && (
-              <button className="flex-1 bg-slate-900 border border-slate-800 p-3 rounded-xl flex items-center justify-between group">
-                <div className="flex items-center gap-3">
-                  <Users size={16} className="text-slate-500" />
-                  <div className="text-left">
-                    <div className="text-[9px] text-slate-500 font-black uppercase tracking-widest">Table</div>
-                    <div className="text-xs font-bold text-white">{tables.find(t => t.id === selectedTableId)?.name || 'Select'}</div>
-                  </div>
-                </div>
-              </button>
-            )}
-          </div>
+              <div className="text-[10px] font-bold text-white uppercase flex gap-1.5 items-center">
+                {!(orderType === 'DINE_IN' && selectedTableId) && <span>{orderType.replace('_', ' ')}</span>}
+                {orderType === 'DINE_IN' && (
+                  <>
+                    {selectedTableId && <span className="text-slate-600 hidden md:inline">•</span>}
+                    <span className="text-gold-500 font-black">{tables.find(t => t.id === selectedTableId)?.name || 'Select Table'}</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <Edit2 size={12} className="text-slate-600 group-hover:text-gold-500" />
+          </button>
         </div>
 
         {/* Cart Items */}
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-2">
+        <div className="flex-1 overflow-y-auto p-2 custom-scrollbar space-y-1">
           {currentOrderItems.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 opacity-50">
-              <ShoppingBag size={48} className="mb-4" />
-              <span className="text-xs font-black uppercase tracking-[0.2em]">Cart Empty</span>
+              <ShoppingBag size={32} className="mb-2" />
+              <span className="text-[10px] font-black uppercase tracking-[0.2em]">Cart Empty</span>
             </div>
           ) : (
-            currentOrderItems.map((item, idx) => (
-              <div key={`${item.menu_item_id}-${idx}`} className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-3 flex justify-between items-center group hover:bg-slate-900 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-slate-950 flex items-center justify-center text-white font-bold text-xs border border-slate-800">
-                    {item.quantity}
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-white">{item.item_name}</div>
-                    <div className="text-[10px] text-slate-500 font-mono">Rs. {item.unit_price}</div>
-                  </div>
-                </div>
+            currentOrderItems.map((item, idx) => {
+              const status = item.item_status || 'DRAFT';
+              const isDraft = status === 'DRAFT';
+              const isDone = status === 'DONE';
+              
+              return (
+                <div key={`${item.id || item.menu_item_id}-${idx}`} className="bg-slate-900/50 border border-white/5 rounded-lg p-2 flex flex-col group hover:bg-slate-900 transition-all">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-6 h-6 rounded flex items-center justify-center text-white font-black text-xs border shrink-0 ${isDraft ? 'bg-slate-800 border-white/10' : 'bg-gold-500/10 border-gold-500/20 text-gold-500'}`}>
+                        {item.quantity}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-white uppercase tracking-tight truncate leading-tight flex items-center gap-1.5">
+                          {item.item_name}
+                          {status !== 'DRAFT' && (
+                            <span className={`px-1.5 py-0.5 rounded text-[7px] font-black uppercase tracking-widest flex items-center gap-0.5 ${
+                              status === 'PENDING' ? 'bg-blue-500/10 text-blue-400' :
+                              status === 'PREPARING' ? 'bg-orange-500/10 text-orange-500' :
+                              status === 'DONE' ? 'bg-green-500 text-slate-950' :
+                              'bg-slate-800 text-slate-500'
+                            }`}>
+                              {status === 'PENDING' && <Clock size={6} />}
+                              {status === 'PREPARING' && <Flame size={6} className="animate-pulse" />}
+                              {status === 'DONE' && <CheckCircle2 size={6} />}
+                              {status}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[9px] text-slate-500 font-mono italic leading-none">Rs. {item.unit_price}</div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 shrink-0">
+                       {/* Qty Controls (Hover) */}
+                       {isDraft && !isReadOnly && (
+                         <div className="flex items-center gap-0.5 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                           <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-5 h-5 rounded bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={10} /></button>
+                           <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-5 h-5 rounded bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={10} /></button>
+                         </div>
+                       )}
 
-                {!isReadOnly && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
-                    <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                       <div className="font-mono text-xs font-bold text-white tracking-tighter w-14 text-right">
+                         {(item.quantity * item.unit_price).toLocaleString()}
+                       </div>
+                    </div>
                   </div>
-                )}
-                <div className="font-bold text-white text-sm font-mono tracking-tight">
-                  Rs. {(item.quantity * item.unit_price).toLocaleString()}
+                  {isDone && (['SERVER', 'WAITER', 'ADMIN', 'MANAGER'].includes(currentUser?.role || '')) && (
+                      <button 
+                        onClick={() => handleServeItem(item.id!)}
+                        className="mt-1 w-full py-1 bg-green-500/10 hover:bg-green-500 hover:text-black text-green-500 text-[8px] font-black uppercase tracking-widest rounded flex items-center justify-center gap-1 transition-all"
+                      >
+                        <CheckSquare size={10} /> Serve Item
+                      </button>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
         {/* Footer / Breakdown */}
-        <div className="p-6 bg-[#0B0F19] border-t border-white/5 space-y-4">
-          {/* Breakdown Details */}
-          <div className="space-y-1.5 text-[9px] font-black tracking-widest uppercase">
-            <div className="flex justify-between text-slate-500">
+        <div className="p-3 bg-[#0B0F19] border-t border-white/5 space-y-2 shrink-0">
+          <div className="space-y-1 text-[9px] tracking-widest uppercase font-bold">
+            <div className="flex justify-between text-slate-500 items-center">
               <span className="opacity-60">Subtotal</span>
-              <span className="text-white font-mono tracking-normal">Rs. {breakdown.subtotal.toLocaleString()}</span>
+              <span className="text-white font-mono tracking-normal text-right">Rs. {breakdown.subtotal.toLocaleString()}</span>
             </div>
-            {breakdown.tax > 0 && (
-              <div className="flex justify-between text-slate-500">
-                <span className="opacity-60 text-gold-500/80">Tax (16%)</span>
-                <span className="text-white font-mono tracking-normal">Rs. {breakdown.tax.toLocaleString()}</span>
+
+            <div className="grid grid-cols-2 gap-x-2 gap-y-1 my-0.5">
+              <div className="flex justify-between items-center text-slate-500 group border-b border-white/5 pb-0.5 relative">
+                <div className="flex items-center gap-1">
+                  <span className="opacity-60 text-[8px]">Disc</span>
+                  {editingField === 'discount' ? (
+                    <div className="flex items-center bg-slate-900 rounded border border-white/10 ring-1 ring-blue-500/20">
+                      <input
+                        type="number"
+                        className="bg-transparent w-14 text-[8px] text-white px-1 outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        value={billConfig.discountValue || ''}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setBillConfig(p => ({ ...p, discountValue: e.target.value === '' ? 0 : Number(e.target.value) }))}
+                        autoFocus
+                        onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
+                        onBlur={() => setEditingField(null)}
+                      />
+                      <button 
+                        onMouseDown={(e) => {
+                          e.preventDefault(); // Prevent blur
+                          setBillConfig(p => ({ 
+                            ...p, 
+                            discountType: p.discountType === 'percent' ? 'flat' : 'percent' 
+                          }));
+                        }}
+                        className={`px-1 py-0.5 rounded-r text-[6px] font-black h-full transition-colors ${billConfig.discountType === 'percent' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                      >
+                        {billConfig.discountType === 'percent' ? '%' : 'Rs'}
+                      </button>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={() => setEditingField('discount')}
+                      className="px-1 py-0 rounded bg-slate-800 text-blue-400 text-[7px] hover:bg-slate-700 transition-colors"
+                    >
+                      {billConfig.discountValue > 0 ? (billConfig.discountType === 'percent' ? `${billConfig.discountValue}%` : `Rs.${billConfig.discountValue}`) : '+'}
+                    </button>
+                  )}
+                </div>
+                <span className="text-red-400 font-mono tracking-normal">{breakdown.discount > 0 ? `-${breakdown.discount.toLocaleString()}` : '0'}</span>
               </div>
-            )}
-            {breakdown.deliveryFee > 0 && (
-              <div className="flex justify-between text-slate-500">
-                <span className="opacity-60 text-blue-400">Delivery Fee</span>
-                <span className="text-white font-mono tracking-normal">Rs. {breakdown.deliveryFee.toLocaleString()}</span>
+
+              <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
+                <div className="flex items-center gap-1">
+                  <span className="opacity-60 text-gold-500/80 text-[8px]">TAX</span>
+                  <button 
+                    onClick={() => setBillConfig(p => ({ ...p, taxEnabled: !p.taxEnabled }))}
+                    className={`px-1 py-0 rounded text-[7px] ${billConfig.taxEnabled ? 'bg-gold-500 text-black' : 'bg-slate-800 text-slate-500'}`}
+                  >
+                    {billConfig.taxEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+                <span className="text-white font-mono tracking-normal">{breakdown.tax.toLocaleString()}</span>
               </div>
+
+              {orderType === 'DINE_IN' && (
+                <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
+                  <div className="flex items-center gap-1">
+                    <span className="opacity-60 text-blue-400 text-[8px]">SRV</span>
+                    <button 
+                      onClick={() => setBillConfig(p => ({ ...p, serviceChargeEnabled: !p.serviceChargeEnabled }))}
+                      className={`px-1 py-0 rounded text-[7px] ${billConfig.serviceChargeEnabled ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-500'}`}
+                    >
+                      {billConfig.serviceChargeEnabled ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+                  <span className="text-white font-mono tracking-normal">{breakdown.serviceCharge.toLocaleString()}</span>
+                </div>
+              )}
+
+              {orderType === 'DELIVERY' && (
+                <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
+                  <div className="flex items-center gap-1">
+                    <span className="opacity-60 text-purple-400 text-[8px]">DEL</span>
+                    {editingField === 'delivery' ? (
+                      <input
+                        type="number"
+                        className="bg-slate-900 border border-white/10 w-16 text-[8px] text-white px-1 rounded outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        value={billConfig.deliveryFee || ''}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setBillConfig(p => ({ ...p, deliveryFee: e.target.value === '' ? 0 : Number(e.target.value), deliveryFeeEnabled: (e.target.value === '' ? 0 : Number(e.target.value)) >= 0 }))}
+                        autoFocus
+                        onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
+                        onBlur={() => setEditingField(null)}
+                      />
+                    ) : (
+                      <button 
+                        onClick={() => setEditingField('delivery')}
+                        className="px-1 py-0 rounded bg-slate-800 text-purple-400 text-[7px]"
+                      >
+                        {billConfig.deliveryFee > 0 ? `Rs.${billConfig.deliveryFee}` : '±'}
+                      </button>
+                    )}
+                  </div>
+                  <span className="text-white font-mono tracking-normal">{breakdown.deliveryFee.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+
+            {breakdown.taxExemptAmount! > 0 && billConfig.taxEnabled && (
+                <div className="text-[7px] text-right text-slate-500 italic lowercase tracking-normal">
+                    *incl. Rs. {breakdown.taxExemptAmount!.toLocaleString()} exempt.
+                </div>
             )}
           </div>
 
-          {/* Total */}
-          <div className="flex justify-between items-baseline border-t border-white/5 pt-4">
-            <span className="text-[9px] text-slate-500 font-black tracking-[0.3em] uppercase opacity-60">Total</span>
+          <div className="flex justify-between items-baseline pt-1">
+            <span className="text-[9px] text-slate-500 font-black tracking-[0.2em] uppercase opacity-60">Total</span>
             <div className="flex flex-col items-end leading-none">
-              <span className="text-2xl font-black text-white italic tracking-tighter">
+              <span className="text-xl font-black text-white italic tracking-tighter">
                 Rs. {breakdown.total.toLocaleString()}
               </span>
             </div>
@@ -540,63 +882,82 @@ export const POSView: React.FC = () => {
 
           {/* Actions */}
           {isReadOnly ? (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
-              <div className="text-green-500 font-black uppercase tracking-widest text-xs mb-1">
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
+              <div className="text-green-500 font-black uppercase tracking-widest text-[10px] mb-1">
                 {activeOrderData?.status.replace(/_/g, ' ')}
               </div>
-              <div className="text-slate-500 text-[10px]">
-                This order is locked for editing.
-              </div>
-              <button onClick={resetPad} className="mt-2 text-xs text-white underline">Start New Order</button>
+              <button onClick={resetPad} className="mt-1 text-[9px] text-white underline">Start New Order</button>
             </div>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex gap-2 h-10 mt-2">
               <button
-                onClick={() => setShowReceiptPreview(true)}
-                disabled={currentOrderItems.length === 0}
-                className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
-                title="Print Preview"
-              >
-                <Printer size={18} />
-              </button>
-
-              <button
-                disabled={currentOrderItems.length === 0 || isSubmitting}
-                onClick={() => handleOrderAction(false)}
-                className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 disabled:opacity-20 uppercase"
-              >
-                {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save / Update'}
-              </button>
-
-              <button
-                disabled={currentOrderItems.length === 0 || isSubmitting}
                 onClick={() => {
-                  const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
-
-                  if (hasUnfiredItems) {
-                    handleOrderAction(true);
-                  } else {
-                    setShowPaymentModal(true);
+                  if (activeOrderData && activeOrderData.payment_status !== 'PAID') {
+                    updateOrder({ id: activeOrderId!, is_proforma_printed: true } as any);
                   }
+                  handlePrint();
                 }}
-                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                disabled={currentOrderItems.length === 0}
+                className="w-10 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
+                title="Print Receipt"
               >
-                {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
-                  <>
-                    {currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
+                <Printer size={16} />
+              </button>
+
+              {/* Only show Fire/Save if there are DRAFT items */}
+              {currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
+                <>
+                  <button
+                    disabled={isSubmitting}
+                    onClick={() => handleOrderAction(false)}
+                    className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 uppercase"
+                  >
+                    {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save / Update'}
+                  </button>
+
+                  <button
+                    disabled={isSubmitting}
+                    onClick={() => handleOrderAction(true)}
+                    className="flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-xl shadow-orange-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase italic"
+                  >
+                    {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
                       <>
                         <Flame size={14} className="animate-pulse" />
                         <span>Fire Order</span>
                       </>
-                    ) : (
-                      <>
-                        <Banknote size={14} />
-                        <span>Process Payment</span>
-                      </>
                     )}
-                  </>
-                )}
-              </button>
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* No draft items: Show role-based control buttons */}
+                  {['SERVER', 'WAITER'].includes(currentUser?.role || '') && activeOrderData?.status === 'READY' && (
+                    <button
+                      onClick={async () => {
+                        setIsSubmitting(true);
+                        await updateOrder({ id: activeOrderId!, status: 'BILL_REQUESTED' as any });
+                        addNotification('success', 'Bill Requested');
+                        setIsSubmitting(false);
+                      }}
+                      className="flex-1 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-[9px] tracking-[0.2em] shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
+                    >
+                      <CreditCard size={14} />
+                      <span>Request Bill</span>
+                    </button>
+                  )}
+
+                  {/* Payment button for Cashiers/Managers or if specifically ready */}
+                  {(['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') || activeOrderData?.status === 'BILL_REQUESTED') && (
+                    <button
+                      onClick={() => setShowPaymentModal(true)}
+                      className="flex-1 h-10 rounded-xl bg-green-600 hover:bg-green-500 text-white font-black text-[9px] tracking-[0.2em] shadow-xl shadow-green-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
+                    >
+                      <Banknote size={14} />
+                      <span>Settle & Pay</span>
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -604,8 +965,10 @@ export const POSView: React.FC = () => {
         {showTokenBanner && generatedToken && (
           <TokenDisplayBanner
             token={generatedToken}
+            orderNumber={activeOrderNumber || undefined}
+            orderType={orderType}
             estimatedReadyTime={estimatedPickupTime}
-            onPrintToken={() => addNotification('info', 'Printer not connected')}
+            onPrintToken={handlePrintToken}
             onNewOrder={() => {
               setShowTokenBanner(false);
               resetPad();
@@ -614,13 +977,214 @@ export const POSView: React.FC = () => {
         )}
       </div>
 
-      {/* Payment Modal */}
+      {/* HIDDEN PRINT AREA */}
+      {(activeOrderData || currentOrderItems.length > 0) && (
+        <ReceiptView 
+          order={(activeOrderData as any) || {
+            id: activeOrderId || 'NEW',
+            type: orderType,
+            order_number: 'NEW',
+            created_at: new Date(),
+            order_items: currentOrderItems,
+            status: 'ACTIVE',
+            table: tables.find(t => t.id === selectedTableId),
+            customer_name: customerName,
+            customer_phone: customerPhone
+          }}
+          breakdown={breakdown}
+          isProforma={!(activeOrderData?.payment_status === 'PAID' || activeOrderData?.status === 'CLOSED')}
+          invoiceSettings={operationsConfig || JSON.parse(localStorage.getItem(`fireflow_operations_config_${currentUser?.restaurant_id}`) || '{}')}
+        />
+      )}
+
+      {/* MOBILE-ONLY: Cart Bottom Sheet Modal */}
+      {isMobile && showMobileCart && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-black/50">
+          {/* Backdrop */}
+          <div 
+            className="flex-1 touch-none"
+            onClick={() => setShowMobileCart(false)}
+          />
+          
+          {/* Bottom Sheet */}
+          <div className="bg-[#0B0F19] rounded-t-3xl max-h-[85vh] overflow-hidden flex flex-col">
+            {/* Drag Handle */}
+            <div className="flex justify-center py-2 bg-slate-950/50 border-b border-white/5">
+              <div className="w-12 h-1 bg-slate-700 rounded-full" />
+            </div>
+
+            {/* Cart Content (Same as Desktop) */}
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-2">
+              {currentOrderItems.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-600 opacity-50">
+                  <ShoppingBag size={40} className="mb-3" />
+                  <span className="text-[10px] font-black uppercase tracking-[0.2em]">Cart Empty</span>
+                </div>
+              ) : (
+                currentOrderItems.map((item, idx) => (
+                  <div key={`${item.menu_item_id}-${idx}`} className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-3 flex justify-between items-center group hover:bg-slate-900 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-slate-950 flex items-center justify-center text-white font-bold text-xs border border-slate-800">
+                        {item.quantity}
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium text-white">{item.item_name}</div>
+                        <div className="text-[10px] text-slate-500 font-mono">Rs. {item.unit_price}</div>
+                      </div>
+                    </div>
+
+                    {!isReadOnly && (
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 active:bg-red-500/30 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
+                        <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 active:bg-green-500/30 text-slate-400 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                      </div>
+                    )}
+                    <div className="font-bold text-white text-sm font-mono tracking-tight">
+                      Rs. {(item.quantity * item.unit_price).toLocaleString()}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Breakdown & Actions (Same as Desktop) */}
+            <div className="p-4 bg-[#0B0F19] border-t border-white/5 space-y-3">
+              <div className="space-y-1 text-[8px] font-black tracking-widest uppercase">
+                <div className="flex justify-between text-slate-500">
+                  <span className="opacity-60">Subtotal</span>
+                  <span className="text-white font-mono tracking-normal">Rs. {breakdown.subtotal.toLocaleString()}</span>
+                </div>
+                {breakdown.tax > 0 && (
+                  <div className="flex justify-between text-slate-500">
+                    <span className="opacity-60 text-gold-500/80">Tax ({operationsConfig?.taxRate ?? 0}%)</span>
+                    <span className="text-white font-mono tracking-normal">Rs. {breakdown.tax.toLocaleString()}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between items-baseline border-t border-white/5 pt-2">
+                <span className="text-[8px] text-slate-500 font-black tracking-[0.3em] uppercase opacity-60">Total</span>
+                <span className="text-lg font-black text-white italic tracking-tighter">Rs. {breakdown.total.toLocaleString()}</span>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowReceiptPreview(true)}
+                  disabled={currentOrderItems.length === 0}
+                  className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
+                  title="Print Preview"
+                >
+                  <Printer size={18} />
+                </button>
+
+                {currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
+                  <>
+                    <button
+                      disabled={isSubmitting}
+                      onClick={() => handleOrderAction(false)}
+                      className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 uppercase"
+                    >
+                      {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save'}
+                    </button>
+
+                    <button
+                      disabled={isSubmitting}
+                      onClick={() => handleOrderAction(true)}
+                      className="flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-xl shadow-orange-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase italic"
+                    >
+                      {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
+                        <>
+                          <Flame size={14} className="animate-pulse" />
+                          <span>Fire</span>
+                        </>
+                      )}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {/* Role-based mobile actions */}
+                    {['SERVER', 'WAITER'].includes(currentUser?.role || '') && activeOrderData?.status === 'READY' && (
+                      <button
+                        onClick={async () => {
+                          setIsSubmitting(true);
+                          await updateOrder({ id: activeOrderId!, status: 'BILL_REQUESTED' as any });
+                          addNotification('success', 'Bill Requested');
+                          setIsSubmitting(false);
+                        }}
+                        className="flex-1 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-[9px] tracking-[0.2em] shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
+                      >
+                        <CreditCard size={14} />
+                        <span>Bill</span>
+                      </button>
+                    )}
+
+                    {(['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') || activeOrderData?.status === 'BILL_REQUESTED') && (
+                      <button
+                        onClick={() => setShowPaymentModal(true)}
+                        className="flex-1 h-10 rounded-xl bg-green-600 hover:bg-green-500 text-white font-black text-[9px] tracking-[0.2em] shadow-xl shadow-green-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
+                      >
+                        <Banknote size={14} />
+                        <span>Pay</span>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Cart Badge - Mobile Only */}
+      {isMobile && !showMobileCart && currentOrderItems.length > 0 && (
+        <FloatingCartBadge
+          itemCount={currentOrderItems.length}
+          total={breakdown.total}
+          onClick={() => setShowMobileCart(true)}
+          isOpen={showMobileCart}
+        />
+      )}
+
+      {showPaymentModal && !activeOrderData && !orderToEdit && (
+        <PaymentModal
+          order={{ id: activeOrderId || 'NEW', total: breakdown.total, type: orderType } as any}
+          breakdown={breakdown}
+          onClose={() => setShowPaymentModal(false)}
+          onProcessPayment={async (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET', tendered?: number, discountReason?: string) => {
+            const total = amount;
+            const orderId = activeOrderId || `ORD-${Date.now()}`;
+
+            await processPayment(orderId, {
+              id: `txn_${Date.now()}`,
+              orderId,
+              amount: total,
+              payment_method: method,
+              status: 'PAID',
+              timestamp: new Date(),
+              processedBy: 'POS',
+              tenderedAmount: tendered,
+              changeGiven: tendered ? tendered - total : 0,
+              breakdown: { ...breakdown, discountReason }
+            } as any);
+
+            // After successful payment — print then reset
+            if (operationsConfig?.auto_print_receipt) {
+              await handlePrint();
+            }
+            
+            setTimeout(() => {
+                resetPad();
+                setShowPaymentModal(false);
+            }, 500);
+          }}
+        />
+      )}
       {showPaymentModal && (activeOrderData || orderToEdit) && (
         <PaymentModal
           order={(activeOrderData || orderToEdit)!}
           breakdown={breakdown}
           onClose={() => setShowPaymentModal(false)}
-          onProcessPayment={async (total, method, tendered) => {
+          onProcessPayment={async (total, method, tendered, discountReason) => {
             const orderId = (activeOrderData || orderToEdit)?.id;
             if (!orderId) return;
 
@@ -633,13 +1197,33 @@ export const POSView: React.FC = () => {
               timestamp: new Date(),
               processedBy: 'POS',
               tenderedAmount: tendered,
-              changeGiven: tendered ? tendered - total : 0
+              changeGiven: tendered ? tendered - total : 0,
+              breakdown: { ...breakdown, discountReason }
             } as any);
 
-            // After successful payment
-            resetPad();
-            setShowPaymentModal(false);
+            // After successful payment — print then reset
+            if (operationsConfig?.auto_print_receipt) {
+              await handlePrint();
+            }
+            
+            setTimeout(() => {
+                resetPad();
+                setShowPaymentModal(false);
+            }, 500);
           }}
+        />
+      )}
+
+      {isRecallOpen && (
+        <RecallModal
+          isOpen={isRecallOpen}
+          onClose={() => setIsRecallOpen(false)}
+          orders={orders}
+          onSelectOrder={(order) => {
+            setOrderToEdit(order);
+            setIsRecallOpen(false);
+          }}
+          currentUser={currentUser}
         />
       )}
 
@@ -691,6 +1275,9 @@ export const POSView: React.FC = () => {
           tables={tables}
           isCustomerLoading={isCustomerLoading}
           setShowDetailsModal={setShowDetailsModal}
+          currentUser={currentUser}
+          customers={customers}
+          activeOrderId={activeOrderId}
         />
       )}
     </div>
@@ -715,120 +1302,156 @@ interface DetailsModalProps {
   tables: any[];
   isCustomerLoading: boolean;
   setShowDetailsModal: (s: boolean) => void;
+  currentUser: any;
+  customers: any[];
+  activeOrderId: string | null;
 }
 
 const DetailsModal: React.FC<DetailsModalProps> = ({
   orderType, setOrderType, customerPhone, setCustomerPhone,
   customerName, setCustomerName, deliveryAddress, setDeliveryAddress,
   selectedTableId, setSelectedTableId, guestCount, setGuestCount,
-  tables, isCustomerLoading, setShowDetailsModal
+  tables, isCustomerLoading, setShowDetailsModal, currentUser, customers,
+  activeOrderId
 }) => {
+  const isWaiter = ['SERVER', 'WAITER'].includes(currentUser?.role || '');
+  const allowedTypes = isWaiter ? ['DINE_IN'] : ['DINE_IN', 'TAKEAWAY', 'DELIVERY'];
   return (
-    <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
-      <div className="bg-slate-900 p-8 rounded-3xl w-full max-w-lg border border-slate-800">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-white font-bold text-xl">Session Configuration</h2>
-          <X onClick={() => setShowDetailsModal(false)} className="text-slate-500 cursor-pointer" />
+    <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 backdrop-blur-md">
+      <div className="bg-[#0B0F19] p-8 rounded-[2rem] w-full max-w-lg border border-white/5 shadow-2xl animate-in zoom-in-95 duration-200">
+        <div className="flex justify-between items-center mb-8">
+           <div>
+             <h2 className="text-white font-serif text-2xl font-bold italic tracking-tight">
+               {activeOrderId ? 'Change Table / Context' : 'Booking Logic'}
+             </h2>
+             <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mt-1">Session Configuration Control</p>
+           </div>
+           <button onClick={() => setShowDetailsModal(false)} className="p-2 bg-slate-900 rounded-xl text-slate-400 hover:text-white transition-colors">
+             <X size={20} />
+           </button>
         </div>
 
-        <div className="space-y-6">
-          <div className="flex gap-2">
-            {['DINE_IN', 'TAKEAWAY', 'DELIVERY'].map(t => (
+        <div className="space-y-8">
+          {/* Order Type Tabs */}
+          <div className="flex bg-slate-950 p-1.5 rounded-2xl border border-white/5">
+            {allowedTypes.map(t => (
               <button
                 key={t}
                 onClick={() => setOrderType(t as any)}
-                className={`flex-1 py-3 rounded-xl border font-bold text-xs transition-all ${orderType === t ? 'bg-gold-500 border-gold-500 text-black' : 'border-slate-800 text-slate-500 hover:border-slate-700'}`}
+                className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${
+                  orderType === t 
+                  ? 'bg-gold-500 text-black shadow-lg shadow-gold-500/20' 
+                  : 'text-slate-500 hover:text-slate-300'
+                }`}
               >
-                {t}
+                {t.replace('_', ' ')}
               </button>
             ))}
           </div>
 
           {orderType === 'DINE_IN' ? (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-6">
               <div>
-                <label className="text-[10px] text-slate-500 uppercase font-bold">Table</label>
-                <select
-                  className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1"
-                  value={selectedTableId}
-                  onChange={e => setSelectedTableId(e.target.value)}
-                >
-                  <option value="">Select Table</option>
-                  {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Available Floor Tables</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {tables.map(table => (
+                    <button
+                      key={table.id}
+                      onClick={() => setSelectedTableId(table.id)}
+                      className={`h-11 rounded-xl text-[10px] font-black transition-all border ${
+                        selectedTableId === table.id 
+                        ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20' 
+                        : 'bg-slate-950 border-white/5 text-slate-500 hover:border-white/10'
+                      }`}
+                    >
+                      {table.name}
+                    </button>
+                  ))}
+                </div>
               </div>
+
               <div>
-                <label className="text-[10px] text-slate-500 uppercase font-bold">Guests</label>
-                <div className="flex items-center gap-2 mt-1">
-                  <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="p-3 bg-slate-800 rounded-lg text-white"><Minus size={16} /></button>
-                  <span className="flex-1 text-center font-bold text-white text-xl">{guestCount}</span>
-                  <button onClick={() => setGuestCount(guestCount + 1)} className="p-3 bg-slate-800 rounded-lg text-white"><Plus size={16} /></button>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Guest Count</label>
+                <div className="flex items-center gap-4 bg-slate-950 p-2 rounded-2xl border border-white/5">
+                  <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="w-12 h-12 bg-slate-900 rounded-xl text-white flex items-center justify-center active:scale-90 transition-transform">
+                    <Minus size={20} />
+                  </button>
+                  <span className="flex-1 text-center font-black text-white text-3xl italic">{guestCount}</span>
+                  <button onClick={() => setGuestCount(guestCount + 1)} className="w-12 h-12 bg-slate-900 rounded-xl text-white flex items-center justify-center active:scale-90 transition-transform">
+                    <Plus size={20} />
+                  </button>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              {/* Use CustomerQuickAdd for TAKEAWAY orders */}
-              {orderType === 'TAKEAWAY' && (
-                <CustomerQuickAdd
-                  customerPhone={customerPhone}
-                  customerName={customerName}
-                  onPhoneChange={setCustomerPhone}
-                  onNameChange={setCustomerName}
-                  isLoading={isCustomerLoading}
-                  matchedCustomers={[]} // TODO: Implement customer matching
-                  onSelectCustomer={(customer: { phone: string; name?: string }) => {
-                    setCustomerPhone(customer.phone);
-                    setCustomerName(customer.name || '');
-                  }}
+            <div className="space-y-5">
+              <div className="relative group">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">
+                  Customer Lookup (Phone)
+                  {isCustomerLoading && <Loader2 size={10} className="inline ml-2 animate-spin text-gold-500" />}
+                </label>
+                <input
+                  type="tel"
+                  placeholder="03xx xxxxxxx"
+                  value={customerPhone}
+                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/5 rounded-2xl px-5 py-4 text-sm font-bold text-white outline-none focus:border-gold-500 transition-all font-mono tracking-widest"
                 />
-              )}
+                
+                {/* Search Results */}
+                {customerPhone.length >= 3 && customers?.filter(c => (c.phone || '').includes(customerPhone)).length > 0 && !customers.find(c => c.phone === customerPhone) && (
+                  <div className="absolute top-full left-0 right-0 mt-2 bg-slate-900 border border-white/10 rounded-2xl overflow-hidden z-50 shadow-2xl shadow-black/50">
+                    {customers
+                      .filter(c => (c.phone || '').includes(customerPhone))
+                      .slice(0, 4)
+                      .map(c => (
+                        <button
+                          key={c.id}
+                          onClick={() => {
+                            setCustomerPhone(c.phone || '');
+                            setCustomerName(c.name || '');
+                            setDeliveryAddress(c.address || '');
+                          }}
+                          className="w-full px-5 py-4 text-left hover:bg-slate-800 border-b border-white/5 last:border-0 transition-colors"
+                        >
+                          <div className="text-sm font-black text-white uppercase">{c.name}</div>
+                          <div className="text-[10px] text-slate-500 font-mono tracking-widest mt-1">{c.phone}</div>
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
 
-              {/* Standard inputs for DELIVERY orders */}
+              <div>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Registry Name</label>
+                <input
+                  type="text"
+                  placeholder="Guest Name"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/5 rounded-2xl px-5 py-4 text-sm font-bold text-white outline-none focus:border-gold-500 transition-all uppercase"
+                />
+              </div>
+
               {orderType === 'DELIVERY' && (
-                <>
-                  <div>
-                    <label className="text-[10px] text-slate-500 uppercase font-bold flex justify-between">
-                      Phone Number
-                      {isCustomerLoading && <Loader2 size={12} className="animate-spin text-gold-500" />}
-                    </label>
-                    <input
-                      autoFocus
-                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 font-mono tracking-widest focus:border-gold-500 outline-none"
-                      placeholder="03XXXXXXXXX"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      type="tel"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Name</label>
-                    <input
-                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 focus:border-gold-500 outline-none"
-                      placeholder="Guest Name"
-                      value={customerName}
-                      onChange={e => setCustomerName(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Address</label>
-                    <textarea
-                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 min-h-[80px] focus:border-gold-500 outline-none"
-                      placeholder="Full Delivery Address..."
-                      value={deliveryAddress}
-                      onChange={e => setDeliveryAddress(e.target.value)}
-                    />
-                  </div>
-                </>
+                <div>
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Geographic Address</label>
+                  <textarea
+                    placeholder="Street, Block, House No..."
+                    value={deliveryAddress}
+                    onChange={(e) => setDeliveryAddress(e.target.value)}
+                    className="w-full bg-slate-950 border border-white/5 rounded-2xl px-5 py-4 text-sm font-bold text-white outline-none focus:border-gold-500 transition-all h-28 resize-none"
+                  />
+                </div>
               )}
             </div>
           )}
 
           <button
             onClick={() => setShowDetailsModal(false)}
-            className="w-full py-4 bg-white text-black rounded-xl font-black tracking-widest hover:bg-slate-200"
+            className="w-full py-5 bg-white text-black font-black uppercase tracking-[0.3em] rounded-2xl shadow-xl shadow-white/5 active:scale-95 transition-all mt-4 text-xs"
           >
-            CONFIRM CONFIGURATION
+            Confirm Configuration
           </button>
         </div>
       </div>

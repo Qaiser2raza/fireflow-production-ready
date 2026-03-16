@@ -15,7 +15,7 @@ const elapsed = (date: string | Date) =>
 
 /* ─────────────────────────── component ─────────────────────────── */
 export const LogisticsHub: React.FC = () => {
-   const { orders, drivers, addNotification, currentUser, fetchInitialData } = useAppContext();
+   const { orders, drivers, addNotification, currentUser, fetchInitialData, completeDelivery, failDelivery } = useAppContext();
 
    const [activeTab, setActiveTab] = useState<'DISPATCH' | 'MONITOR' | 'SETTLE'>('DISPATCH');
    const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
@@ -25,20 +25,21 @@ export const LogisticsHub: React.FC = () => {
    const [dispatchRiderId, setDispatchRiderId] = useState<string | null>(null);
 
    // Shift modal
-   const [shiftModal, setShiftModal] = useState<{ open: boolean; mode: 'OPEN' | 'CLOSE'; riderId: string | null }>({ open: false, mode: 'OPEN', riderId: null });
+   const [shiftModal, setShiftModal] = useState<{ open: boolean; mode: 'OPEN' | 'CLOSE' | 'CASH_DROP'; riderId: string | null }>({ open: false, mode: 'OPEN', riderId: null });
    const [shiftAmount, setShiftAmount] = useState('0');
    const [shiftNotes, setShiftNotes] = useState('');
 
    // Settlement cart
    const [settleRiderId, setSettleRiderId] = useState<string | null>(null);
+   const [selectedSettleIds, setSelectedSettleIds] = useState<string[]>([]);
    const [receivedCash, setReceivedCash] = useState('');
    const [settleNotes, setSettleNotes] = useState('');
 
-   const API = 'http://localhost:3001/api';
+   const API = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
    /* ── derived data ── */
    const pendingDispatch = useMemo(() =>
-      orders.filter(o => o.type === 'DELIVERY' && (o.status === 'READY' || o.status === 'ACTIVE') && !o.assigned_driver_id)
+      orders.filter(o => o.type === 'DELIVERY' && o.status === 'READY' && !o.assigned_driver_id)
          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
       [orders]);
 
@@ -54,12 +55,19 @@ export const LogisticsHub: React.FC = () => {
       const onRoad = activeRuns.filter(o => o.assigned_driver_id === d.id);
       const pending = delivered.filter(o => o.assigned_driver_id === d.id);
       const float = Number(d.active_shift?.opening_float || 0);
+      const dropped = Number(d.active_shift?.cash_dropped || 0);
       const sales = pending.reduce((s, o) => s + Number(o.total), 0);
-      return { ...d, onRoad, pending, totalLiability: float + sales, hasShift: !!d.active_shift };
+      // v3.0 logic: Total Liability = Physical Cash in Rider's hands - Cash Dropped
+      const totalLiability = float + sales - dropped;
+      return { ...d, onRoad, pending, float, dropped, sales, totalLiability, hasShift: !!d.active_shift };
    }), [drivers, activeRuns, delivered]);
 
    const settleRider = useMemo(() => riderStats.find(r => r.id === settleRiderId), [riderStats, settleRiderId]);
    const settleOrders = useMemo(() => delivered.filter(o => o.assigned_driver_id === settleRiderId), [delivered, settleRiderId]);
+   const selectedSettleTotal = useMemo(() =>
+      settleOrders.filter(o => selectedSettleIds.includes(o.id))
+         .reduce((sum, o) => sum + Number(o.total), 0),
+      [settleOrders, selectedSettleIds]);
 
    const expectedTotal = settleRider?.totalLiability ?? 0;
    const received = Number(receivedCash) || 0;
@@ -95,18 +103,27 @@ export const LogisticsHub: React.FC = () => {
    };
 
    const handleMarkDelivered = async (orderId: string) => {
-      setIsProcessing(true);
       try {
-         const res = await fetchWithAuth(`${API}/orders/${orderId}/mark-delivered`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-staff-id': currentUser?.id || '' },
-            body: JSON.stringify({ processedBy: currentUser?.id }),
-         });
-         if (!res.ok) throw new Error('Update failed');
-         addNotification?.('success', 'Marked as Delivered');
-         fetchInitialData();
-      } catch { addNotification?.('error', 'Failed to mark delivered'); }
-      finally { setIsProcessing(false); }
+         setIsProcessing(true);
+         await completeDelivery(orderId);
+      } catch (e) {
+         console.error('Delivery Error:', e);
+      } finally {
+         setIsProcessing(false);
+      }
+   };
+
+   const handleMarkFailed = async (orderId: string) => {
+      const reason = window.prompt('Enter reason for delivery failure (e.g., Customer not home, Out of range):');
+      if (!reason) return;
+      try {
+         setIsProcessing(true);
+         await failDelivery(orderId, reason);
+      } catch (e) {
+         console.error('Fail Delivery Error:', e);
+      } finally {
+         setIsProcessing(false);
+      }
    };
 
    const handleOpenShift = async () => {
@@ -128,19 +145,46 @@ export const LogisticsHub: React.FC = () => {
       finally { setIsProcessing(false); }
    };
 
-   const handleCloseShift = async () => {
+   const handleShiftAction = async () => {
       const rider = drivers.find(d => d.id === shiftModal.riderId);
-      if (!rider?.active_shift) return;
+      if (!rider?.active_shift) {
+         addNotification?.('error', 'No active shift found for this rider.');
+         return;
+      }
       setIsProcessing(true);
       try {
-         const res = await fetchWithAuth(`${API}/riders/shift/close`, {
+         let res;
+         let successMessage;
+         let endpoint;
+         let body;
+
+         if (shiftModal.mode === 'CLOSE') {
+            endpoint = `${API}/riders/shift/close`;
+            body = JSON.stringify({ shiftId: rider.active_shift.id, closedBy: currentUser?.id, closingCash: Number(shiftAmount), notes: shiftNotes });
+            successMessage = 'Shift closed & reconciled';
+         } else if (shiftModal.mode === 'CASH_DROP') {
+            const depositAmount = Number(shiftAmount);
+            if (!depositAmount || depositAmount <= 0) {
+               addNotification?.('error', 'Enter a valid deposit amount greater than 0');
+               setIsProcessing(false);
+               return;
+            }
+            endpoint = `${API}/riders/shift/deposit`;
+            body = JSON.stringify({ shiftId: rider.active_shift.id, depositedBy: currentUser?.id, amount: depositAmount, notes: shiftNotes });
+            successMessage = 'Cash deposit recorded';
+         } else {
+            throw new Error('Invalid shift modal mode for this action.');
+         }
+
+         res = await fetchWithAuth(endpoint, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shiftId: rider.active_shift.id, closedBy: currentUser?.id, closingCash: Number(shiftAmount), notes: shiftNotes }),
+            headers: { 'Content-Type': 'application/json', 'x-restaurant-id': currentUser?.restaurant_id || '' },
+            body: body,
          });
          const d = await res.json();
          if (!d.success) throw new Error(d.error);
-         addNotification?.('success', 'Shift closed & reconciled');
+
+         addNotification?.('success', successMessage);
          setShiftModal({ open: false, mode: 'OPEN', riderId: null });
          setShiftAmount('0'); setShiftNotes('');
          fetchInitialData();
@@ -148,15 +192,42 @@ export const LogisticsHub: React.FC = () => {
       finally { setIsProcessing(false); }
    };
 
-   const handleSettle = async () => {
-      if (!settleRiderId || !settleOrders.length) return;
-      // Guide to shift closure
-      const rider = riderStats.find(r => r.id === settleRiderId);
-      if (rider?.active_shift) {
+   const handleOrdersSettle = async () => {
+      if (!selectedSettleIds.length || !settleRiderId) return;
+      setIsProcessing(true);
+      try {
+         for (const orderId of selectedSettleIds) {
+            const order = settleOrders.find(o => o.id === orderId);
+            if (!order) continue;
+
+            const res = await fetchWithAuth(`${API}/orders/${orderId}/settle`, {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({
+                  receivedAmount: Number(order.total),
+                  method: 'CASH',
+                  processedBy: currentUser?.id
+               }),
+            });
+            const d = await res.json();
+            if (!d.success) throw new Error(d.error);
+         }
+         addNotification?.('success', `${selectedSettleIds.length} order(s) settled successfully`);
+         setSelectedSettleIds([]);
+         fetchInitialData();
+      } catch (e: any) {
+         addNotification?.('error', e.message || 'Settlement failed');
+      } finally { setIsProcessing(false); }
+   };
+
+   const handleSettleShift = async () => {
+      if (!settleRiderId || !settleRider) return;
+      if (settleRider.active_shift) {
+         // Pre-fill with any cash entered, or with expected total as a convenience
          setShiftModal({ open: true, mode: 'CLOSE', riderId: settleRiderId });
-         setShiftAmount(String(expectedTotal));
+         setShiftAmount(receivedCash || String(expectedTotal));
       } else {
-         addNotification?.('info', 'No active shift found for this rider. Open a shift first.');
+         addNotification?.('info', 'No active shift — start a session from the Fleet panel first.');
       }
    };
 
@@ -167,10 +238,10 @@ export const LogisticsHub: React.FC = () => {
          <aside className="lh-aside">
             <div className="lh-aside-header">
                <div>
-                  <h2 className="lh-title-sm">Fleet Command</h2>
-                  <p className="lh-subtitle">{drivers.length} RIDERS  •  {activeRuns.length} ON ROAD</p>
+                  <h2 className="lh-title-sm">Rider Fleet</h2>
+                  <p className="lh-subtitle">{riderStats.length} RIDERS  •  {activeRuns.length} ON ROAD</p>
                </div>
-               <span className="lh-badge-blue"><Bike size={13} />{drivers.filter(d => !!d.active_shift).length} Active</span>
+               <span className="lh-badge-blue"><Bike size={13} />{riderStats.filter(d => !!d.active_shift).length} Active</span>
             </div>
 
             <div className="lh-rider-list">
@@ -178,7 +249,7 @@ export const LogisticsHub: React.FC = () => {
                   <div
                      key={rider.id}
                      className={`lh-rider-card ${settleRiderId === rider.id ? 'lh-rider-card--active' : ''}`}
-                     onClick={() => { setSettleRiderId(rider.id); setActiveTab('SETTLE'); setReceivedCash(''); }}
+                     onClick={() => { setSettleRiderId(rider.id); setActiveTab('SETTLE'); setReceivedCash(''); setSelectedSettleIds([]); }}
                   >
                      <div className="lh-rider-row">
                         <div className={`lh-avatar ${rider.hasShift ? 'lh-avatar--on' : ''}`}>
@@ -188,19 +259,24 @@ export const LogisticsHub: React.FC = () => {
                            <p className="lh-rider-name">{rider.name}</p>
                            <div className="lh-rider-status">
                               <span className={`lh-dot ${rider.hasShift ? 'lh-dot--green' : 'lh-dot--gray'}`} />
-                              {rider.hasShift ? `${rider.onRoad.length} running  •  ${rider.pending.length} pending` : 'No active shift'}
+                              {rider.hasShift ? `${rider.onRoad.length} dispatched  •  ${rider.pending.length} delivered` : 'Offline'}
                            </div>
                         </div>
                         <div className="lh-rider-liability">
                            <p className="lh-liability-amt">{fmt(rider.totalLiability)}</p>
-                           <p className="lh-liability-lbl">liability</p>
+                           <p className="lh-liability-lbl">
+                              {rider.hasShift
+                                 ? `Float: ${fmt(rider.float)} • Sales: ${fmt(rider.sales)}`
+                                 : 'No active session'
+                              }
+                           </p>
                         </div>
                      </div>
 
                      <div className="lh-rider-actions" onClick={e => e.stopPropagation()}>
                         {!rider.hasShift ? (
                            <button className="lh-btn lh-btn--indigo lh-btn--sm" onClick={() => { setShiftModal({ open: true, mode: 'OPEN', riderId: rider.id }); setShiftAmount('0'); setShiftNotes(''); }}>
-                              <Zap size={12} /> Open Shift
+                              <Zap size={12} /> Start Session
                            </button>
                         ) : (
                            <>
@@ -330,7 +406,7 @@ export const LogisticsHub: React.FC = () => {
                                     <MapPin size={12} className="shrink-0 text-slate-500 mt-0.5" />
                                     <span className="lh-address-text">{order.delivery_orders?.[0]?.delivery_address || 'No address'}</span>
                                  </span>
-                                 <span className={`lh-col lh-col--time ${urgent ? 'text-red-400' : 'text-slate-400'}`}>
+                                 <span className="lh-col lh-col--time ${urgent ? 'text-red-400' : 'text-slate-400'}">
                                     <Clock size={12} />
                                     {mins}m
                                  </span>
@@ -370,7 +446,7 @@ export const LogisticsHub: React.FC = () => {
                            <span className="lh-col lh-col--address">Address</span>
                            <span className="lh-col lh-col--rider">Rider</span>
                            <span className="lh-col lh-col--amount">Amount</span>
-                           <span className="lh-col lh-col--action">Action</span>
+                           <span className="lh-col lh-col--actions" style={{ justifyContent: 'flex-end' }}>Action</span>
                         </div>
                      )}
 
@@ -395,13 +471,22 @@ export const LogisticsHub: React.FC = () => {
                                     <span className="lh-rider-name-sm">{rider?.name ?? '—'}</span>
                                  </span>
                                  <span className="lh-col lh-col--amount lh-amount">{fmt(Number(order.total))}</span>
-                                 <span className="lh-col lh-col--action">
+                                 <span className="lh-col lh-col--actions">
                                     <button
                                        onClick={() => handleMarkDelivered(order.id)}
                                        disabled={isProcessing}
                                        className="lh-btn lh-btn--indigo lh-btn--sm"
+                                       title="Rider confirms successful delivery"
                                     >
                                        <CheckCircle2 size={13} /> Delivered
+                                    </button>
+                                    <button
+                                       onClick={() => handleMarkFailed(order.id)}
+                                       disabled={isProcessing}
+                                       className="lh-btn lh-btn--ghost-red lh-btn--sm"
+                                       title="Delivery could not be completed"
+                                    >
+                                       <X size={13} /> Failed
                                     </button>
                                  </span>
                               </div>
@@ -437,6 +522,14 @@ export const LogisticsHub: React.FC = () => {
 
                         {settleRider && settleOrders.length > 0 && (
                            <div className="lh-row lh-row--header">
+                              <span className="lh-col" style={{ width: '40px' }}>
+                                 <input
+                                    type="checkbox"
+                                    checked={selectedSettleIds.length === settleOrders.length && settleOrders.length > 0}
+                                    onChange={() => setSelectedSettleIds(selectedSettleIds.length === settleOrders.length ? [] : settleOrders.map(o => o.id))}
+                                    className="lh-checkbox"
+                                 />
+                              </span>
                               <span className="lh-col lh-col--order">Order</span>
                               <span className="lh-col lh-col--customer">Customer</span>
                               <span className="lh-col lh-col--address">Address</span>
@@ -447,7 +540,19 @@ export const LogisticsHub: React.FC = () => {
 
                         <div className="lh-rows">
                            {settleOrders.map(order => (
-                              <div key={order.id} className="lh-row lh-row--data lh-row--settle">
+                              <div
+                                 key={order.id}
+                                 className={`lh-row lh-row--data lh-row--settle ${selectedSettleIds.includes(order.id) ? 'lh-row--selected' : ''}`}
+                                 onClick={() => setSelectedSettleIds(p => p.includes(order.id) ? p.filter(id => id !== order.id) : [...p, order.id])}
+                              >
+                                 <span className="lh-col" style={{ width: '40px' }}>
+                                    <input
+                                       type="checkbox"
+                                       checked={selectedSettleIds.includes(order.id)}
+                                       onChange={() => { }} // Handled by row click
+                                       className="lh-checkbox"
+                                    />
+                                 </span>
                                  <span className="lh-col lh-col--order">
                                     <span className="lh-order-id">#{order.id.slice(-6).toUpperCase()}</span>
                                  </span>
@@ -485,7 +590,6 @@ export const LogisticsHub: React.FC = () => {
 
                      {/* Right: Settlement cart — fixed footer layout */}
                      <div className="lh-cart">
-                        {/* STICKY HEADER */}
                         <div className="lh-cart-header">
                            <ShoppingCart size={18} className="text-indigo-400" />
                            <h3 className="lh-cart-title">Settlement Cart</h3>
@@ -496,7 +600,6 @@ export const LogisticsHub: React.FC = () => {
 
                         {settleRider ? (
                            <>
-                              {/* SCROLLABLE BODY */}
                               <div className="lh-cart-body">
                                  {/* Rider chip */}
                                  <div className="lh-cart-rider">
@@ -539,78 +642,111 @@ export const LogisticsHub: React.FC = () => {
                                        <span>Sales ({settleOrders.length} orders)</span>
                                        <span>{fmt(settleOrders.reduce((s, o) => s + Number(o.total), 0))}</span>
                                     </div>
-                                    <div className="lh-cart-divider" />
-                                    <div className="lh-cart-line lh-cart-line--total">
-                                       <span>Total Expected</span>
-                                       <span>{fmt(expectedTotal)}</span>
-                                    </div>
-                                 </div>
+                                    {settleRider.active_shift && Number(settleRider.active_shift.cash_dropped) > 0 && (
+                                       <div className="lh-cart-line" style={{ color: '#a5b4fc' }}>
+                                          <span>Cash Dropped</span>
+                                          <span>-{fmt(Number(settleRider.active_shift.cash_dropped))}</span>
+                                       </div>
+                                    )}
+                                    <div className="lh-cart-divider" style={{ margin: '14px 0' }} />
 
-                                 {/* Cash input */}
-                                 <div className="lh-cart-field">
-                                    <label className="lh-cart-label">Cash Received from Rider</label>
-                                    <div className="lh-cash-input-wrap">
-                                       <span className="lh-cash-prefix">Rs.</span>
-                                       <input
-                                          type="number"
-                                          className="lh-cash-input"
-                                          placeholder="0"
-                                          value={receivedCash}
-                                          onChange={e => setReceivedCash(e.target.value)}
-                                          autoFocus
+                                    <div className="lh-cart-field">
+                                       <div className="flex gap-2">
+                                          <button
+                                             onClick={handleOrdersSettle}
+                                             disabled={isProcessing || selectedSettleIds.length === 0}
+                                             className="lh-btn lh-btn--emerald flex-1"
+                                          >
+                                             <Banknote size={16} /> Settle Selected ({selectedSettleIds.length})
+                                          </button>
+                                          <button
+                                             onClick={() => { setShiftModal({ open: true, mode: 'CASH_DROP', riderId: settleRiderId }); setShiftAmount('0'); }}
+                                             className="lh-btn lh-btn--ghost-indigo"
+                                             title="Record cash deposit without closing session"
+                                          >
+                                             <TrendingUp size={14} /> Cash Drop
+                                          </button>
+                                       </div>
+                                       {selectedSettleIds.length > 0 && <p className="text-[10px] text-emerald-500 font-bold mt-1 text-right">Total: {fmt(selectedSettleTotal)}</p>}
+                                    </div>
+
+                                    <div className="lh-cart-divider" style={{ margin: '14px 0' }} />
+
+                                    {/* Final Reconciliation - Session Exit */}
+                                    <div className="lh-cart-field">
+                                       <label className="lh-cart-label">Final Session Reconciliation (Shift Close)</label>
+                                       <div className="lh-cash-input-wrap">
+                                          <span className="lh-cash-prefix">Rs.</span>
+                                          <input
+                                             type="text"
+                                             inputMode="decimal"
+                                             id="cash_received_input"
+                                             className="lh-cash-input"
+                                             placeholder="Total cash on hand..."
+                                             autoComplete="off"
+                                             value={receivedCash}
+                                             onChange={e => {
+                                                const val = e.target.value;
+                                                if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                                                   setReceivedCash(val);
+                                                }
+                                             }}
+                                          />
+                                       </div>
+                                    </div>
+
+                                    {received > 0 && (
+                                       <div className={`lh-diff ${difference >= 0 ? 'lh-diff--ok' : 'lh-diff--short'}`}>
+                                          {difference >= 0
+                                             ? <><TrendingUp size={15} /> Overage: {fmt(difference)}</>
+                                             : <><AlertTriangle size={15} /> Shortage: {fmt(Math.abs(difference))}</>
+                                          }
+                                       </div>
+                                    )}
+
+                                    {/* Notes */}
+                                    <div className="lh-cart-field">
+                                       <label className="lh-cart-label">Notes (optional)</label>
+                                       <textarea
+                                          className="lh-cart-textarea"
+                                          placeholder="Any discrepancies or incidents..."
+                                          value={settleNotes}
+                                          onChange={e => setSettleNotes(e.target.value)}
+                                          rows={2}
                                        />
                                     </div>
+
+                                    {!settleRider.active_shift && (
+                                       <p className="lh-cart-warn"><AlertCircle size={13} /> Rider has no active shift. Open one first from the Fleet panel.</p>
+                                    )}
+                                    {settleRider.onRoad.length > 0 && (
+                                       <p className="lh-cart-warn" style={{ color: '#fbbf24' }}><AlertTriangle size={13} /> {settleRider.onRoad.length} order(s) still on road — mark them delivered first.</p>
+                                    )}
                                  </div>
-
-                                 {/* Live difference — always visible when entered */}
-                                 {received > 0 && (
-                                    <div className={`lh-diff ${difference >= 0 ? 'lh-diff--ok' : 'lh-diff--short'}`}>
-                                       {difference >= 0
-                                          ? <><TrendingUp size={15} /> Overage: {fmt(difference)}</>
-                                          : <><AlertTriangle size={15} /> Shortage: {fmt(Math.abs(difference))}</>
-                                       }
-                                    </div>
-                                 )}
-
-                                 {/* Notes */}
-                                 <div className="lh-cart-field">
-                                    <label className="lh-cart-label">Notes (optional)</label>
-                                    <textarea
-                                       className="lh-cart-textarea"
-                                       placeholder="Any discrepancies or incidents..."
-                                       value={settleNotes}
-                                       onChange={e => setSettleNotes(e.target.value)}
-                                       rows={2}
-                                    />
-                                 </div>
-
-                                 {!settleRider.active_shift && (
-                                    <p className="lh-cart-warn"><AlertCircle size={13} /> Rider has no active shift. Open one first from the Fleet panel.</p>
-                                 )}
-                                 {settleRider.onRoad.length > 0 && (
-                                    <p className="lh-cart-warn" style={{ color: '#fbbf24' }}><AlertTriangle size={13} /> {settleRider.onRoad.length} order(s) still on road — mark them delivered first.</p>
-                                 )}
                               </div>
 
                               {/* STICKY FOOTER — always visible */}
                               <div className="lh-cart-footer">
                                  <div className="lh-cart-footer-total">
-                                    <span>Expected</span>
+                                    <span>Expected Total</span>
                                     <strong>{fmt(expectedTotal)}</strong>
                                  </div>
                                  <button
+                                    onClick={handleSettleShift}
+                                    disabled={isProcessing}
                                     className="lh-btn lh-btn--indigo lh-btn--full"
-                                    onClick={handleSettle}
-                                    disabled={isProcessing || settleOrders.length === 0 || !settleRider.active_shift}
+                                    title="Ends the driver session and reconciles all cash"
                                  >
-                                    <Layers size={16} /> Close Shift & Reconcile
+                                    <X size={16} /> End Shift & Close Session
                                  </button>
                               </div>
                            </>
                         ) : (
-                           <div className="lh-cart-empty">
-                              <Banknote size={40} className="lh-empty-icon" />
-                              <p>Select a rider from the Fleet panel to begin settlement</p>
+                           <div className="lh-cart-body">
+                              <div className="lh-cart-empty">
+                                 <Banknote size={40} className="lh-empty-icon" />
+                                 <p>Select a rider from the Fleet panel to begin settlement</p>
+                              </div>
                            </div>
                         )}
                      </div>
@@ -624,6 +760,7 @@ export const LogisticsHub: React.FC = () => {
             const riderForDispatch = riderStats.find(r => r.id === dispatchRiderId);
             const ordersForDispatch = orders.filter(o => selectedOrderIds.includes(o.id));
             const dispatchTotal = ordersForDispatch.reduce((s, o) => s + Number(o.total), 0);
+
             return (
                <div className="lh-overlay" onClick={() => setDispatchRiderId(null)}>
                   <div className="lh-modal lh-modal--wide" onClick={e => e.stopPropagation()}>
@@ -665,7 +802,7 @@ export const LogisticsHub: React.FC = () => {
                      <div className="lh-modal-actions">
                         <button onClick={() => setDispatchRiderId(null)} className="lh-btn lh-btn--ghost lh-btn--full">Cancel</button>
                         <button onClick={handleDispatch} disabled={isProcessing} className="lh-btn lh-btn--emerald lh-btn--full">
-                           {isProcessing ? <><RefreshCw size={14} className="animate-spin" /> Dispatching…</> : <><Send size={14} /> Send {selectedOrderIds.length} Order{selectedOrderIds.length > 1 ? 's' : ''}</>}
+                           {isProcessing ? <><RefreshCw size={14} className="animate-spin" /> Dispatching…</> : <><Send size={14} /> Send {selectedOrderIds.length} Orders</>}
                         </button>
                      </div>
                   </div>
@@ -682,7 +819,10 @@ export const LogisticsHub: React.FC = () => {
                         {shiftModal.mode === 'OPEN' ? <Zap size={22} /> : <Layers size={22} />}
                      </div>
                      <div>
-                        <h3 className="lh-modal-title">{shiftModal.mode === 'OPEN' ? 'Open Rider Shift' : 'Close & Reconcile'}</h3>
+                        <h3 className="lh-modal-title">
+                           {shiftModal.mode === 'OPEN' ? 'Open Rider Shift' :
+                              shiftModal.mode === 'CASH_DROP' ? 'Generic Cash Deposit' : 'Close & Reconcile'}
+                        </h3>
                         <p className="lh-modal-sub">{drivers.find(d => d.id === shiftModal.riderId)?.name}</p>
                      </div>
                      <button onClick={() => setShiftModal(p => ({ ...p, open: false }))} className="lh-modal-close"><X size={18} /></button>
@@ -693,12 +833,19 @@ export const LogisticsHub: React.FC = () => {
                         <div className="lh-cash-input-wrap">
                            <span className="lh-cash-prefix">Rs.</span>
                            <input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               className="lh-cash-input"
                               placeholder="0"
+                              autoComplete="off"
                               value={shiftAmount}
                               autoFocus
-                              onChange={e => setShiftAmount(e.target.value)}
+                              onChange={e => {
+                                 const val = e.target.value;
+                                 if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                                    setShiftAmount(val);
+                                 }
+                              }}
                            />
                         </div>
                      </div>
@@ -716,18 +863,20 @@ export const LogisticsHub: React.FC = () => {
                   <div className="lh-modal-actions">
                      <button onClick={() => setShiftModal(p => ({ ...p, open: false }))} className="lh-btn lh-btn--ghost lh-btn--full">Cancel</button>
                      <button
-                        onClick={shiftModal.mode === 'OPEN' ? handleOpenShift : handleCloseShift}
+                        onClick={shiftModal.mode === 'OPEN' ? handleOpenShift : handleShiftAction}
                         disabled={isProcessing}
                         className={`lh-btn lh-btn--full ${shiftModal.mode === 'OPEN' ? 'lh-btn--indigo' : 'lh-btn--red'}`}
                      >
                         {isProcessing
                            ? <><RefreshCw size={14} className="animate-spin" /> Processing…</>
-                           : shiftModal.mode === 'OPEN' ? <><Check size={14} /> Activate Shift</> : <><Layers size={14} /> Finalize</>}
+                           : shiftModal.mode === 'OPEN' ? <><Check size={14} /> Activate Shift</>
+                              : shiftModal.mode === 'CASH_DROP' ? <><Banknote size={14} /> Record Deposit</> : <><Layers size={14} /> Finalize</>}
                      </button>
                   </div>
                </div>
             </div>
-         )}
+         )
+         }
 
          {/* ════════ INLINE STYLES ════════ */}
          <style>{`
@@ -807,6 +956,7 @@ export const LogisticsHub: React.FC = () => {
             .lh-col--rider { width:130px; flex-shrink:0; }
             .lh-col--amount { width:100px; flex-shrink:0; justify-content:flex-end; }
             .lh-col--action { width:100px; flex-shrink:0; justify-content:flex-end; }
+            .lh-col--actions { width:200px; flex-shrink:0; justify-content:flex-end; display:flex; gap:8px; }
 
             .lh-order-id { font-family:monospace; font-size:11px; font-weight:700; color:#94a3b8; background:#1e293b; border-radius:5px; padding:2px 6px; }
             .lh-customer-name { font-size:12px; font-weight:600; color:#e2e8f0; }
@@ -858,7 +1008,7 @@ export const LogisticsHub: React.FC = () => {
 
             /* CASH INPUT */
             .lh-cash-input-wrap { position:relative; }
-            .lh-cash-prefix { position:absolute; left:12px; top:50%; transform:translateY(-50%); font-size:12px; font-weight:700; color:#64748b; }
+            .lh-cash-prefix { position:absolute; left:12px; top:50%; transform:translateY(-50%); font-size:12px; font-weight:700; color:#64748b; pointer-events:none; }
             .lh-cash-input { width:100%; background:#060d1a; border:1px solid #1e293b; border-radius:10px; padding:12px 12px 12px 40px; color:#f1f5f9; font-size:20px; font-weight:800; outline:none; transition:border .15s; }
             .lh-cash-input:focus { border-color:#4f46e5; box-shadow:0 0 0 3px #4f46e520; }
 
@@ -882,6 +1032,8 @@ export const LogisticsHub: React.FC = () => {
             .lh-btn--ghost:hover { background:#334155; color:#f1f5f9; }
             .lh-btn--ghost-red { background:transparent; color:#f87171; border:1px solid #7f1d1d; }
             .lh-btn--ghost-red:hover { background:#7f1d1d30; }
+            .lh-btn--ghost-indigo { background:transparent; color:#a5b4fc; border:1px solid #3730a3; }
+            .lh-btn--ghost-indigo:hover { background:#1e1b4b50; }
             .lh-btn--disabled { opacity:.3; cursor:not-allowed; }
 
             /* BADGE */
@@ -931,7 +1083,35 @@ export const LogisticsHub: React.FC = () => {
             ::-webkit-scrollbar { width:4px; }
             ::-webkit-scrollbar-track { background:transparent; }
             ::-webkit-scrollbar-thumb { background:#1e293b; border-radius:4px; }
+
+            /* RESPONSIVE DESIGN */
+            @media (max-width: 1024px) {
+               .lh-root { flex-direction: column; overflow-y: auto; }
+               .lh-aside { width: 100%; border-right: none; border-bottom: 1px solid #1e293b; height: auto; max-height: 350px; flex-shrink: 0; }
+               .lh-main { min-height: 600px; flex: auto; overflow: visible; }
+               .lh-content { overflow: visible; min-height: 500px; }
+               .lh-table-wrapper { overflow: visible; }
+               .lh-rows { overflow: visible; }
+
+               .lh-settle-layout { flex-direction: column; overflow-y: visible; }
+               .lh-settle-orders { border-right: none; border-bottom: 1px solid #1e293b; min-height: 300px; flex: none; overflow: visible;}
+               .lh-cart { width: 100%; border-left: none; }
+               
+               .lh-tabs { flex-wrap: wrap; margin-top: 10px; }
+               .lh-tab { padding: 6px 10px; font-size: 9px; flex: 1; justify-content: center; }
+               .lh-header { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 16px; }
+
+               /* Turn grid rows into stack cards on mobile */
+               .lh-row { flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid #1e293b; gap: 6px; }
+               .lh-row--header { display: none; }
+               .lh-col { width: 100% !important; margin-bottom: 2px; }
+               .lh-col--order { display: inline-block; width: auto !important; margin-bottom: 6px; }
+               .lh-col--time { display: inline-flex; width: auto !important; float: right; margin-top: 2px; }
+               .lh-col--action { margin-top: 10px; justify-content: flex-start; }
+               .lh-checkbox { position: absolute; right: 16px; top: 16px; }
+               .lh-row--data { position: relative; }
+            }
          `}</style>
-      </div>
+      </div >
    );
 };

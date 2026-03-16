@@ -9,7 +9,14 @@ import {
     Info,
     ShieldCheck,
     Package,
-    TrendingUp
+    TrendingUp,
+    X,
+    FileText,
+    FileWarning,
+    Users,
+    ShieldAlert,
+    Banknote,
+    Calendar
 } from 'lucide-react';
 import { useAppContext as useApp } from '../../client/contexts/AppContext';
 import { ZReportModal } from '../../shared/components/ZReportModal';
@@ -17,10 +24,10 @@ import { ChartOfAccountsModal } from './components/ChartOfAccountsModal';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const FinancialCommandCenter: React.FC = () => {
-    const { currentUser } = useApp();
+    const { currentUser, activeSession, setActiveSession } = useApp();
     const restaurantId = currentUser?.restaurant_id;
     const staffId = currentUser?.id;
-    const [activeSession, setActiveSession] = useState<any>(null);
+    // Removed local activeSession state as it's now in AppContext
     const [stats, setStats] = useState({
         expectedCash: 0,
         todaySales: 0,
@@ -41,6 +48,8 @@ const FinancialCommandCenter: React.FC = () => {
     const [actualCount, setActualCount] = useState('');
     const [productMix, setProductMix] = useState<any[]>([]);
     const [velocity, setVelocity] = useState<any[]>([]);
+    const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [sessionHistory, setSessionHistory] = useState<any[]>([]);
 
     useEffect(() => {
         fetchSession();
@@ -49,8 +58,8 @@ const FinancialCommandCenter: React.FC = () => {
     const fetchSession = async () => {
         try {
             const [sessionRes, ledgerRes] = await Promise.all([
-                fetchWithAuth('http://localhost:3001/api/accounting/session'),
-                fetchWithAuth('http://localhost:3001/api/accounting/ledger?limit=50')
+                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/session`),
+                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/ledger?limit=50`)
             ]);
 
             const sessionData = await sessionRes.json();
@@ -79,8 +88,8 @@ const FinancialCommandCenter: React.FC = () => {
             const endOfDay = new Date().toISOString();
 
             const [mixRes, velRes] = await Promise.all([
-                fetchWithAuth(`http://localhost:3001/api/reports/product-mix?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`),
-                fetchWithAuth(`http://localhost:3001/api/reports/velocity?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`)
+                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/product-mix?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`),
+                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/velocity?restaurantId=${restaurantId}&start=${startOfDay}&end=${endOfDay}`)
             ]);
 
             const mixData = await mixRes.json();
@@ -98,7 +107,7 @@ const FinancialCommandCenter: React.FC = () => {
 
     const handleOpenSession = async () => {
         try {
-            const res = await fetchWithAuth('http://localhost:3001/api/accounting/session/open', {
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/session/open`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -119,7 +128,7 @@ const FinancialCommandCenter: React.FC = () => {
 
     const handlePayout = async () => {
         try {
-            const res = await fetchWithAuth('http://localhost:3001/api/accounting/payout', {
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/payout`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -143,7 +152,7 @@ const FinancialCommandCenter: React.FC = () => {
 
     const handleCloseSession = async () => {
         try {
-            const res = await fetchWithAuth('http://localhost:3001/api/accounting/session/close', {
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/session/close`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -156,7 +165,7 @@ const FinancialCommandCenter: React.FC = () => {
             const data = await res.json();
             if (data.success) {
                 // Fetch report for display
-                const reportRes = await fetchWithAuth(`http://localhost:3001/api/accounting/z-report/${activeSession?.id}`);
+                const reportRes = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/z-report/${activeSession?.id}`);
                 const reportData = await reportRes.json();
 
                 if (reportData.success) {
@@ -172,7 +181,32 @@ const FinancialCommandCenter: React.FC = () => {
         }
     };
 
+    const handleViewHistory = async () => {
+        try {
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/z-reports`);
+            const data = await res.json();
+            if (data.success) {
+                setSessionHistory(data.sessions);
+                setShowHistoryModal(true);
+            }
+        } catch (e) {
+            console.error('History fetch error', e);
+        }
+    };
 
+    const handleLoadHistoricalReport = async (sessionId: string) => {
+        try {
+            const reportRes = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/z-report/${sessionId}`);
+            const reportData = await reportRes.json();
+            if (reportData.success) {
+                setActiveReport(reportData.report);
+                setShowReportModal(true);
+                setShowHistoryModal(false);
+            }
+        } catch (e) {
+            console.error('Report load error', e);
+        }
+    };
 
     if (loading) return <div className="p-8 text-slate-500 animate-pulse font-mono uppercase tracking-widest text-xs">Initializing Ledger...</div>;
 
@@ -193,6 +227,12 @@ const FinancialCommandCenter: React.FC = () => {
                 </div>
 
                 <div className="flex gap-4">
+                    <button
+                        onClick={handleViewHistory}
+                        className="px-5 py-3 bg-slate-900 border border-slate-800 text-slate-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:border-slate-600 hover:text-white transition-all flex items-center gap-2"
+                    >
+                        <History size={16} strokeWidth={3} /> Z-Report History
+                    </button>
                     {!activeSession ? (
                         <button
                             onClick={() => setShowOpenModal(true)}
@@ -396,6 +436,46 @@ const FinancialCommandCenter: React.FC = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Enterprise Reports Grid */}
+            <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 pb-8 mb-8">
+                <div className="flex justify-between items-center mb-6">
+                    <div className="flex items-center gap-3">
+                        <FileText className="text-purple-500" size={20} />
+                        <h2 className="text-sm font-black text-white uppercase tracking-widest">Enterprise Reports Extractor</h2>
+                    </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                    {[
+                        { title: 'Daily Sales', desc: 'Net revenue, taxes & discounts', endpoint: '/api/reports/daily-sales', icon: <Banknote size={16}/> },
+                        { title: 'Tax Liability', desc: 'FBR/SRB compliance data', endpoint: '/api/reports/tax-liability', icon: <FileWarning size={16}/> },
+                        { title: 'Staff Performance', desc: 'Waiters, Riders, Cashiers', endpoint: '/api/reports/staff-performance', icon: <Users size={16}/> },
+                        { title: 'Product Mix', desc: 'Top & bottom movers', endpoint: '/api/reports/enhanced-product-mix', icon: <Package size={16}/> },
+                        { title: 'Loss Prevention', desc: 'Voids & cancel audit', endpoint: '/api/reports/loss-prevention', icon: <ShieldAlert size={16}/> },
+                        { title: 'Payouts & Expenses', desc: 'Cash outflow timeline', endpoint: '/api/reports/payout-expense', icon: <MinusCircle size={16}/> },
+                    ].map(r => (
+                        <button 
+                            key={r.title}
+                            onClick={() => {
+                                const endStr = new Date().toISOString();
+                                const startStr = new Date(new Date().setHours(0,0,0,0)).toISOString();
+                                // Note: we assume the user has a valid cookie/token that works with these endpoints, mapping them via URL download
+                                // But since it's an API, usually they'd use fetchWithAuth and then trigger download.
+                                // Instead of a new tab with auth fail, let's use a simpler prompt that just opens API endpoints in new tab, assuming cookie auth works or we pass token.
+                                const token = sessionStorage.getItem('accessToken') || '';
+                                window.open(window.location.origin + r.endpoint + `?start=${startStr}&end=${endStr}&token=${token}`, '_blank');
+                            }}
+                            className="bg-slate-950/50 border border-slate-800/50 hover:border-purple-500/50 hover:bg-purple-500/10 p-4 rounded-3xl transition-all text-left flex flex-col justify-between h-32 group"
+                        >
+                            <div className="text-slate-500 group-hover:text-purple-400 mb-2 transition-colors">{r.icon}</div>
+                            <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-white group-hover:text-purple-200 transition-colors">{r.title}</p>
+                                <p className="text-[9px] text-slate-500 font-bold mt-1 line-clamp-2 leading-tight">{r.desc}</p>
+                            </div>
+                        </button>
+                    ))}
+                </div>
+            </div>
             {showOpenModal && (
                 <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                     <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-[2.5rem] p-8 animate-in zoom-in duration-300">
@@ -527,6 +607,60 @@ const FinancialCommandCenter: React.FC = () => {
 
             {/* COA MODAL */}
             {showCOAModal && <ChartOfAccountsModal onClose={() => setShowCOAModal(false)} />}
+
+            {/* Z-Report History Modal */}
+            {showHistoryModal && (
+                <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                    <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-[2.5rem] overflow-hidden flex flex-col max-h-[80vh] animate-in zoom-in duration-200">
+                        <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <History className="text-blue-500" size={20} />
+                                <h2 className="text-lg font-black text-white tracking-tighter uppercase">Session History</h2>
+                            </div>
+                            <button onClick={() => setShowHistoryModal(false)} className="p-2 hover:bg-slate-800 rounded-xl text-slate-500">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+                            {sessionHistory.length === 0 && (
+                                <p className="text-center py-8 text-slate-600 italic text-sm">No past sessions found.</p>
+                            )}
+                            {sessionHistory.map((s: any) => (
+                                <button
+                                    key={s.id}
+                                    onClick={() => handleLoadHistoricalReport(s.id)}
+                                    className="w-full p-4 bg-slate-950 border border-slate-800 rounded-2xl hover:border-blue-500/40 transition-all text-left group"
+                                >
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <p className="text-xs font-mono font-bold text-white group-hover:text-blue-400 transition-colors">
+                                                {s.id.slice(-8).toUpperCase()}
+                                            </p>
+                                            <p className="text-[10px] text-slate-500 mt-1">
+                                                {new Date(s.opened_at).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                            </p>
+                                        </div>
+                                        <div className="text-right">
+                                            <span className={`text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-widest ${s.status === 'CLOSED' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-yellow-500/10 text-yellow-500'}`}>
+                                                {s.status}
+                                            </span>
+                                            {s.variance !== null && s.variance !== undefined && (
+                                                <p className={`text-[10px] mt-1 font-bold font-mono ${Number(s.variance) === 0 ? 'text-slate-600' : Number(s.variance) > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                                    Var: {Number(s.variance) >= 0 ? '+' : ''}Rs. {Math.round(Number(s.variance)).toLocaleString()}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-between text-[10px] text-slate-600 mt-2">
+                                        <span>{new Date(s.opened_at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+                                        <span>{s.closed_at ? new Date(s.closed_at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'Still Open'}</span>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

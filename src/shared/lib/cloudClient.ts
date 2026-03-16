@@ -768,6 +768,43 @@ export async function getPaymentHistory(restaurantId: string): Promise<{ data: a
 }
 
 // ==========================================
+// SYSTEM UPDATES
+// ==========================================
+
+/**
+ * Check for the latest available software version from the cloud
+ */
+export async function getLatestVersion(): Promise<{ data: { version: string; download_url: string; notes: string } | null; error: string | null }> {
+  try {
+    const client = getCloudClient();
+    const { data, error } = await client
+      .from('system_updates')
+      .select('version, download_url, notes')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error) {
+      return {
+        data: null,
+        error: error.message || 'No update information found'
+      };
+    }
+
+    return {
+      data,
+      error: null
+    };
+  } catch (error: any) {
+    console.error('[CLOUD] getLatestVersion error:', error.message);
+    return {
+      data: null,
+      error: 'Failed to fetch update information'
+    };
+  }
+}
+
+// ==========================================
 // HELPER FUNCTIONS
 // ==========================================
 

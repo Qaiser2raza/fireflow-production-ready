@@ -23,13 +23,15 @@ export const MenuItemCard: React.FC<MenuItemCardProps> = ({
             className="group relative bg-[#0B1120] rounded-2xl overflow-hidden cursor-pointer border border-white/5 hover:border-gold-500/40 transition-all duration-300 flex flex-col active:scale-95 h-full shadow-lg"
         >
             {/* Image Section */}
-            <div className="aspect-[1/1] w-full relative bg-slate-700 overflow-hidden shrink-0">
+            <div className="aspect-[4/3] w-full relative bg-slate-700 overflow-hidden shrink-0">
                 <img
                     src={imgUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80'}
                     alt={item.name}
                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                     onError={(e) => {
-                        (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80';
+                        const target = e.target as HTMLImageElement;
+                        target.onerror = null; // Prevent infinite loop
+                        target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80';
                     }}
                 />
 
@@ -51,9 +53,9 @@ export const MenuItemCard: React.FC<MenuItemCardProps> = ({
             </div>
 
             {/* Info Section */}
-            <div className="p-3 md:p-4 bg-gradient-to-b from-[#0B1120] to-black/40 flex flex-col gap-1.5 flex-1 justify-between">
+            <div className="p-2 md:p-3 bg-gradient-to-b from-[#0B1120] to-black/40 flex flex-col gap-1 flex-1 justify-between">
                 <div>
-                    <h3 className="text-white font-black text-xs md:text-[13px] leading-tight uppercase tracking-tight group-hover:text-gold-500 transition-colors truncate">
+                    <h3 className="text-white font-black text-[10px] md:text-xs leading-tight uppercase tracking-tight group-hover:text-gold-500 transition-colors truncate">
                         {item.name}
                     </h3>
                     <p className="font-urdu text-lg text-slate-400 font-bold leading-none mt-1 truncate" dir="rtl">

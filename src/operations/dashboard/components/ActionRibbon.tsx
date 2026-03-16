@@ -17,20 +17,30 @@ export const ActionRibbon: React.FC<ActionRibbonProps> = ({
     onRecallClick
 }) => {
     return (
-        <div className="bg-[#0a0e1a] border-b border-slate-800/50 px-6 py-4 flex items-center justify-between shadow-xl relative z-10">
-            <div className="flex items-center gap-6">
-                <div>
-                    <h2 className="text-[10px] text-gold-500 font-black uppercase tracking-[0.2em] mb-1">Dine-In Hub</h2>
-                    <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                        <span className="text-xs font-bold text-white tracking-widest uppercase">{activeOrdersCount} Active Tables</span>
+        <div className="bg-[#0a0e1a] border-b border-slate-800/50 px-4 sm:px-6 py-4 flex flex-col xl:flex-row items-start xl:items-center justify-between shadow-xl relative z-10 gap-4 xl:gap-0 w-full overflow-hidden">
+            <div className="flex flex-col md:flex-row md:items-center gap-4 md:gap-6 w-full xl:w-auto">
+                <div className="flex justify-between items-center md:block">
+                    <div>
+                        <h2 className="text-[10px] text-gold-500 font-black uppercase tracking-[0.2em] mb-1">Dine-In Hub</h2>
+                        <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                            <span className="text-[10px] sm:text-xs font-bold text-white tracking-widest uppercase">{activeOrdersCount} Active</span>
+                        </div>
                     </div>
+                    {/* Recall button for mobile, placed near title */}
+                    <button
+                        onClick={onRecallClick}
+                        className="flex md:hidden items-center gap-2 px-3 py-2 bg-blue-500/10 text-blue-400 rounded-lg border border-blue-500/20 active:scale-95"
+                    >
+                        <History size={16} />
+                        <span className="text-[9px] font-black uppercase tracking-widest">Recall</span>
+                    </button>
                 </div>
 
-                <div className="h-8 w-[1px] bg-slate-800 mx-2" />
+                <div className="hidden md:block h-8 w-[1px] bg-slate-800 mx-2 shrink-0" />
 
                 {/* Capacity Info */}
-                <div className="hidden lg:block">
+                <div className="hidden lg:block shrink-0">
                     <h2 className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em] mb-1">Hall Capacity</h2>
                     <div className="flex items-center gap-3">
                         <div className="bg-slate-900 h-2 w-32 rounded-full overflow-hidden border border-slate-800">
@@ -46,18 +56,18 @@ export const ActionRibbon: React.FC<ActionRibbonProps> = ({
                 </div>
 
                 {/* Intelligent Search */}
-                <div className="relative ml-4">
+                <div className="relative w-full md:w-auto md:ml-4 shrink-0 flex-1 md:flex-none">
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                     <input
                         type="text"
                         placeholder="Search table, guest or status..."
                         onChange={(e) => onSearch(e.target.value)}
-                        className="bg-black/20 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs font-bold text-slate-300 focus:outline-none focus:border-gold-500/50 w-80 transition-all placeholder:text-slate-600 shadow-inner"
+                        className="bg-black/20 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-xs font-bold text-slate-300 focus:outline-none focus:border-gold-500/50 w-full md:w-80 transition-all placeholder:text-slate-600 shadow-inner"
                     />
                 </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="hidden md:flex items-center gap-4 shrink-0">
                 <button
                     onClick={onRecallClick}
                     className="flex items-center gap-2 px-4 py-2.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl border border-blue-500/20 transition-all active:scale-95 group"
@@ -66,11 +76,11 @@ export const ActionRibbon: React.FC<ActionRibbonProps> = ({
                     <span className="text-[10px] font-black uppercase tracking-widest">Recall Drafts</span>
                 </button>
 
-                <div className="h-8 w-[1px] bg-slate-800 mx-2" />
+                <div className="h-8 w-[1px] bg-slate-800 mx-2 hidden lg:block" />
 
                 <div className="flex items-center gap-6">
-                    <div className="flex flex-col items-end">
-                        <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">System Performance</span>
+                    <div className="flex-col items-end hidden lg:flex">
+                        <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">System Perf</span>
                         <div className="flex items-center gap-2">
                             <div className="flex gap-1">
                                 {[1, 2, 3, 4, 5].map(i => (

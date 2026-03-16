@@ -27,13 +27,7 @@ export async function initializeSentry(): Promise<void> {
       environment: config.NODE_ENV,
       tracesSampleRate: config.NODE_ENV === 'production' ? 0.1 : 1.0,
       debug: config.NODE_ENV === 'development',
-      maxBreadcrumbs: 50,
-      // @ts-ignore - Sentry version might differ
-      integrations: [
-        new Sentry.Integrations.Http({ tracing: true }),
-        new Sentry.Integrations.OnUncaughtException(),
-        new Sentry.Integrations.OnUnhandledRejection()
-      ]
+      maxBreadcrumbs: 50
     });
 
     console.log('✅ Sentry initialized for error tracking');

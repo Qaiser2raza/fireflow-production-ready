@@ -2,7 +2,7 @@
 import { Order } from '@/types';
 import { fetchWithAuth } from './authInterceptor';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 /**
  * Order Service - Handles all order API calls

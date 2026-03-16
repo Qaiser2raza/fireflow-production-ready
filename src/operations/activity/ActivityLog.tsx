@@ -21,7 +21,7 @@ export const ActivityLog: React.FC = () => {
 
    // Grouped Statuses for Filter Logic (v3.0)
    const activeStatuses = ['ACTIVE', 'READY'];
-   const completedStatuses = ['CLOSED'];
+   const completedStatuses = ['CLOSED', 'DELIVERED'];   // DELIVERED = cash in rider's hand (settled at logistics)
    const cancelledStatuses = ['CANCELLED', 'VOIDED'];
 
    // Filtering Logic
@@ -56,7 +56,8 @@ export const ActivityLog: React.FC = () => {
 
    const getLogicalStatus = (order: Order) => {
       if (order.status === 'CANCELLED' || order.status === 'VOIDED') return order.status;
-      if (order.payment_status === 'PAID') return 'PAID';
+      if (order.payment_status === 'PAID' || order.status === 'CLOSED') return 'PAID';
+      if (order.status === 'DELIVERED') return 'DELIVERED';   // Cash with rider, pending counter settlement
 
       const items = order.order_items || (order as any).items || [];
       const hasCooking = items.some((item: any) => item.item_status === 'PREPARING');
@@ -101,6 +102,8 @@ export const ActivityLog: React.FC = () => {
          case 'PAID':
          case 'CLOSED':
             return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50';
+         case 'DELIVERED':
+            return 'bg-purple-500/20 text-purple-400 border-purple-500/50';
          case 'CANCELLED':
          case 'VOIDED':
             return 'bg-rose-500/20 text-rose-400 border-rose-500/50';
@@ -129,7 +132,7 @@ export const ActivityLog: React.FC = () => {
    const handleUnlockOrder = async (order: Order) => {
       if (!confirm(`Are you sure you want to unlock Order #${order.order_number || order.id.slice(-4)}? This will void all associated transactions.`)) return;
       try {
-         const res = await fetchWithAuth(`http://localhost:3001/api/orders/${order.id}/unlock`, {
+         const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/orders/${order.id}/unlock`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ reason: 'Manager manual unlock' })

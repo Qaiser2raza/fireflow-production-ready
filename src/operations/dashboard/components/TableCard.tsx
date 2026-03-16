@@ -33,7 +33,11 @@ export const TableCard: React.FC<TableCardProps> = ({
         }
         if (!order) return { color: 'border-slate-800 bg-[#0f172a]', label: 'AVAILABLE', pulse: false };
 
-        // Priority: Ready > Active
+        // Priority: Ready > Bill Requested > Active
+        if (order.status === 'BILL_REQUESTED') {
+            return { color: 'border-white bg-white/20 shadow-[0_0_15px_rgba(255,255,255,0.2)]', label: 'BILL REQUESTED', pulse: true };
+        }
+
         if (order.status === 'READY') {
             return { color: 'border-[#D4AF37] bg-[#D4AF37]/10', label: 'READY TO SERVE', pulse: true };
         }
@@ -193,8 +197,8 @@ export const TableCard: React.FC<TableCardProps> = ({
                                     <span className="text-[10px] font-bold">{order.guest_count} GUESTS</span>
                                 </div>
 
-                                {/* Bill Amount - Only for Manager/Cashier */}
-                                {(currentUser?.role === 'MANAGER' || currentUser?.role === 'CASHIER') && (
+                                {/* Bill Amount - Only for Admin/Manager/Cashier */}
+                                {['MANAGER', 'CASHIER', 'SUPER_ADMIN', 'ADMIN'].includes(currentUser?.role || '') && (
                                     <div className="text-right">
                                         <span className="text-[9px] text-slate-500 uppercase tracking-wider block">Total</span>
                                         <span className="text-base font-black text-white">
@@ -306,6 +310,7 @@ export const TableCard: React.FC<TableCardProps> = ({
                     onMarkServed={handleMarkServed}
                     onRequestBill={handleRequestBill}
                     onEditInPOS={onOpenPOS}
+                    currentUser={currentUser}
                 />
             )}
         </>

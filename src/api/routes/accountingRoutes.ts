@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { AccountingService } from '../services/AccountingService';
 import { z } from 'zod';
-import { authMiddleware } from '../middleware/authMiddleware';
+import { authMiddleware, requireRole } from '../middleware/authMiddleware';
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN', 'CASHIER'));
 // const prisma = new PrismaClient(); // Unused
 const accounting = new AccountingService();
 
@@ -125,6 +126,24 @@ router.get('/z-report/:sessionId', async (req, res) => {
     try {
         const report = await accounting.getZReport(req.params.sessionId);
         res.json({ success: true, report });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * GET /api/accounting/z-reports
+ * Get list of all historical sessions (for history view)
+ */
+router.get('/z-reports', async (req, res) => {
+    try {
+        const { prisma } = await import('../../shared/lib/prisma');
+        const sessions = await prisma.cash_sessions.findMany({
+            where: { restaurant_id: req.restaurantId! },
+            orderBy: { opened_at: 'desc' },
+            take: 30
+        });
+        res.json({ success: true, sessions });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }

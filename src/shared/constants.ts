@@ -112,7 +112,7 @@ export const INITIAL_SECTIONS: Section[] = [
 ];
 
 export const INITIAL_SERVERS: Server[] = [
-  { id: 'S-TEMP-1', name: 'Staff Member 1', role: 'WAITER', pin: '1111', active_tables: 0, status: 'ACTIVE', restaurant_id: 'temp-ref' },
+  { id: 'S-TEMP-1', name: 'Staff Member 1', role: 'SERVER', pin: '1111', active_tables: 0, status: 'ACTIVE', restaurant_id: 'temp-ref' },
   { id: 'S-TEMP-2', name: 'Staff Member 2', role: 'CASHIER', pin: '2222', active_tables: 0, status: 'ACTIVE', restaurant_id: 'temp-ref' },
   {
     id: 'SUPER-ADMIN-1',

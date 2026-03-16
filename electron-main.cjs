@@ -35,6 +35,60 @@ ipcMain.on('store-delete', (event, key) => {
     else console.warn(`[IPC] Store not ready for DELETE: ${key}`);
 });
 
+// 🔌 HARDWARE: PRINTER AGENT
+ipcMain.handle('get-printers', async () => {
+    if (!mainWindow) return [];
+    try {
+        return await mainWindow.webContents.getPrintersAsync();
+    } catch (e) {
+        console.error("[IPC] Failed to get printers:", e);
+        return [];
+    }
+});
+
+ipcMain.handle('print-thermal', async (event, { html, printerName, silent = true }) => {
+    console.log(`[IPC] Thermal Print initiated to: ${printerName} (Silent: ${silent})`);
+    const printWindow = new BrowserWindow({ 
+        show: false, 
+        width: 300, // Small width for layout simulation
+        webPreferences: { 
+            nodeIntegration: false,
+            contextIsolation: true
+        } 
+    });
+    
+    // Verify printer existence if not using default
+    if (printerName && printerName !== 'Default') {
+        try {
+            const printers = await printWindow.webContents.getPrintersAsync();
+            const exists = printers.some(p => p.name === printerName);
+            if (!exists) {
+                console.warn(`[IPC] Printer "${printerName}" not found in system printers. Available:`, printers.map(p => p.name).join(', '));
+                printWindow.close();
+                return { success: false, error: `Printer "${printerName}" not found. Available printers: ${printers.map(p => p.name).join(', ')}` };
+            }
+        } catch (e) {
+            console.error("[IPC] Failed to verify printers:", e);
+        }
+    }
+
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    
+    return new Promise((resolve) => {
+        printWindow.webContents.print({
+            silent: silent,
+            printBackground: true,
+            deviceName: (printerName === 'Default' || !printerName) ? undefined : printerName,
+            margins: { marginType: 'none' },
+            pageSize: { width: 80000, height: 297000 } // Standard 80mm roll width
+        }, (success, errorType) => {
+            console.log(`[IPC] Print result: ${success}, Error: ${errorType}`);
+            printWindow.close();
+            resolve({ success, error: errorType });
+        });
+    });
+});
+
 // --- 🖨️ HARDWARE: THERM-SYNC PRINT LOGIC ---
 ipcMain.on('PRINT_DELIVERY_SLIP', async (event, payload) => {
     const { orderIds, driverId } = payload;

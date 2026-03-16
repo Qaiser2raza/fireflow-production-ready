@@ -8,6 +8,9 @@ interface ThermalReceiptProps {
 }
 
 export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '380px' }) => {
+    // Load local config for identity overrides
+    const config = JSON.parse(localStorage.getItem(`fireflow_operations_config_${order.restaurant_id}`) || '{}');
+
     // Helper to format currency
     const formatCurrency = (amount: number) => `Rs. ${Math.round(amount).toLocaleString()}`;
 
@@ -33,10 +36,20 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
     const serviceCharge = breakdown.serviceCharge !== undefined ? Number(breakdown.serviceCharge) : Number(order.service_charge || 0);
     const deliveryFee = breakdown.deliveryFee !== undefined ? Number(breakdown.deliveryFee) : Number(order.delivery_fee || 0);
     const discount = breakdown.discount !== undefined ? Number(breakdown.discount) : Number(order.discount || 0);
-    const total = breakdown.grandTotal !== undefined ? Number(breakdown.grandTotal) : Number(order.total || (subtotal + tax + serviceCharge + deliveryFee - discount));
+    const total = breakdown.total !== undefined ? Number(breakdown.total) : 
+                breakdown.grandTotal !== undefined ? Number(breakdown.grandTotal) : 
+                Number(order.total || (subtotal + tax + serviceCharge + deliveryFee - discount));
 
     const isPaid = order.payment_status === 'PAID' || order.status === 'CLOSED';
-    const invoiceTitle = isPaid ? "TAX INVOICE" : "PROFORMA INVOICE";
+    const isFBRSynced = order.fbr_sync_status === 'SYNCED';
+    const isExempt = order.is_tax_exempt === true;
+    const invoiceTitle = isExempt
+        ? 'TAX EXEMPT INVOICE'
+        : isFBRSynced
+            ? 'FBR TAX INVOICE'
+            : isPaid
+                ? 'TAX INVOICE'
+                : 'PROFORMA INVOICE';
 
     return (
         <div
@@ -50,13 +63,16 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
         >
             {/* Header */}
             <div className="text-center mb-6 border-b-2 border-black pb-4">
-                <h1 className="text-2xl font-black uppercase tracking-tighter mb-1">AORA PREMIUM</h1>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Culinary Excellence</p>
+                <h1 className="text-2xl font-black uppercase tracking-tighter mb-1">{config.businessName || order.restaurants?.name || 'FIREFLOW POS'}</h1>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">
+                    {order.restaurants?.type?.replace('_', ' ') || 'RESTAURANT'}
+                </p>
                 <div className="mt-2 text-[10px] leading-relaxed">
-                    <p>DHA Phase 6, Main Boulevard</p>
-                    <p>Lahore, Pakistan</p>
-                    <p>Tel: +92-300-FIREFLOW</p>
-                    <p className="font-bold mt-1">NTN: 1234567-8</p>
+                    <p>{config.businessAddress || order.restaurants?.address || 'DHA Phase 6, Main Boulevard'}</p>
+                    <p>{config.businessPhone || order.restaurants?.phone || 'Lahore, Pakistan'}</p>
+                    {(config.ntnNumber || order.restaurants?.ntn) && <p className="font-bold mt-1 text-xs">NTN: {config.ntnNumber || order.restaurants?.ntn}</p>}
+                    {(config.strnNumber) && <p className="font-bold mt-1 text-xs">STRN: {config.strnNumber}</p>}
+                    {order.restaurants?.fbr_pos_id && <p className="font-bold text-[9px] text-slate-500 mt-1 uppercase">FBR POS ID: {order.restaurants?.fbr_pos_id}</p>}
                 </div>
             </div>
 
@@ -125,32 +141,46 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
             {/* Summary Section */}
             <div className="space-y-1.5 border-t-2 border-black pt-4">
                 <div className="flex justify-between text-[11px]">
-                    <span className="font-bold text-slate-600">GROSS SUBTOTAL</span>
+                    <span className="font-bold text-slate-600">
+                        {order.tax_type === 'INCLUSIVE' ? 'TOTAL (TAX INCLUDED)' : 'GROSS SUBTOTAL'}
+                    </span>
                     <span className="font-bold">{formatCurrency(subtotal)}</span>
                 </div>
 
                 {discount > 0 && (
                     <div className="flex justify-between text-[11px] text-red-600 font-bold italic">
-                        <span>PROMO DISCOUNT (-)</span>
+                        <span>DISCOUNT {breakdown.discountReason ? `(${breakdown.discountReason})` : '(-)'}</span>
                         <span>{formatCurrency(discount)}</span>
                     </div>
                 )}
 
-                {serviceCharge > 0 && (
+                {/* Service Charge - Only if Dine In */}
+                {order.type === 'DINE_IN' && serviceCharge > 0 && (
                     <div className="flex justify-between text-[11px]">
                         <span className="font-bold">SERVICE CHARGE ({order.restaurants?.service_charge_rate || 5}%)</span>
                         <span className="font-bold">{formatCurrency(serviceCharge)}</span>
                     </div>
                 )}
 
-                {tax > 0 && (
+                {/* Tax Logic: Hide if exempt, show as component if inclusive, show as addition if exclusive */}
+                {!order.is_tax_exempt && tax > 0 && (
                     <div className="flex justify-between text-[11px]">
-                        <span className="font-bold tracking-widest">GST ({order.restaurants?.tax_rate || 16}%)</span>
-                        <span className="font-bold">{formatCurrency(tax)}</span>
+                        <span className="font-bold tracking-widest">
+                            {config.taxLabel || (order.tax_type === 'INCLUSIVE' ? 'INCL. TAX (GST 16%)' : 'GST (16%)')}
+                        </span>
+                        <span className="font-bold italic">
+                            {order.tax_type === 'INCLUSIVE' ? `[${formatCurrency(tax)}]` : formatCurrency(tax)}
+                        </span>
                     </div>
                 )}
 
-                {deliveryFee > 0 && (
+                {order.is_tax_exempt && (
+                    <div className="text-[9px] font-black uppercase tracking-widest text-center border border-black py-1 my-1">
+                        *** TAX EXEMPTED ***
+                    </div>
+                )}
+
+                {order.type === 'DELIVERY' && deliveryFee > 0 && (
                     <div className="flex justify-between text-[11px]">
                         <span className="font-bold">DELIVERY FEE</span>
                         <span className="font-bold">{formatCurrency(deliveryFee)}</span>
@@ -175,8 +205,28 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
 
             {/* Footer */}
             <div className="mt-8 text-center space-y-2">
-                <p className="text-[10px] italic">*** Thank You! ***</p>
-                <p className="text-[9px]">Powered by Fireflow POS</p>
+                <p className="text-[10px] italic">*** {config.receiptFooterText || 'Thank You!'} ***</p>
+                <p className="text-[9px]">
+                    {order.restaurants?.name ? `${order.restaurants.name} | ` : ''}Powered by Fireflow POS
+                </p>
+
+                {/* FBR QR Code Block - shown only when FBR synced */}
+                {isFBRSynced && (
+                    <div className="mt-4 border border-dashed border-black p-3">
+                        <p className="text-[8px] font-black uppercase tracking-widest mb-2">FBR Verification QR</p>
+                        <div className="w-20 h-20 bg-black/10 mx-auto flex items-center justify-center text-[7px] text-slate-400 font-mono">
+                            {order.fbr_qr_code ? (
+                                <img src={order.fbr_qr_code} alt="FBR QR" className="w-full h-full object-contain" />
+                            ) : (
+                                '[QR CODE]'
+                            )}
+                        </div>
+                        {order.order_number && (
+                            <p className="text-[8px] mt-1 font-mono tracking-tight">{order.order_number}</p>
+                        )}
+                    </div>
+                )}
+
                 {/* Barcode placeholder */}
                 <div className="mt-4 h-8 bg-black/10 flex items-center justify-center text-[8px] tracking-[0.5em] uppercase">
                     ||| || ||| || |||

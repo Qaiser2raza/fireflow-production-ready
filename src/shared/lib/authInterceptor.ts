@@ -2,7 +2,7 @@
  * Auth Interceptor - Handles token inclusion and refreshing for all API calls
  */
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 /**
  * Refresh access token using refresh token
@@ -78,7 +78,7 @@ export async function fetchWithAuth(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  console.log('[Auth] Token present:', !!token);
+
 
   let response = await fetch(url, { ...options, headers });
 

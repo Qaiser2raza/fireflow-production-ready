@@ -1,7 +1,7 @@
 import { Table } from '../types';
 
 export class ApiService {
-    private static baseUrl = 'http://localhost:3001/api';
+    private static baseUrl = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
     // --- TABLES ---
     static async updateTable(id: string, data: Partial<Table>): Promise<Table> {

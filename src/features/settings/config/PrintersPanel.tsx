@@ -11,6 +11,7 @@ export const PrintersPanel: React.FC = () => {
     const [loading, setLoading] = useState(true);
 
     const [showModal, setShowModal] = useState(false);
+    const [testingId, setTestingId] = useState<string | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [formData, setFormData] = useState({
         name: '',
@@ -23,8 +24,8 @@ export const PrintersPanel: React.FC = () => {
     const loadData = async () => {
         try {
             const [printersRes, stationsRes] = await Promise.all([
-                fetchWithAuth('http://localhost:3001/api/printers'),
-                fetchWithAuth('http://localhost:3001/api/stations')
+                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/printers`),
+                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/stations`)
             ]);
             if (printersRes.ok) setPrinters(await printersRes.json());
             if (stationsRes.ok) setStations(await stationsRes.json());
@@ -43,7 +44,7 @@ export const PrintersPanel: React.FC = () => {
         e.preventDefault();
         try {
             const isEdit = !!editingId;
-            const url = isEdit ? `http://localhost:3001/api/printers/${editingId}` : 'http://localhost:3001/api/printers';
+            const url = isEdit ? `${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/printers/${editingId}` : `${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/printers`;
             const method = isEdit ? 'PATCH' : 'POST';
 
             const res = await fetchWithAuth(url, {
@@ -68,12 +69,54 @@ export const PrintersPanel: React.FC = () => {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure you want to delete this printer?')) return;
         try {
-            const res = await fetchWithAuth(`http://localhost:3001/api/printers/${id}`, { method: 'DELETE' });
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/printers/${id}`, { method: 'DELETE' });
             if (!res.ok) throw new Error('Failed to delete printer');
             addNotification('success', 'Printer deleted successfully');
             loadData();
         } catch (err: any) {
             addNotification('error', err.message);
+        }
+    };
+
+    const handleTestConnection = async (printer: any) => {
+        setTestingId(printer.id);
+        try {
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/printers/test-connection`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip_address: printer.ip_address, port: printer.port })
+            });
+            const data = await res.json();
+            if (data.success) {
+                addNotification('success', `${printer.name}: ${data.message}`);
+            } else {
+                addNotification('error', `${printer.name}: ${data.message}`);
+            }
+        } catch (err: any) {
+            addNotification('error', err.message);
+        } finally {
+            setTestingId(null);
+        }
+    };
+
+    const handleTestPrint = async (printer: any) => {
+        setTestingId(printer.id);
+        try {
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/printers/test-print`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip_address: printer.ip_address, port: printer.port, name: printer.name })
+            });
+            const data = await res.json();
+            if (data.success) {
+                addNotification('success', `${printer.name}: ${data.message}`);
+            } else {
+                addNotification('error', `${printer.name}: ${data.message}`);
+            }
+        } catch (err: any) {
+            addNotification('error', err.message);
+        } finally {
+            setTestingId(null);
         }
     };
 
@@ -128,16 +171,33 @@ export const PrintersPanel: React.FC = () => {
 
                             <div className="space-y-2 mt-4">
                                 <div className="flex justify-between text-xs">
-                                    <span className="text-slate-500">IP ADDRESS</span>
+                                    <span className="text-slate-500 uppercase font-bold tracking-widest text-[9px]">IP Endpoint</span>
                                     <span className="text-emerald-400 font-mono">{p.ip_address}:{p.port}</span>
                                 </div>
                                 <div className="flex justify-between text-xs">
-                                    <span className="text-slate-500">STATUS</span>
-                                    <span className={p.is_active ? "text-emerald-400 flex items-center gap-1" : "text-slate-500 flex items-center gap-1"}>
+                                    <span className="text-slate-500 uppercase font-bold tracking-widest text-[9px]">Status</span>
+                                    <span className={p.is_active ? "text-emerald-400 flex items-center gap-1 font-bold" : "text-slate-500 flex items-center gap-1"}>
                                         {p.is_active ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
                                         {p.is_active ? "ONLINE" : "OFFLINE"}
                                     </span>
                                 </div>
+                            </div>
+
+                            <div className="flex gap-2 mt-4 pt-4 border-t border-slate-800/50">
+                                <button
+                                    onClick={() => handleTestConnection(p)}
+                                    disabled={testingId === p.id}
+                                    className="flex-1 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white uppercase tracking-widest transition-all disabled:opacity-50"
+                                >
+                                    {testingId === p.id ? 'Testing...' : 'Test Link'}
+                                </button>
+                                <button
+                                    onClick={() => handleTestPrint(p)}
+                                    disabled={testingId === p.id}
+                                    className="flex-1 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white uppercase tracking-widest transition-all disabled:opacity-50"
+                                >
+                                    Print Test
+                                </button>
                             </div>
                         </Card>
                     ))

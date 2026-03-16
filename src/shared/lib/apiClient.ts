@@ -6,7 +6,7 @@
 
 import { fetchWithAuth } from './authInterceptor';
 
-const API_BASE_URL = `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:3001/api`;
+const API_BASE_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 // 1. Fixed Interface to match implementation
 interface QueryBuilder {

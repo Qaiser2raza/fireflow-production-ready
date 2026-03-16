@@ -1,9 +1,11 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import http from 'http';
+import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
-import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import rateLimit from 'express-rate-limit';
 import { logger, LogLevel, requestLoggerMiddleware } from '../shared/lib/logger';
@@ -11,6 +13,12 @@ import { config, isCloudEnabled } from '../config/env';
 import { initializeSentry, setupGlobalErrorHandlers, captureException } from '../monitoring/errorTracking';
 import HealthMonitor from '../monitoring/HealthMonitor';
 import { setupSwagger } from './swagger';
+
+// ES Module shim for __dirname
+const _dirname = typeof __dirname !== 'undefined' 
+  ? __dirname 
+  : path.dirname(fileURLToPath(import.meta.url));
+
 
 import { OrderServiceFactory } from './services/orders/OrderServiceFactory';
 import { AccountingService } from './services/AccountingService';
@@ -20,11 +28,14 @@ import customerRoutes from './routes/customerRoutes';
 import reportRoutes from './routes/reportRoutes';
 import coaRoutes from './routes/coaRoutes';
 import printerRoutes from './routes/printerRoutes';
+import fbrRoutes from './routes/fbrRoutes';
 import { journalEntryService } from './services/JournalEntryService';
 import { jwtService } from './services/auth/JwtService';
-import { authMiddleware } from './middleware/authMiddleware';
+import { authMiddleware, requireRole } from './middleware/authMiddleware';
 import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
+import { fbrService } from './services/FBRService.js';
+import { updateService } from './services/UpdateService';
 
 const accounting = new AccountingService();
 import { superAdminService } from './services/SuperAdminService';
@@ -127,32 +138,65 @@ app.use(requestLoggerMiddleware);
 // Setup API Documentation
 setupSwagger(app);
 
+// ==========================================
+// 🌐 STATIC FRONTEND DETECTION
+// ==========================================
+// Check multiple possible locations for the 'dist' folder
+const possibleDistPaths = [
+    path.join(process.cwd(), 'dist'),
+    path.join(_dirname, 'dist'),
+    path.join(_dirname, '..', '..', 'dist'),
+    path.join(path.dirname(process.execPath), 'resources', 'app', 'dist'), // For packaged Windows app
+    path.join(path.dirname(process.execPath), 'dist'),
+];
+
+let distPath = '';
+for (const p of possibleDistPaths) {
+    if (fs.existsSync(p) && fs.existsSync(path.join(p, 'index.html'))) {
+        distPath = p;
+        break;
+    }
+}
+
+if (distPath) {
+    console.log(`[SERVER] ✅ Serving static frontend from: ${distPath}`);
+    app.use(express.static(distPath));
+} else {
+    console.warn('[SERVER] ⚠️ frontend "dist" folder not found in possible locations.');
+}
+
 // Health check for Electron startup with monitoring
 app.get('/api/health', async (_req, res) => {
     try {
         const health = await healthMonitor.checkHealth();
-
         // For startup, consider degraded as ok (but log it)
         const statusCode = health.status === 'unhealthy' ? 503 : 200;
-
         res.status(statusCode).json({
             status: health.status,
+            distPath: distPath || 'NOT_FOUND',
+            cwd: process.cwd(),
+            dirname: _dirname,
             timestamp: health.timestamp,
             uptime: health.uptime,
             checks: health.checks
         });
     } catch (err) {
-        logger.log({
-            level: LogLevel.ERROR,
-            service: 'health_check',
-            action: 'health_check_error',
-            error: { message: (err as Error).message }
-        });
-        res.status(503).json({
-            status: 'unhealthy',
-            error: 'Health check failed'
-        });
+        res.status(503).json({ status: 'unhealthy', error: 'Health check failed' });
     }
+});
+
+app.get('/api/debug/paths', (req, res) => {
+    res.json({
+        cwd: process.cwd(),
+        dirname: _dirname,
+        execPath: process.execPath,
+        distPath,
+        possiblePaths: possibleDistPaths,
+        env: {
+            NODE_ENV: process.env.NODE_ENV,
+            RESTAURANT_ID: !!process.env.RESTAURANT_ID
+        }
+    });
 });
 
 // ==========================================
@@ -320,7 +364,7 @@ app.post('/api/setup/create-manager', async (req, res) => {
                 name: name.trim(),
                 role: 'MANAGER',
                 pin: pin,
-                status: 'ACTIVE',
+                status: 'active',
             }
         });
 
@@ -398,7 +442,7 @@ app.post('/api/auth/login', async (req, res) => {
         let user = await prisma.staff.findFirst({
             where: {
                 pin: pin,
-                restaurant_id: req.body.restaurant_id || undefined
+                restaurant_id: req.body.restaurant_id || process.env.RESTAURANT_ID || undefined
             }
         });
 
@@ -526,13 +570,63 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/auth/me
+ * Get current staff profile using token
+ */
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+    try {
+        const staffId = req.staffId;
+        const user = await prisma.staff.findUnique({
+            where: { id: staffId }
+        });
+
+        if (!user) {
+            return res.status(404).json({ error: 'Staff member not found' });
+        }
+
+        const restaurantRaw = await prisma.restaurants.findUnique({
+            where: { id: user.restaurant_id }
+        });
+
+        const restaurant = restaurantRaw ? {
+            id: restaurantRaw.id,
+            name: restaurantRaw.name,
+            slug: restaurantRaw.slug,
+            logo_url: restaurantRaw.logo_url,
+            subscriptionStatus: restaurantRaw.subscription_status,
+            subscriptionPlan: restaurantRaw.subscription_plan,
+            subscriptionExpiresAt: restaurantRaw.subscription_expires_at,
+            trialEndsAt: restaurantRaw.trial_ends_at,
+            monthlyFee: restaurantRaw.monthly_fee ? Number(restaurantRaw.monthly_fee) : 0,
+            currency: restaurantRaw.currency,
+            createdAt: restaurantRaw.created_at
+        } : null;
+
+        res.json({
+            success: true,
+            staff: {
+                id: user.id,
+                name: user.name,
+                role: user.role,
+                restaurant_id: user.restaurant_id,
+                status: user.status,
+                last_login: user.last_login
+            },
+            restaurant
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // --- NEW: RESTAURANT & STAFF REGISTRATION ---
 
 /**
  * POST /api/restaurants
  * Create a new restaurant record
  */
-app.post('/api/restaurants', async (req, res) => {
+app.post('/api/restaurants', authMiddleware, requireRole('SUPER_ADMIN'), async (req, res) => {
     try {
         const { name, slug, phone, address, city, subscription_plan, subscription_status } = req.body;
 
@@ -563,9 +657,9 @@ app.post('/api/restaurants', async (req, res) => {
  * POST /api/staff
  * Create a new staff record (Initial Owner or regular staff)
  */
-app.post('/api/staff', async (req, res) => {
+app.post('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
-        const { id, restaurant_id, name, role, pin, phone, status } = req.body;
+        const { id, restaurant_id, name, role, pin, status, image, active_tables } = req.body;
 
         if (!restaurant_id || !name || !role || !pin) {
             return res.status(400).json({ error: 'Missing required staff fields' });
@@ -576,7 +670,9 @@ app.post('/api/staff', async (req, res) => {
             name,
             role,
             pin,
-            status: status || 'active'
+            status: status || 'active',
+            image: image || null,
+            active_tables: Number(active_tables) || 0
         };
         // Only include custom id if it's a valid non-empty string (the DB will generate a UUID otherwise)
         if (id && typeof id === 'string' && id.trim().length > 0) {
@@ -593,11 +689,50 @@ app.post('/api/staff', async (req, res) => {
     }
 });
 
+app.patch('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+    try {
+        const { id, restaurant_id, ...data } = req.body;
+        if (!id) return res.status(400).json({ error: 'Staff ID is required' });
+
+        // Ensure we don't update ID or restaurant_id
+        delete (data as any).id;
+        delete (data as any).restaurant_id;
+
+        const staff = await prisma.staff.update({
+            where: { id: String(id) },
+            data: data
+        });
+        io.emit('db_change', { table: 'staff', eventType: 'UPDATE', data: staff });
+        res.json(staff);
+    } catch (e: any) {
+        console.error('PATCH /api/staff ERROR:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+    const { id } = req.query;
+    try {
+        if (!id) return res.status(400).json({ error: 'Staff ID is required' });
+
+        // Soft delete or status update is better for audit logs, but following frontend's lead
+        await prisma.staff.update({
+            where: { id: String(id) },
+            data: { status: 'terminated' }
+        });
+
+        io.emit('db_change', { table: 'staff', eventType: 'DELETE', id });
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 /**
  * GET /api/restaurants
  * Fetch all restaurants (for super admin dashboard)
  */
-app.get('/api/restaurants', authMiddleware, async (_req, res) => {
+app.get('/api/restaurants', authMiddleware, requireRole('SUPER_ADMIN'), async (_req, res) => {
     try {
         const restaurants = await prisma.restaurants.findMany({
             select: {
@@ -624,7 +759,7 @@ app.get('/api/restaurants', authMiddleware, async (_req, res) => {
  * DELETE /api/restaurants/:id
  * Cleanup restaurant if registration fails or for deletion
  */
-app.delete('/api/restaurants/:id', async (req, res) => {
+app.delete('/api/restaurants/:id', authMiddleware, requireRole('SUPER_ADMIN'), async (req, res) => {
     try {
         const { id } = req.params;
         await prisma.restaurants.delete({ where: { id } });
@@ -650,7 +785,11 @@ app.post('/api/auth/verify-pin', async (req, res) => {
         const staff = await prisma.staff.findFirst({
             where: {
                 pin: pin,
-                status: 'active'
+                OR: [
+                    { status: 'active' },
+                    { status: 'ACTIVE' },
+                    { status: null }
+                ]
             }
         });
 
@@ -658,9 +797,9 @@ app.post('/api/auth/verify-pin', async (req, res) => {
             return res.status(401).json({ error: 'Invalid PIN' });
         }
 
-        // Check role if required
-        if (requiredRole && staff.role !== 'MANAGER' && staff.role !== 'SUPER_ADMIN') {
-            return res.status(403).json({ error: 'Manager privileges required' });
+        // Check role if required — allow MANAGER, ADMIN, or SUPER_ADMIN to authorize
+        if (requiredRole && !['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(staff.role)) {
+            return res.status(403).json({ error: 'Manager or Admin privileges required' });
         }
 
         res.json({
@@ -793,85 +932,189 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
 // ⚙️ 2. OPERATIONAL ROUTES (SPECIFIC)
 // ==========================================
 
+function parseFullConfigFromAPI(data: any) {
+    if (!data) return null;
+    try {
+        return {
+            // Existing fields
+            taxEnabled: data.taxEnabled ?? false,
+            taxRate: !isNaN(Number(data.taxRate)) ? Number(data.taxRate) : 0,
+            serviceChargeEnabled: data.serviceChargeEnabled ?? false,
+            serviceChargeRate: !isNaN(Number(data.serviceChargeRate)) ? Number(data.serviceChargeRate) : 5,
+            defaultDeliveryFee: !isNaN(Number(data.defaultDeliveryFee)) ? Number(data.defaultDeliveryFee) : 250,
+            defaultGuestCount: !isNaN(Number(data.defaultGuestCount)) ? Number(data.defaultGuestCount) : 2,
+            defaultRiderFloat: !isNaN(Number(data.defaultRiderFloat)) ? Number(data.defaultRiderFloat) : 5000,
+            fbrEnabled: data.fbrEnabled ?? false,
+            fbrPosId: data.fbrPosId || '',
+            fbrImsUrl: data.fbrImsUrl || '',
+            fbrNtn: data.fbrNtn || '',
+
+            // New fields from prompt A1
+            business_name: data.business_name || '',
+            business_name_urdu: data.business_name_urdu || '',
+            business_type: data.business_type || 'restaurant',
+            business_phone: data.business_phone || '',
+            business_email: data.business_email || '',
+            business_address: data.business_address || '',
+            business_city: data.business_city || '',
+            business_area: data.business_area || '',
+            currency: data.currency || 'PKR',
+            ntn_number: data.ntn_number || '',
+            strn_number: data.strn_number || '',
+            is_fbr_registered: data.is_fbr_registered ?? false,
+            fbr_pos_number: data.fbr_pos_number || '',
+            receipt_header_1: data.receipt_header_1 || '',
+            receipt_header_2: data.receipt_header_2 || '',
+            receipt_footer: data.receipt_footer || 'Thank you for dining with us!',
+            receipt_wifi_password: data.receipt_wifi_password || '',
+            invoice_prefix: data.invoice_prefix || 'INV-',
+            tax_label: data.tax_label || 'GST',
+            auto_print_receipt: data.auto_print_receipt ?? true,
+            show_print_dialog: data.show_print_dialog ?? false,
+            auto_print_kot: data.auto_print_kot ?? true,
+            invoice_templates: data.invoice_templates || '[]',
+            setup_wizard_completed: data.setup_wizard_completed ?? false,
+            
+            // Thermal printing settings
+            primary_printer: data.primary_printer || data.primaryPrinter || 'Default',
+            print_dialog: data.print_dialog !== undefined ? Boolean(data.print_dialog) : (data.printDialog !== undefined ? Boolean(data.printDialog) : false)
+        };
+    } catch (e) {
+        console.error('[Config] Error parsing config:', e);
+        return null;
+    }
+}
+
 // Get operations config for a restaurant
 app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res) => {
     const { restaurantId } = req.params;
 
-    // SaaS Security: Only allow fetching config for own restaurant
-    if (req.restaurantId !== restaurantId) {
-        return res.status(403).json({ error: 'Access denied: Cannot access configuration for another restaurant' });
+    if (req.restaurantId !== restaurantId && req.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Access denied' });
     }
 
     try {
-        // Return default operations config
-        // TODO: When adding operations_config table, fetch from there instead
+        console.log(`[Config] Fetching config for restaurant: ${restaurantId}`);
+        const [restaurant, features] = await Promise.all([
+            prisma.restaurants.findUnique({ where: { id: restaurantId } }),
+            prisma.restaurant_features.findUnique({ where: { restaurant_id: restaurantId } })
+        ]).catch(err => {
+            console.error('[Config] Database query failed:', err);
+            throw err;
+        });
+
+        if (!restaurant) {
+            console.warn(`[Config] Restaurant not found for ID: ${restaurantId}`);
+            return res.status(404).json({ success: false, error: 'Restaurant not found' });
+        }
+
+        const extendedFeatures = (features?.features as any) || {};
+
+        // Merge DB restaurant fields into the config response
+        const fullConfig = parseFullConfigFromAPI({
+            ...extendedFeatures,
+            business_name: restaurant.name,
+            business_phone: restaurant.phone,
+            business_address: restaurant.address,
+            currency: restaurant.currency,
+            taxEnabled: restaurant.tax_enabled,
+            taxRate: restaurant.tax_rate?.toString(),
+            serviceChargeEnabled: restaurant.service_charge_enabled,
+            serviceChargeRate: restaurant.service_charge_rate?.toString(),
+            defaultDeliveryFee: restaurant.default_delivery_fee?.toString(),
+            defaultGuestCount: restaurant.default_guest_count,
+            defaultRiderFloat: restaurant.default_rider_float?.toString(),
+            fbrEnabled: restaurant.fbr_enabled,
+            fbrPosId: restaurant.fbr_pos_id,
+            fbrImsUrl: restaurant.fbr_ims_url,
+            fbrNtn: restaurant.fbr_ntn,
+        });
+
+        if (!fullConfig) {
+            console.error('[Config] Failed to parse full config');
+            return res.status(500).json({ error: 'Config parsing failed' });
+        }
+
         res.json({
             success: true,
-            config: {
-                taxEnabled: false,
-                taxRate: 0,
-                serviceChargeEnabled: false,
-                serviceChargeRate: 5,
-                defaultDeliveryFee: 250,
-                defaultGuestCount: 2,
-                defaultRiderFloat: 5000
-            }
+            config: fullConfig
         });
     } catch (e: any) {
-        console.error('Get operations config error:', e);
-        res.status(500).json({ error: e.message });
+        console.error('[Config] Get operations config error:', e);
+        res.status(500).json({ error: e.message || 'Internal Server Error' });
     }
 });
 
 // Save operations config for a restaurant
-app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, res) => {
+app.patch('/api/operations/config/:restaurantId', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { restaurantId } = req.params;
 
-    // SaaS Security: Only allow updating own restaurant config
-    if (req.restaurantId !== restaurantId) {
-        return res.status(403).json({ error: 'Access denied: Cannot update configuration for another restaurant' });
+    if (req.restaurantId !== restaurantId && req.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Access denied' });
     }
 
     try {
-        const {
-            taxEnabled,
-            taxRate,
-            serviceChargeEnabled,
-            serviceChargeRate,
-            defaultDeliveryFee,
-            defaultGuestCount,
-            defaultRiderFloat,
-            // Floor Management
-            allowOverCapacity,
-            maxOverCapacityGuests,
-            enableTableMerging
-        } = req.body;
+        const config = parseFullConfigFromAPI(req.body);
 
-        // Verify restaurant exists
-        const restaurant = await prisma.restaurants.findUnique({
+        // 1. Update Core Restaurant Attributes
+        await prisma.restaurants.update({
             where: { id: restaurantId },
-            select: { id: true }
+            data: {
+                name: config.business_name || undefined,
+                phone: config.business_phone || undefined,
+                address: config.business_address || undefined,
+                currency: config.currency || undefined,
+                tax_enabled: config.taxEnabled,
+                tax_rate: config.taxRate,
+                service_charge_enabled: config.serviceChargeEnabled,
+                service_charge_rate: config.serviceChargeRate,
+                default_guest_count: config.defaultGuestCount,
+                default_rider_float: config.defaultRiderFloat,
+                fbr_enabled: config.fbrEnabled,
+                fbr_pos_id: config.fbrPosId || null,
+                fbr_ims_url: config.fbrImsUrl || null,
+                fbr_ntn: config.fbrNtn || null,
+                updated_at: new Date()
+            }
         });
 
-        if (!restaurant) {
-            return res.status(404).json({ error: 'Restaurant not found' });
-        }
-
-        // TODO: When adding operations_config table, save config there
-        // For now, just acknowledge the save
-        const config = {
-            taxEnabled: Boolean(taxEnabled),
-            taxRate: Number(taxRate) || 0,
-            serviceChargeEnabled: Boolean(serviceChargeEnabled),
-            serviceChargeRate: Number(serviceChargeRate) || 0,
-            defaultDeliveryFee: Number(defaultDeliveryFee) || 250,
-            defaultGuestCount: Math.max(1, Math.min(20, Number(defaultGuestCount) || 2)),
-            defaultRiderFloat: Number(defaultRiderFloat) || 5000,
-            // Floor Management
-            allowOverCapacity: allowOverCapacity !== undefined ? Boolean(allowOverCapacity) : true,
-            maxOverCapacityGuests: Number(maxOverCapacityGuests) || 3,
-            enableTableMerging: Boolean(enableTableMerging)
+        // 2. Update Extended Features
+        const extendedFields = {
+            business_name_urdu: config.business_name_urdu,
+            business_type: config.business_type,
+            business_email: config.business_email,
+            business_city: config.business_city,
+            business_area: config.business_area,
+            ntn_number: config.ntn_number,
+            strn_number: config.strn_number,
+            is_fbr_registered: config.is_fbr_registered,
+            fbr_pos_number: config.fbr_pos_number,
+            receipt_header_1: config.receipt_header_1,
+            receipt_header_2: config.receipt_header_2,
+            receipt_footer: config.receipt_footer,
+            receipt_wifi_password: config.receipt_wifi_password,
+            invoice_prefix: config.invoice_prefix,
+            tax_label: config.tax_label,
+            auto_print_receipt: config.auto_print_receipt,
+            show_print_dialog: config.show_print_dialog,
+            auto_print_kot: config.auto_print_kot,
+            invoice_templates: config.invoice_templates,
+            setup_wizard_completed: config.setup_wizard_completed,
+            defaultDeliveryFee: config.defaultDeliveryFee
         };
+
+        await prisma.restaurant_features.upsert({
+            where: { restaurant_id: restaurantId },
+            create: {
+                restaurant_id: restaurantId,
+                features: extendedFields as any,
+                updated_at: new Date()
+            },
+            update: {
+                features: extendedFields as any,
+                updated_at: new Date()
+            }
+        });
 
         io.emit('config:updated', { restaurantId, config });
 
@@ -921,8 +1164,18 @@ app.post('/api/orders/upsert', authMiddleware, async (req, res) => {
         io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
         res.json(result);
     } catch (e: any) {
-        console.error("Order Upsert Error:", e);
-        res.status(500).json({ error: e.message });
+        console.error("Critical Order Upsert Error:", {
+            message: e.message,
+            stack: e.stack,
+            body: req.body,
+            staffId: req.staffId,
+            restaurantId: req.restaurantId
+        });
+        res.status(500).json({ 
+            success: false, 
+            error: e.message || 'Internal Server Error',
+            detail: 'Check server logs for full stack trace'
+        });
     }
 });
 
@@ -972,8 +1225,18 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
         io.emit('db_change', { table: 'orders', eventType: 'INSERT', data: result });
         res.json(result);
     } catch (e: any) {
-        console.error("POST /api/orders error:", e);
-        res.status(500).json({ error: e.message });
+        console.error("Critical Order Create Error:", {
+            message: e.message,
+            stack: e.stack,
+            body: req.body,
+            staffId: req.staffId,
+            restaurantId: req.restaurantId
+        });
+        res.status(500).json({ 
+            success: false, 
+            error: e.message || 'Internal Server Error',
+            detail: 'Check server logs for full stack trace'
+        });
     }
 });
 
@@ -1236,6 +1499,8 @@ app.use('/api', customerRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/accounting/coa', coaRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/payouts', requireRole('MANAGER', 'ADMIN'), accountingRoutes); // or specific payout routes if separate
+app.use('/api/fbr', fbrRoutes);
 app.use('/api/printers', printerRoutes);
 
 // ─── Accounting / COA / Trial Balance routes ──────────────────────────────
@@ -1273,17 +1538,15 @@ app.get('/api/accounting/journals', authMiddleware, async (req, res) => {
         const restaurantId = req.restaurantId!;
         const page = parseInt((req.query.page as string) || '1');
         const limit = parseInt((req.query.limit as string) || '25');
-        const prismaClient = (await import('@prisma/client')).PrismaClient;
-        const db = new prismaClient();
         const [entries, total] = await Promise.all([
-            db.journal_entries.findMany({
+            prisma.journal_entries.findMany({
                 where: { restaurant_id: restaurantId },
                 orderBy: { date: 'desc' },
                 skip: (page - 1) * limit,
                 take: limit,
                 include: { lines: { include: { chart_of_accounts: { select: { code: true, name: true, type: true } } } } }
             }),
-            db.journal_entries.count({ where: { restaurant_id: restaurantId } })
+            prisma.journal_entries.count({ where: { restaurant_id: restaurantId } })
         ]);
         res.json({ success: true, data: entries, total, page, pages: Math.ceil(total / limit) });
     } catch (e: any) {
@@ -1295,10 +1558,10 @@ app.get('/api/accounting/journals', authMiddleware, async (req, res) => {
  * PATCH /api/orders/:id/guest-count
  * Update guest count with capacity check
  */
-app.patch('/api/orders/:id/guest-count', async (req, res) => {
+app.patch('/api/orders/:id/guest-count', authMiddleware, async (req, res) => {
     const { id } = req.params;
     const { guest_count, allow_over_capacity = true } = req.body;
-    const staffId = req.headers['x-staff-id'] as string;
+    const staffId = req.staffId; // Use authenticated staffId from JWT
 
     if (!guest_count || guest_count < 1) {
         return res.status(400).json({ error: 'Valid guest count required (minimum 1)' });
@@ -1340,6 +1603,19 @@ app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {
             prisma.delivery_orders.deleteMany({ where: { orders: { restaurant_id } } }),
             prisma.reservation_orders.deleteMany({ where: { orders: { restaurant_id } } }),
             prisma.order_intelligence.deleteMany({ where: { orders: { restaurant_id } } }),
+            prisma.parked_orders.deleteMany({}), // If parked_orders has no restaurant_id
+            
+            // Financial & Ledger Reset
+            prisma.ledger_entries.deleteMany({ where: { restaurant_id } }),
+            prisma.journal_entries.deleteMany({ where: { restaurant_id } }),
+            prisma.rider_shifts.deleteMany({ where: { restaurant_id } }),
+            prisma.cash_sessions.deleteMany({ where: { restaurant_id } }),
+            prisma.rider_settlements.deleteMany({ where: { restaurant_id } }),
+            prisma.payouts.deleteMany({ where: { restaurant_id } }),
+            prisma.staff_wallet_logs.deleteMany({ where: { restaurant_id } }),
+            prisma.expenses.deleteMany({ where: { restaurant_id } }),
+            prisma.reservations.deleteMany({ where: { restaurant_id } }),
+
             prisma.orders.deleteMany({ where: { restaurant_id } }),
             // Reset tables to AVAILABLE (Green) and clear linked orders
             prisma.tables.updateMany({
@@ -1449,10 +1725,44 @@ app.post('/api/super-admin/licenses/apply', authMiddleware, async (req, res) => 
 app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
     const restaurant_id = req.restaurantId; // SaaS Security
     try {
+        const todayStart = new Date(new Date().setHours(0, 0, 0, 0));
+        
+        // 1. Transaction Aggregates (Today)
         const salesAgg = await prisma.transactions.aggregate({
-            where: { restaurant_id: String(restaurant_id) },
+            where: { 
+                restaurant_id: String(restaurant_id),
+                created_at: { gte: todayStart }
+            },
             _sum: { amount: true },
             _count: { id: true }
+        });
+
+        // 2. Order Breakdown (Today's Paid/Closed Orders)
+        const todaysOrders = await prisma.orders.findMany({
+            where: {
+                restaurant_id: String(restaurant_id),
+                created_at: { gte: todayStart },
+                OR: [{ status: 'CLOSED' }, { payment_status: 'PAID' }]
+            },
+            select: { type: true, total: true, tax: true, discount: true, service_charge: true }
+        });
+
+        const breakdown = {
+            dineIn: 0,
+            takeaway: 0,
+            delivery: 0,
+            tax: 0,
+            discount: 0,
+            serviceCharge: 0
+        };
+
+        todaysOrders.forEach(o => {
+            if (o.type === 'DINE_IN') breakdown.dineIn += Number(o.total || 0);
+            if (o.type === 'TAKEAWAY') breakdown.takeaway += Number(o.total || 0);
+            if (o.type === 'DELIVERY') breakdown.delivery += Number(o.total || 0);
+            breakdown.tax += Number(o.tax || 0);
+            breakdown.discount += Number(o.discount || 0);
+            breakdown.serviceCharge += Number(o.service_charge || 0);
         });
 
         // v3.0 analytics logic
@@ -1482,9 +1792,7 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
             where: {
                 restaurant_id: String(restaurant_id),
                 status: 'DELIVERED',
-                created_at: {
-                    gte: new Date(new Date().setHours(0, 0, 0, 0))
-                }
+                created_at: { gte: todayStart }
             }
         });
 
@@ -1499,12 +1807,33 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
 
         const kitchenQueueCount = activeOrderIds.length > 0 ? await prisma.order_items.count({
             where: {
-                order_id: {
-                    in: activeOrderIds.map(o => o.id)
-                },
+                order_id: { in: activeOrderIds.map(o => o.id) },
                 item_status: 'PENDING'
             }
         }) : 0;
+
+        // --- NEW: GUEST COUNT & STATUS BREAKDOWN ---
+        const guestCountAgg = await prisma.orders.aggregate({
+            where: {
+                restaurant_id: String(restaurant_id),
+                status: 'ACTIVE'
+            },
+            _sum: { guest_count: true }
+        });
+
+        const statusStats = await prisma.orders.groupBy({
+            by: ['status'],
+            where: {
+                restaurant_id: String(restaurant_id),
+                created_at: { gte: todayStart }
+            },
+            _count: { id: true }
+        });
+
+        const statusMap: Record<string, number> = {};
+        statusStats.forEach(s => {
+            if (s.status) statusMap[s.status] = s._count.id;
+        });
 
         res.json({
             totalSales: Number(salesAgg._sum.amount || 0),
@@ -1512,6 +1841,9 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
             unitAverage: salesAgg._count.id > 0 ? Math.round(Number(salesAgg._sum.amount || 0) / salesAgg._count.id) : 0,
             activeOrders: activeOrdersCount,
             kitchenQueue: kitchenQueueCount,
+            totalGuests: Number(guestCountAgg._sum.guest_count || 0),
+            statusBreakdown: statusMap,
+            breakdown,
             logistics: {
                 onRoad: onRoadCount,
                 activeShifts: activeShiftsCount,
@@ -1543,7 +1875,7 @@ app.get('/api/menu_items', async (req, res) => {
     }
 });
 
-app.post('/api/menu_items', async (req, res) => {
+app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const item = await prisma.menu_items.create({ data: req.body });
         io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: item });
@@ -1554,7 +1886,7 @@ app.post('/api/menu_items', async (req, res) => {
     }
 });
 
-app.patch('/api/menu_items', async (req, res) => {
+app.patch('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const { id, ...data } = req.body;
         if (!id) return res.status(400).json({ error: 'Item ID is required' });
@@ -1571,7 +1903,7 @@ app.patch('/api/menu_items', async (req, res) => {
     }
 });
 
-app.delete('/api/menu_items', async (req, res) => {
+app.delete('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id } = req.query;
     try {
         await prisma.menu_items.delete({ where: { id: String(id) } });
@@ -1597,7 +1929,7 @@ app.get('/api/menu_categories', async (req, res) => {
     }
 });
 
-app.post('/api/menu_categories', async (req, res) => {
+app.post('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const cat = await prisma.menu_categories.create({ data: req.body });
         io.emit('db_change', { table: 'menu_categories', eventType: 'INSERT', data: cat });
@@ -1608,7 +1940,7 @@ app.post('/api/menu_categories', async (req, res) => {
     }
 });
 
-app.patch('/api/menu_categories', async (req, res) => {
+app.patch('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const cat = await prisma.menu_categories.update({ where: { id: String(id) }, data });
@@ -1619,7 +1951,7 @@ app.patch('/api/menu_categories', async (req, res) => {
     }
 });
 
-app.delete('/api/menu_categories', async (req, res) => {
+app.delete('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id } = req.query;
     try {
         await prisma.menu_categories.delete({ where: { id: String(id) } });
@@ -1640,13 +1972,28 @@ app.delete('/api/menu_categories', async (req, res) => {
 app.get('/api/orders', async (req, res) => {
     const { restaurant_id } = req.query;
     try {
+        // Window: include all active/recent orders — keep a 3-day archive for closed ones
+        const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
         const orders = await prisma.orders.findMany({
-            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
-            include: {
-                order_items: true
+            where: {
+                ...(restaurant_id ? { restaurant_id: String(restaurant_id) } : {}),
+                OR: [
+                    // Always include non-terminal orders (live logistics)
+                    { status: { notIn: ['CLOSED', 'CANCELLED', 'VOIDED'] } },
+                    // Include recently closed/settled orders for settlement history
+                    {
+                        status: { in: ['CLOSED', 'CANCELLED', 'VOIDED', 'DELIVERED'] },
+                        created_at: { gte: threeDaysAgo }
+                    }
+                ]
             },
-            orderBy: { created_at: 'desc' },
-            take: 100
+            include: {
+                order_items: true,
+                delivery_orders: true,    // ← CRITICAL for delivery address + driver info
+                dine_in_orders: true,     // ← table/guest context
+                takeaway_orders: true     // ← pickup token context
+            },
+            orderBy: { created_at: 'desc' }
         });
         res.json(orders);
     } catch (e: any) {
@@ -1683,13 +2030,17 @@ app.get('/api/sections', async (req, res) => {
     }
 });
 
-app.get('/api/staff', async (req, res) => {
+app.get('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN', 'CASHIER', 'SERVER'), async (req, res) => {
     const { restaurant_id } = req.query;
     try {
         const staff = await prisma.staff.findMany({
             where: {
                 ...(restaurant_id ? { restaurant_id: String(restaurant_id) } : {}),
-                status: 'active'
+                OR: [
+                    { status: 'active' },
+                    { status: 'ACTIVE' },
+                    { status: null }
+                ],
             },
             include: {
                 rider_shifts: {
@@ -1756,7 +2107,7 @@ app.get('/api/vendors', async (req, res) => {
 });
 
 // Sections
-app.post('/api/sections', async (req, res) => {
+app.post('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         console.log('POST /api/sections body:', req.body);
         const section = await createSection(req.body, io);
@@ -1767,7 +2118,7 @@ app.post('/api/sections', async (req, res) => {
     }
 });
 
-app.patch('/api/sections', async (req, res) => {
+app.patch('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id, restaurant_id, ...data } = req.body;
     if (!id || !restaurant_id) return res.status(400).json({ error: 'Missing id or restaurant_id' });
     try {
@@ -1778,7 +2129,7 @@ app.patch('/api/sections', async (req, res) => {
     }
 });
 
-app.post('/api/sections/reorder', async (req, res) => {
+app.post('/api/sections/reorder', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { restaurant_id, reordered_ids } = req.body;
     if (!restaurant_id || !Array.isArray(reordered_ids)) {
         return res.status(400).json({ error: 'Missing restaurant_id or reordered_ids array' });
@@ -1791,7 +2142,7 @@ app.post('/api/sections/reorder', async (req, res) => {
     }
 });
 
-app.delete('/api/sections', async (req, res) => {
+app.delete('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id } = req.query;
     try {
         await deleteSection(String(id), io);
@@ -1802,7 +2153,7 @@ app.delete('/api/sections', async (req, res) => {
 });
 
 // Tables
-app.post('/api/tables', async (req, res) => {
+app.post('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const table = await createTable(req.body, io);
         res.json(table);
@@ -1811,7 +2162,7 @@ app.post('/api/tables', async (req, res) => {
     }
 });
 
-app.patch('/api/tables', async (req, res) => {
+app.patch('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id, restaurant_id, ...data } = req.body;
     if (!id || !restaurant_id) return res.status(400).json({ error: 'Missing id or restaurant_id' });
     try {
@@ -1822,7 +2173,7 @@ app.patch('/api/tables', async (req, res) => {
     }
 });
 
-app.delete('/api/tables', async (req, res) => {
+app.delete('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id } = req.query;
     try {
         await deleteTable(String(id), io);
@@ -2144,11 +2495,29 @@ app.post('/api/system/reset-environment', async (req, res) => {
         await prisma.reservation_orders.deleteMany({});
         await prisma.order_items.deleteMany({});
 
-        // Delete financial records
-        console.log('   - Deleting financial records...');
+        // Delete financial records & logs
+        console.log('   - Deleting financial records (transactions, expenses, ledgers)...');
         await prisma.transactions.deleteMany({ where: { restaurant_id: restaurantId } });
         await prisma.expenses.deleteMany({ where: { restaurant_id: restaurantId } });
         await prisma.reservations.deleteMany({ where: { restaurant_id: restaurantId } });
+        await prisma.ledger_entries.deleteMany({ where: { restaurant_id: restaurantId } });
+        await prisma.journal_entries.deleteMany({ where: { restaurant_id: restaurantId } });
+        await prisma.rider_shifts.deleteMany({ where: { restaurant_id: restaurantId } });
+        await prisma.cash_sessions.deleteMany({ where: { restaurant_id: restaurantId } });
+
+        // Try to clear audit logs if possible (they might not have restaurant_id though, let's check schema or delete indiscriminately if local)
+        try {
+            // Assume we just wipe all audit logs for simplicity in this local reset
+            await prisma.audit_logs.deleteMany({});
+            await prisma.system_logs.deleteMany({});
+        } catch(e) { /* ignore if not present */ }
+
+        // Core / Operational Data
+        await prisma.parked_orders.deleteMany({});
+        await prisma.order_intelligence.deleteMany({});
+        await prisma.rider_settlements.deleteMany({ where: { restaurant_id: restaurantId }});
+        await prisma.staff_wallet_logs.deleteMany({ where: { restaurant_id: restaurantId }});
+        await prisma.payouts.deleteMany({ where: { restaurant_id: restaurantId }});
 
         // Delete core orders
         console.log('   - Deleting core orders...');
@@ -2217,7 +2586,7 @@ app.get('/api/orders/:id', async (req, res, next) => {
 
 app.post('/api/orders/:id/settle', async (req, res) => {
     const { id } = req.params;
-    const { amount, payment_method, transaction_ref, restaurant_id, staff_id } = req.body;
+    const { amount, payment_method, transaction_ref, restaurant_id, staff_id, tax, service_charge, discount, breakdown } = req.body;
 
     try {
         const order = await prisma.orders.findUnique({
@@ -2226,6 +2595,12 @@ app.post('/api/orders/:id/settle', async (req, res) => {
         });
 
         if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        // Check for active session
+        const activeSession = await accounting.getActiveSession(restaurant_id);
+        if (!activeSession) {
+            return res.status(403).json({ error: 'No active session. Please open business day in Financial HUD first.' });
+        }
 
         const result = await prisma.$transaction(async (tx) => {
             // 1. Create Transaction
@@ -2248,6 +2623,10 @@ app.post('/api/orders/:id/settle', async (req, res) => {
                     status: 'CLOSED', // v3.0: PAID is no longer a status, use CLOSED
                     payment_status: 'PAID', // v3.0: Explicit payment status
                     total: amount,
+                    tax: tax !== undefined ? tax : order.tax,
+                    service_charge: service_charge !== undefined ? service_charge : order.service_charge,
+                    discount: discount !== undefined ? discount : order.discount,
+                    breakdown: breakdown || order.breakdown,
                     last_action_by: staff_id,
                     last_action_desc: `Settle: ${payment_method} - Rs. ${amount}`,
                     updated_at: new Date()
@@ -2272,6 +2651,13 @@ app.post('/api/orders/:id/settle', async (req, res) => {
 
             return { transaction, updatedOrder };
         });
+
+        // 3.5 FBR Auto-Sync
+        const restaurant = await prisma.restaurants.findUnique({ where: { id: restaurant_id } });
+        if ((restaurant as any)?.fbr_enabled) {
+            // Run in background to not block response
+            fbrService.syncOrder(id).catch(err => console.error('[FBR] Background sync error:', err));
+        }
 
         // 4. Notify via Socket
         io.to(`restaurant:${restaurant_id}`).emit('db_change', {
@@ -2347,7 +2733,7 @@ app.post('/api/pairing/generate', pairingGenerateLimiter, async (req, res) => {
             select: { restaurant_id: true, status: true }
         });
 
-        if (!staff || staff.restaurant_id !== restaurantId || staff.status !== 'active') {
+        if (!staff || staff.restaurant_id !== restaurantId || (staff.status?.toLowerCase() !== 'active')) {
             return res.status(403).json({ error: 'Unauthorized to generate pairing codes' });
         }
 
@@ -2835,8 +3221,51 @@ app.delete('/api/:table', authMiddleware, async (req, res) => {
     }
 });
 
+// ==========================================
+// 🚀 SYSTEM UPDATES
+// ==========================================
+
+/**
+ * GET /api/system/update/check
+ * Checks if a newer version of the system is available in the cloud.
+ */
+app.get('/api/system/update/check', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (_req, res) => {
+    try {
+        const updateInfo = await updateService.checkUpdate();
+        res.json(updateInfo);
+    } catch (error: any) {
+        console.error('[UPDATE] Check failed:', error);
+        res.status(500).json({ error: 'Failed to check for updates' });
+    }
+});
+
+/**
+ * POST /api/system/update/apply
+ * Initiates the update process. This will download the zip and restart the system.
+ */
+app.post('/api/system/update/apply', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const { downloadUrl } = req.body;
+        if (!downloadUrl) {
+            return res.status(400).json({ error: 'downloadUrl is required' });
+        }
+
+        const result = await updateService.applyUpdate(downloadUrl);
+        res.json(result);
+    } catch (error: any) {
+        console.error('[UPDATE] Apply failed:', error);
+        res.status(500).json({ error: error.message || 'Failed to apply update' });
+    }
+});
+
+// Final error handling middleware
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[UNHANDLED ERROR]', err);
+    res.status(500).json({ error: 'An internal server error occurred' });
+});
+
 // Server Initialization
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Graceful error handler — catches EADDRINUSE and prints fix instructions
 server.on('error', (err: NodeJS.ErrnoException) => {
@@ -2856,8 +3285,25 @@ server.on('error', (err: NodeJS.ErrnoException) => {
     }
 });
 
+// ==========================================
+// 🌐 SPA ROUTING (CATCH-ALL)
+// ==========================================
+if (distPath) {
+    app.get('*', (req, res, next) => {
+        // Skip API routes so they can hit the 404 handler properly
+        if (req.path.startsWith('/api')) return next();
+        
+        const indexPath = path.join(distPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+            res.sendFile(indexPath);
+        } else {
+            next();
+        }
+    });
+}
+
 // 404 Catch-all (Must be after all other routes)
-app.use((req, res, next) => {
+app.use((req, res) => {
     console.warn(`[NOT_FOUND] 404: ${req.method} ${req.originalUrl}`);
     res.status(404).json({ error: `Not Found: ${req.method} ${req.originalUrl}` });
 });
