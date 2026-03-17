@@ -259,21 +259,39 @@ export const MenuView: React.FC = () => {
             </nav>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4 shrink-0 pr-4">
+            {activeHubView === 'CATEGORIES' ? (
+              <button 
+                onClick={() => handleOpenCatModal()} 
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-10 px-6 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
+              >
+                <Plus size={16} />
+                <span>Add Group</span>
+              </button>
+            ) : activeHubView === 'STATIONS' ? (
+              <button 
+                onClick={() => setIsStationAdding(true)} 
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-10 px-6 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
+              >
+                <Plus size={16} />
+                <span>Add Station</span>
+              </button>
+            ) : (
+              <button 
+                onClick={() => handleOpenItemModal()} 
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-10 px-6 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
+              >
+                <Plus size={16} />
+                <span>Add Unit</span>
+              </button>
+            )}
+
             <button
               onClick={() => fetchInitialData()}
-              className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-blue-400 hover:border-blue-500/30 transition-all active:rotate-180 duration-500"
+              className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-blue-400 hover:border-blue-500/30 transition-all active:rotate-180 duration-500 shrink-0"
             >
               <RefreshCw size={16} />
             </button>
-
-            {activeHubView === 'CATEGORIES' ? (
-              <Button onClick={() => handleOpenCatModal()} icon={<Plus size={16} />} className="bg-blue-600 hover:bg-blue-500 text-[10px] h-10 px-6 font-black tracking-widest uppercase">New Group</Button>
-            ) : activeHubView === 'STATIONS' ? (
-              <Button onClick={() => setIsStationAdding(true)} icon={<Plus size={16} />} className="bg-blue-600 hover:bg-blue-500 text-[10px] h-10 px-6 font-black tracking-widest uppercase">Add Node</Button>
-            ) : (
-              <Button onClick={() => handleOpenItemModal()} icon={<Plus size={16} />} className="bg-blue-600 hover:bg-blue-500 text-[10px] h-10 px-6 font-black tracking-widest uppercase">Initialize Unit</Button>
-            )}
           </div>
         </div>
 

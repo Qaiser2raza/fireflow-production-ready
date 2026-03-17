@@ -1869,10 +1869,20 @@ app.get('/api/menu_items', async (req, res) => {
             include: { menu_categories: true },
             orderBy: { name: 'asc' }
         });
-        // Surface prep_time_minutes from features JSON for the frontend
+
+        // Fetch item-specific prep times from restaurant features
+        let prepTimes: Record<string, number> = {};
+        if (restaurant_id) {
+            const features = await prisma.restaurant_features.findUnique({
+                where: { restaurant_id: String(restaurant_id) }
+            });
+            prepTimes = (features?.features as any)?.menu_item_prep_times || {};
+        }
+
+        // Surface prep_time_minutes from restaurant features
         const mapped = items.map((item: any) => ({
             ...item,
-            prep_time_minutes: item.features?.prep_time_minutes ?? null
+            prep_time_minutes: prepTimes[item.id] ?? 15
         }));
         res.json(mapped);
     } catch (e: any) {
@@ -1883,16 +1893,33 @@ app.get('/api/menu_items', async (req, res) => {
 
 app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
-        // Strip fields that don't exist as Prisma columns
-        const { category_id, category, station_id, prep_time_minutes, id: _id, ...rest } = req.body;
-        const prismaData: any = { ...rest };
-        // Store prep_time_minutes inside features JSON (no schema change)
-        if (prep_time_minutes !== undefined) {
-            prismaData.features = { ...(prismaData.features || {}), prep_time_minutes: Number(prep_time_minutes) };
-        }
+        const { category_id, category, station_id, prep_time_minutes, id: _id, restaurant_id: _rid, features: _f, ...rest } = req.body;
+        const prismaData: any = { 
+            ...rest,
+            restaurant_id: req.restaurantId // Use enforced restaurant ID from middleware
+        };
+
+        // Create the item
         const item = await prisma.menu_items.create({ data: prismaData });
+
+        // Persist prep_time_minutes to restaurant features
+        if (prep_time_minutes !== undefined) {
+            const currentFeatures = await prisma.restaurant_features.findUnique({
+                where: { restaurant_id: req.restaurantId }
+            });
+            const featuresData = currentFeatures?.features as any || {};
+            const prepTimes = featuresData.menu_item_prep_times || {};
+            prepTimes[item.id] = Number(prep_time_minutes);
+            
+            await prisma.restaurant_features.upsert({
+                where: { restaurant_id: req.restaurantId },
+                create: { restaurant_id: req.restaurantId, features: { ...featuresData, menu_item_prep_times: prepTimes } },
+                update: { features: { ...featuresData, menu_item_prep_times: prepTimes } }
+            });
+        }
+
         io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: { ...item, prep_time_minutes } });
-        res.json({ ...item, prep_time_minutes: (item as any).features?.prep_time_minutes });
+        res.json({ ...item, prep_time_minutes });
     } catch (e: any) {
         console.error('POST /api/menu_items ERROR:', e);
         res.status(500).json({ error: e.message });
@@ -1901,20 +1928,32 @@ app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'
 
 app.patch('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
-        const { id, category_id, category, station_id, prep_time_minutes, ...data } = req.body;
+        const { id, category_id, category, station_id, prep_time_minutes, restaurant_id: _rid, features: _f, ...data } = req.body;
         if (!id) return res.status(400).json({ error: 'Item ID is required' });
-
-        // Store prep_time_minutes inside features JSON (no schema change)
-        if (prep_time_minutes !== undefined) {
-            data.features = { ...(data.features || {}), prep_time_minutes: Number(prep_time_minutes) };
-        }
 
         const item = await prisma.menu_items.update({
             where: { id: String(id) },
             data: data
         });
+
+        // Persist prep_time_minutes to restaurant features
+        if (prep_time_minutes !== undefined) {
+            const currentFeatures = await prisma.restaurant_features.findUnique({
+                where: { restaurant_id: req.restaurantId }
+            });
+            const featuresData = currentFeatures?.features as any || {};
+            const prepTimes = featuresData.menu_item_prep_times || {};
+            prepTimes[item.id] = Number(prep_time_minutes);
+            
+            await prisma.restaurant_features.upsert({
+                where: { restaurant_id: req.restaurantId },
+                create: { restaurant_id: req.restaurantId, features: { ...featuresData, menu_item_prep_times: prepTimes } },
+                update: { features: { ...featuresData, menu_item_prep_times: prepTimes } }
+            });
+        }
+
         io.emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: { ...item, prep_time_minutes } });
-        res.json({ ...item, prep_time_minutes: (item as any).features?.prep_time_minutes });
+        res.json({ ...item, prep_time_minutes });
     } catch (e: any) {
         console.error('PATCH /api/menu_items ERROR:', e);
         res.status(500).json({ error: e.message });
