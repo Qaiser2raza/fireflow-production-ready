@@ -149,14 +149,14 @@ export const TableCard: React.FC<TableCardProps> = ({
                             <div className="flex items-center justify-center p-6 bg-orange-500/10 border border-orange-500/20 rounded-xl">
                                 <span className="text-orange-500 font-black text-[10px] tracking-[0.2em] uppercase italic">Needs Cleaning</span>
                             </div>
-                            {/* Hover Overlay - Centered on Card */}
-                            <div className="absolute -inset-x-3 -bottom-3 -top-24 bg-black/60 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all duration-200 rounded-lg flex items-center justify-center p-6 z-20">
+                            {/* One-tap clean overlay */}
+                            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all duration-200 rounded-lg flex items-center justify-center p-4 z-20">
                                 <button
                                     onClick={(e) => { e.stopPropagation(); onUpdateStatus?.('AVAILABLE'); }}
-                                    className="w-full bg-white hover:bg-slate-200 text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs transition-all shadow-2xl active:scale-95 flex items-center justify-center gap-3 border-2 border-orange-500/20"
+                                    className="w-full bg-orange-500 hover:bg-orange-400 active:scale-95 text-white font-black py-4 rounded-xl uppercase tracking-widest text-[10px] transition-all shadow-2xl flex items-center justify-center gap-2"
                                 >
-                                    <CheckCircle2 size={18} className="text-orange-600" />
-                                    Mark as Item Clean
+                                    <CheckCircle2 size={16} />
+                                    Table Cleaned → Available
                                 </button>
                             </div>
                         </div>
@@ -238,50 +238,72 @@ export const TableCard: React.FC<TableCardProps> = ({
                                 );
                             })()}
 
-                            {/* Quick Action Menu on Hover */}
-                            <div className="absolute inset-x-5 bottom-5 opacity-0 group-hover:opacity-100 transition-all duration-200 space-y-1.5">
-                                {order.status === 'READY' && onMarkServed && (
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); handleMarkServed(); }}
-                                        className="w-full bg-green-600/90 backdrop-blur-md border border-green-500/30 hover:bg-green-500 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                    >
-                                        <CheckCircle2 size={12} />
-                                        Mark Served
-                                    </button>
-                                )}
-                                {(order.status === 'ACTIVE' || order.status === 'READY') && onRequestBill && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            if (canRequestBill) {
-                                                handleRequestBill();
-                                            }
-                                        }}
-                                        disabled={!canRequestBill}
-                                        title={billTooltip}
-                                        className={`w-full backdrop-blur-md border text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${canRequestBill
-                                            ? 'bg-red-600/90 border-red-500/30 hover:bg-red-500 cursor-pointer'
-                                            : 'bg-gray-700/50 border-gray-600/30 cursor-not-allowed opacity-60'
-                                            }`}
-                                    >
-                                        <FileText size={12} />
-                                        {canRequestBill ? 'Request Bill' : `Bill (${servedItems.length}/${totalItems})`}
-                                    </button>
-                                )}
-                                <button
+                            {/* Quick Action Menu on Hover — role-based */}
+                            <div className="absolute inset-x-5 bottom-5 opacity-0 group-hover:opacity-100 transition-all duration-200 space-y-1.5 z-20">
+                              {/* WAITER / SERVER: simplified — View Details + Add Items only */}
+                              {['SERVER', 'WAITER'].includes(currentUser?.role || '') ? (
+                                <>
+                                  <button
                                     onClick={(e) => { e.stopPropagation(); setShowDetailModal(true); }}
                                     className="w-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                >
+                                  >
                                     <Eye size={12} />
-                                    View Details
-                                </button>
-                                <button
+                                    View Order
+                                  </button>
+                                  <button
                                     onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
                                     className="w-full bg-gold-500/90 backdrop-blur-md border border-gold-400/30 hover:bg-gold-400 text-black font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                >
+                                  >
+                                    <Plus size={12} />
+                                    Add Items
+                                  </button>
+                                </>
+                              ) : (
+                                /* CASHIER / MANAGER / ADMIN: full action set */
+                                <>
+                                  {order.status === 'READY' && onMarkServed && (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleMarkServed(); }}
+                                      className="w-full bg-green-600/90 backdrop-blur-md border border-green-500/30 hover:bg-green-500 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                                    >
+                                      <CheckCircle2 size={12} />
+                                      Mark Served
+                                    </button>
+                                  )}
+                                  {(order.status === 'ACTIVE' || order.status === 'READY') && onRequestBill && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (canRequestBill) handleRequestBill();
+                                      }}
+                                      disabled={!canRequestBill}
+                                      title={billTooltip}
+                                      className={`w-full backdrop-blur-md border text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
+                                        canRequestBill
+                                          ? 'bg-red-600/90 border-red-500/30 hover:bg-red-500 cursor-pointer'
+                                          : 'bg-gray-700/50 border-gray-600/30 cursor-not-allowed opacity-60'
+                                      }`}
+                                    >
+                                      <FileText size={12} />
+                                      {canRequestBill ? 'Request Bill' : `Bill (${servedItems.length}/${totalItems})`}
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setShowDetailModal(true); }}
+                                    className="w-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                                  >
+                                    <Eye size={12} />
+                                    View Details
+                                  </button>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
+                                    className="w-full bg-gold-500/90 backdrop-blur-md border border-gold-400/30 hover:bg-gold-400 text-black font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                                  >
                                     <Edit2 size={12} />
                                     Edit in POS
-                                </button>
+                                  </button>
+                                </>
+                              )}
                             </div>
                         </div>
                     )}

@@ -1589,9 +1589,10 @@ app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {
     // SaaS Security: Only allow reset for own restaurant data!
     const restaurant_id = req.restaurantId;
 
-    // Optional: Only allow SUPER_ADMIN to reset?
-    if (req.role !== 'SUPER_ADMIN' && req.role !== 'MANAGER') {
-        return res.status(403).json({ error: 'Privileged action: Manager or Admin required for system reset' });
+    if (req.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ 
+            error: 'Factory restore requires Super Admin privileges. Contact FireFlow support.' 
+        });
     }
 
     try {
@@ -2480,7 +2481,12 @@ app.post('/api/system/seed-restaurant', async (req, res) => {
     }
 });
 
-app.post('/api/system/reset-environment', async (req, res) => {
+app.post('/api/system/reset-environment', authMiddleware, async (req, res) => {
+    if (req.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ 
+            error: 'Factory restore requires Super Admin privileges. Contact FireFlow support.' 
+        });
+    }
     const { restaurantId } = req.body;
     if (!restaurantId) return res.status(400).json({ error: 'Restaurant ID required' });
 

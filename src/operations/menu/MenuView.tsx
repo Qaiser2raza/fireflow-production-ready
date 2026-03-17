@@ -7,7 +7,7 @@ import {
   TrendingUp, BarChart2, Package, LayoutGrid,
   ToggleLeft, ToggleRight,
   ChefHat, Activity, Save, X, Network,
-  AlertCircle, RefreshCw
+  AlertCircle, RefreshCw, Clock
 } from 'lucide-react';
 
 import { Button } from '../../shared/ui/Button';
@@ -63,6 +63,7 @@ export const MenuView: React.FC = () => {
     requires_prep: true,
     track_stock: false,
     daily_stock: '0',
+    prep_time_minutes: '15',
   });
 
   const [catFormData, setCatFormData] = useState({
@@ -114,7 +115,8 @@ export const MenuView: React.FC = () => {
         station_id: item.station_id || '',
         requires_prep: item.requires_prep ?? true,
         track_stock: item.track_stock || false,
-        daily_stock: (item.daily_stock || 0).toString()
+        daily_stock: (item.daily_stock || 0).toString(),
+        prep_time_minutes: ((item as any).prep_time_minutes || 15).toString()
       });
     } else {
       setEditingItem(null);
@@ -131,7 +133,8 @@ export const MenuView: React.FC = () => {
         station_id: stations[0]?.id || '',
         requires_prep: true,
         track_stock: false,
-        daily_stock: '0'
+        daily_stock: '0',
+        prep_time_minutes: '15',
       });
     }
     setIsModalOpen(true);
@@ -146,6 +149,7 @@ export const MenuView: React.FC = () => {
       daily_stock: parseInt(formData.daily_stock) || 0,
       station: stations.find(s => s.id === formData.station_id)?.name || formData.station || 'KITCHEN',
       category: menuCategories.find(c => c.id === formData.category_id)?.name || 'General',
+      prep_time_minutes: parseInt(formData.prep_time_minutes) || 15,
       id: editingItem?.id
     };
 
@@ -666,6 +670,30 @@ export const MenuView: React.FC = () => {
             </button>
           </div>
 
+          {/* Prep Time Field */}
+          {formData.requires_prep && (
+            <div className="px-5 py-4 bg-slate-900/60 rounded-xl border border-slate-800 flex items-center justify-between gap-6">
+              <div className="flex items-center gap-3">
+                <Clock size={16} className="text-amber-400 shrink-0" />
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-white">Preparation Time</div>
+                  <div className="text-[9px] text-slate-500 font-bold mt-0.5">Minutes from fire to ready</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <input
+                  type="number"
+                  min="1"
+                  max="120"
+                  value={formData.prep_time_minutes}
+                  onChange={e => setFormData({ ...formData, prep_time_minutes: e.target.value })}
+                  className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-center text-white font-black text-sm outline-none focus:border-amber-500 transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <span className="text-[10px] text-slate-500 font-bold uppercase">min</span>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-5 p-5 bg-black/40 rounded-2xl border border-slate-800">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] block">Base Cost Unit (Rs.)</label>
@@ -840,7 +868,9 @@ const MenuCard: React.FC<MenuCardProps> = ({ item, onEdit, onToggle }) => {
           </div>
           <div className="flex items-center gap-2">
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-              {item.requires_prep ? 'Prep Req' : 'Direct'}
+              {item.requires_prep
+                ? `${(item as any).prep_time_minutes || 15}m prep`
+                : 'Direct'}
             </div>
           </div>
         </div>
