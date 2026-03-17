@@ -14,6 +14,9 @@ declare global {
   interface Window {
     electronAPI: {
       printDeliverySlip: (data: { orderIds: string[]; driverId: string }) => void;
+      getPrinters: () => Promise<Array<{ name: string; description?: string; status?: number; isDefault?: boolean }>>;
+      printThermal: (html: string, printerName: string, silent?: boolean) => Promise<{ success: boolean; error?: string }>;
+      printA4: (html: string, printerName: string) => Promise<{ success: boolean; error?: string }>;
     };
     electron?: {
       ipcRenderer: any;

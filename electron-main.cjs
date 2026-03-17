@@ -89,6 +89,53 @@ ipcMain.handle('print-thermal', async (event, { html, printerName, silent = true
     });
 });
 
+// 🖨️ HARDWARE: A4 PRINTER (HP LaserJet / standard paper)
+ipcMain.handle('print-a4', async (event, { html, printerName }) => {
+    console.log(`[IPC] A4 Print initiated to: ${printerName}`);
+    const printWindow = new BrowserWindow({
+        show: false,
+        width: 794, // A4 width in pixels at 96dpi
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true
+        }
+    });
+
+    // Verify printer existence
+    if (printerName && printerName !== 'Default') {
+        try {
+            const printers = await printWindow.webContents.getPrintersAsync();
+            const exists = printers.some(p => p.name === printerName);
+            if (!exists) {
+                console.warn(`[IPC] A4 Printer "${printerName}" not found.`);
+                printWindow.close();
+                return {
+                    success: false,
+                    error: `Printer "${printerName}" not found. Available: ${printers.map(p => p.name).join(', ')}`
+                };
+            }
+        } catch (e) {
+            console.error('[IPC] Failed to verify A4 printers:', e);
+        }
+    }
+
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+
+    return new Promise((resolve) => {
+        printWindow.webContents.print({
+            silent: true,
+            printBackground: true,
+            deviceName: (printerName === 'Default' || !printerName) ? undefined : printerName,
+            margins: { marginType: 'printableArea' },
+            pageSize: 'A4'
+        }, (success, errorType) => {
+            console.log(`[IPC] A4 Print result: ${success}, Error: ${errorType}`);
+            printWindow.close();
+            resolve({ success, error: errorType });
+        });
+    });
+});
+
 // --- 🖨️ HARDWARE: THERM-SYNC PRINT LOGIC ---
 ipcMain.on('PRINT_DELIVERY_SLIP', async (event, payload) => {
     const { orderIds, driverId } = payload;
@@ -116,35 +163,71 @@ ipcMain.on('PRINT_DELIVERY_SLIP', async (event, payload) => {
 });
 
 function generateSlip(order) {
-    const divider = "================================";
     const items = order.order_items || [];
     const isPaid = order.status === 'PAID' || order.payment_status === 'PAID';
 
-    // Simulate Thermal Print Stream
-    console.log(`
-${divider}
-      FIREFLOW DELIVERY
-${divider}
-ORDER: #${order.id.split('-').pop().toUpperCase()}
-DATE:  ${new Date(order.created_at).toLocaleString()}
-PILOT: ${order.assigned_driver_id || 'LOCAL-RECRUIT'}
+    const itemRows = items
+        .map(i => `<tr>
+            <td style="padding:2px 4px;">${i.quantity}x</td>
+            <td style="padding:2px 4px;">${i.item_name || 'Item'}</td>
+            <td style="padding:2px 4px; text-align:right;">Rs.${i.total_price}</td>
+        </tr>`)
+        .join('');
 
-CUSTOMER: ${order.customer_name || 'GUEST'}
-PHONE:    ${order.customer_phone || 'N/A'}
-ADDRESS:  ${order.delivery_address || 'PICKUP-STATION'}
+    const html = `
+    <html><head><style>
+        body { font-family: 'Courier New', monospace; font-size: 11px; margin: 0; padding: 4px; width: 280px; }
+        h2 { text-align: center; font-size: 13px; margin: 4px 0; }
+        .divider { border-top: 1px dashed #000; margin: 4px 0; }
+        table { width: 100%; border-collapse: collapse; }
+        .total { font-size: 13px; font-weight: bold; }
+        .center { text-align: center; }
+        .badge { text-align: center; font-weight: bold; font-size: 12px; padding: 3px; border: 1px solid #000; }
+    </style></head><body>
+        <h2>FIREFLOW DELIVERY</h2>
+        <div class="divider"></div>
+        <p style="margin:2px 0;">ORDER: #${order.id.split('-').pop().toUpperCase()}</p>
+        <p style="margin:2px 0;">DATE: ${new Date(order.created_at).toLocaleString()}</p>
+        <p style="margin:2px 0;">RIDER: ${order.assigned_driver_id ? order.assigned_driver_id.slice(-6).toUpperCase() : 'UNASSIGNED'}</p>
+        <div class="divider"></div>
+        <p style="margin:2px 0;"><b>CUSTOMER:</b> ${order.customer_name || 'GUEST'}</p>
+        <p style="margin:2px 0;"><b>PHONE:</b> ${order.customer_phone || 'N/A'}</p>
+        <p style="margin:2px 0;"><b>ADDRESS:</b> ${order.delivery_address || 'PICKUP'}</p>
+        <div class="divider"></div>
+        <table>${itemRows}</table>
+        <div class="divider"></div>
+        <table>
+            <tr><td>Subtotal</td><td style="text-align:right;">Rs.${order.total - (order.delivery_fee || 0)}</td></tr>
+            <tr><td>Delivery</td><td style="text-align:right;">Rs.${order.delivery_fee || 0}</td></tr>
+            <tr class="total"><td>TOTAL</td><td style="text-align:right;">Rs.${order.total}</td></tr>
+        </table>
+        <div class="divider"></div>
+        <div class="badge">${isPaid ? '⭐ PREPAID' : '💵 CASH ON DELIVERY'}</div>
+        <p class="center" style="font-size:9px; margin-top:6px;">FireFlow POS v1.0</p>
+    </body></html>`;
 
-ITEMIZED SUMMARY:
-${items.map(i => `${i.quantity}x ${i.item_name || 'Item'} ... Rs. ${i.total_price}`).join('\n')}
+    // Send to thermal printer using the already-implemented print-thermal handler
+    if (mainWindow) {
+        const printWindow = new BrowserWindow({
+            show: false,
+            width: 300,
+            webPreferences: { nodeIntegration: false, contextIsolation: true }
+        });
 
-SUBTOTAL: Rs. ${order.total - (order.delivery_fee || 0)}
-DELIVERY: Rs. ${order.delivery_fee || 0}
-TOTAL:    Rs. ${order.total}
-
-STATUS:   ${isPaid ? '⭐ PREPAID / PAID' : '💵 CASH ON DELIVERY'}
-${divider}
-   Generated by Fireflow v1.0
-${divider}
-    `);
+        printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
+            printWindow.webContents.print({
+                silent: true,
+                printBackground: true,
+                margins: { marginType: 'none' },
+                pageSize: { width: 80000, height: 297000 }
+            }, (success, errorType) => {
+                console.log(`[DELIVERY SLIP] Print result: ${success}, Error: ${errorType}`);
+                printWindow.close();
+            });
+        });
+    } else {
+        console.log('[DELIVERY SLIP] mainWindow not available, skipping print.');
+    }
 }
 
 let mainWindow;

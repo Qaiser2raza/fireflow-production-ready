@@ -1,7 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  printDeliverySlip: (data) => ipcRenderer.send('PRINT_DELIVERY_SLIP', data)
+  printDeliverySlip: (data) => ipcRenderer.send('PRINT_DELIVERY_SLIP', data),
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+  printThermal: (html, printerName, silent = true) =>
+    ipcRenderer.invoke('print-thermal', { html, printerName, silent }),
+  printA4: (html, printerName) =>
+    ipcRenderer.invoke('print-a4', { html, printerName }),
 });
 
 contextBridge.exposeInMainWorld('electron', {
