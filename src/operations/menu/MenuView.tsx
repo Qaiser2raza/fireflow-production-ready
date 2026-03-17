@@ -223,20 +223,20 @@ export const MenuView: React.FC = () => {
 
       {/* STUNNING CONSOLIDATED HEADER */}
       <div className="glass-panel border-b border-slate-800/60 bg-slate-900/40 backdrop-blur-3xl shrink-0 z-30 shadow-2xl">
-        {/* Row 1: Brand & View Selectors */}
-        <div className="px-6 py-4 flex items-center justify-between gap-8">
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-4 group">
-              <div className="size-11 flex items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 shadow-xl shadow-blue-900/40 text-white ring-1 ring-white/20 group-hover:scale-105 transition-transform">
-                <LayoutGrid size={22} className="group-hover:rotate-12 transition-transform" />
+        {/* Row 1: Brand, View Selectors & Actions */}
+        <div className="px-4 py-3 flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0 flex-1 overflow-hidden">
+            <div className="flex items-center gap-3 group shrink-0">
+              <div className="size-10 flex items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 shadow-xl shadow-blue-900/40 text-white ring-1 ring-white/20 group-hover:scale-105 transition-transform">
+                <LayoutGrid size={20} className="group-hover:rotate-12 transition-transform" />
               </div>
-              <div className="hidden sm:block">
-                <h1 className="text-xl font-black tracking-tighter uppercase text-white leading-none">Menu Hub</h1>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-blue-400 font-bold mt-1 opacity-70">Mission Control</p>
+              <div className="hidden lg:block">
+                <h1 className="text-lg font-black tracking-tighter uppercase text-white leading-none">Menu Hub</h1>
+                <p className="text-[9px] uppercase tracking-[0.2em] text-blue-400 font-bold mt-0.5 opacity-70">Control</p>
               </div>
             </div>
 
-            <nav className="flex items-center p-1 bg-black/40 rounded-xl border border-white/5 space-x-0.5">
+            <nav className="flex items-center p-1 bg-black/40 rounded-xl border border-white/5 space-x-0.5 overflow-x-auto no-scrollbar">
               {[
                 { id: 'CATALOG', label: 'Catalog', icon: Package },
                 { id: 'CATEGORIES', label: 'Groups', icon: Layers },
@@ -247,50 +247,50 @@ export const MenuView: React.FC = () => {
                 <button
                   key={view.id}
                   onClick={() => setActiveHubView(view.id as HubView)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all duration-300 ${activeHubView === view.id
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all duration-300 whitespace-nowrap ${activeHubView === view.id
                     ? 'bg-slate-800 text-white shadow-lg ring-1 ring-white/10 translate-y-[-1px]'
                     : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'
                     }`}
                 >
-                  <view.icon size={14} className={activeHubView === view.id ? 'text-blue-400' : ''} />
-                  <span className="hidden lg:block">{view.label}</span>
+                  <view.icon size={12} className={activeHubView === view.id ? 'text-blue-400' : ''} />
+                  <span>{view.label}</span>
                 </button>
               ))}
             </nav>
           </div>
 
-          <div className="flex items-center gap-4 shrink-0 pr-4">
+          <div className="flex items-center gap-2 shrink-0 ml-auto">
             {activeHubView === 'CATEGORIES' ? (
               <button 
                 onClick={() => handleOpenCatModal()} 
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-10 px-6 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-9 px-4 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
               >
                 <Plus size={16} />
-                <span>Add Group</span>
+                <span className="hidden sm:inline">Add Group</span>
               </button>
             ) : activeHubView === 'STATIONS' ? (
               <button 
                 onClick={() => setIsStationAdding(true)} 
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-10 px-6 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-9 px-4 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
               >
                 <Plus size={16} />
-                <span>Add Station</span>
+                <span className="hidden sm:inline">Add Station</span>
               </button>
             ) : (
               <button 
                 onClick={() => handleOpenItemModal()} 
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-10 px-6 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] h-9 px-4 font-black tracking-widest uppercase rounded-xl transition-all shadow-lg shadow-blue-900/40 active:scale-95"
               >
                 <Plus size={16} />
-                <span>Add Unit</span>
+                <span className="hidden sm:inline">Add Unit</span>
               </button>
             )}
 
             <button
               onClick={() => fetchInitialData()}
-              className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-blue-400 hover:border-blue-500/30 transition-all active:rotate-180 duration-500 shrink-0"
+              className="p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-blue-400 hover:border-blue-500/30 transition-all active:rotate-180 duration-500"
             >
-              <RefreshCw size={16} />
+              <RefreshCw size={14} />
             </button>
           </div>
         </div>
