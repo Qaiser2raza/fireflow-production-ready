@@ -1,16 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
-import { promisify } from 'util';
 import axios from 'axios';
 import { getLatestVersion } from '../../shared/lib/cloudClient';
 import pkg from '../../../package.json' assert { type: 'json' };
 
-const execAsync = promisify(exec);
-
 export class UpdateService {
     private static instance: UpdateService;
     private currentVersion: string = pkg.version;
+    private checkIntervalMs: number = 60 * 60 * 1000; // 1 hour
+    private intervalHandle: NodeJS.Timeout | null = null;
 
     public static getInstance() {
         if (!UpdateService.instance) {
@@ -20,11 +19,40 @@ export class UpdateService {
     }
 
     /**
-     * Compare local version with cloud version
+     * Start background polling for updates.
+     * Call this once from server.ts after the server starts listening.
      */
+    public startPolling() {
+        console.log(`[UpdateService] Polling started. Current version: ${this.currentVersion}`);
+        // First check 30s after boot to not interfere with startup
+        setTimeout(() => this.checkAndApply(), 30 * 1000);
+        this.intervalHandle = setInterval(() => this.checkAndApply(), this.checkIntervalMs);
+    }
+
+    public stopPolling() {
+        if (this.intervalHandle) {
+            clearInterval(this.intervalHandle);
+            this.intervalHandle = null;
+        }
+    }
+
+    private async checkAndApply() {
+        try {
+            const result = await this.checkUpdate();
+            if (result.hasUpdate && result.downloadUrl) {
+                console.log(`[UpdateService] New version: ${result.latestVersion} (current: ${result.currentVersion})`);
+                await this.applyUpdate(result.downloadUrl);
+            } else {
+                console.log(`[UpdateService] Up to date (${this.currentVersion})`);
+            }
+        } catch (err: any) {
+            console.error('[UpdateService] Poll error:', err.message);
+        }
+    }
+
     public async checkUpdate() {
         const { data, error } = await getLatestVersion();
-        
+
         if (error || !data) {
             return { hasUpdate: false, error };
         }
@@ -40,66 +68,62 @@ export class UpdateService {
         };
     }
 
-    /**
-     * Simple semver comparison
-     */
     private compareVersions(v1: string, v2: string): number {
         const a = v1.split('.').map(Number);
         const b = v2.split('.').map(Number);
-        
         for (let i = 0; i < 3; i++) {
-            if (a[i] > b[i]) return 1;
-            if (a[i] < b[i]) return -1;
+            if ((a[i] || 0) > (b[i] || 0)) return 1;
+            if ((a[i] || 0) < (b[i] || 0)) return -1;
         }
         return 0;
     }
 
-    /**
-     * Trigger the actual update process
-     * This usually involves spawning a detached process that handles the swap
-     */
     public async applyUpdate(downloadUrl: string) {
         try {
-            const updateDir = path.join(process.cwd(), 'updates');
-            if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir);
+            const appRoot = process.cwd();
+            const updateDir = path.join(appRoot, 'updates');
+            if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
 
             const zipPath = path.join(updateDir, 'update.zip');
-            
-            // 1. Download binary
+
+            // Download the zip
+            console.log(`[UpdateService] Downloading from ${downloadUrl}...`);
             const response = await axios({
                 url: downloadUrl,
                 method: 'GET',
-                responseType: 'stream'
+                responseType: 'stream',
+                timeout: 5 * 60 * 1000
             });
 
             const writer = fs.createWriteStream(zipPath);
             response.data.pipe(writer);
-
-            await new Promise((resolve, reject) => {
+            await new Promise<void>((resolve, reject) => {
                 writer.on('finish', resolve);
                 writer.on('error', reject);
             });
 
-            // 2. Spawn the updater script
-            // On Windows, we spawn a PowerShell script that waits for the server to exit,
-            // unzips the files, runs migrations, and restarts.
-            const updaterScript = path.join(process.cwd(), 'installer', 'Apply-Update.ps1');
-            
+            console.log(`[UpdateService] Download complete: ${zipPath}`);
+
+            // Locate updater script - lives in <appRoot>/installer/
+            const updaterScript = path.join(appRoot, 'installer', 'Apply-Update.ps1');
             if (!fs.existsSync(updaterScript)) {
-                throw new Error('Updater script missing in installer/ folder');
+                throw new Error(`Updater script not found: ${updaterScript}. Ensure Apply-Update.ps1 is in the installer/ folder.`);
             }
 
-            // Detached execution so the server can exit
-            const child = exec(`status powershell.exe -ExecutionPolicy Bypass -File "${updaterScript}" -ZipPath "${zipPath}"`, {
-                detached: true,
-                stdio: 'ignore'
-            });
+            // Spawn detached PowerShell process
+            const psCommand = `powershell.exe -ExecutionPolicy Bypass -File "${updaterScript}" -ZipPath "${zipPath}" -AppDir "${appRoot}"`;
+            console.log(`[UpdateService] Spawning: ${psCommand}`);
+
+            const child = exec(psCommand);
             child.unref();
 
-            return { success: true, message: 'Update process initiated. System will restart shortly.' };
+            return {
+                success: true,
+                message: 'Update downloaded. System will apply and restart within 30 seconds.'
+            };
         } catch (error: any) {
-            console.error('[UPDATE] Apply failed:', error);
-            throw new Error(`Update application failed: ${error.message}`);
+            console.error('[UpdateService] applyUpdate failed:', error);
+            throw new Error(`Update failed: ${error.message}`);
         }
     }
 }

@@ -3310,6 +3310,7 @@ app.use((req, res) => {
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log(`🚀 Server Engine Online: http://localhost:${PORT}`);
+    updateService.startPolling();
 
     logger.log({
         level: LogLevel.INFO,

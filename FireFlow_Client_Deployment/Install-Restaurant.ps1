@@ -1,80 +1,170 @@
 # FireFlow Complete Restaurant Setup Script
 # Run this script as Administrator
+# Place this script in the SAME folder as the .exe installer
 
 param (
-    [string]$DbPassword = "fireflow_admin",
-    [string]$DbPort = "5432"
+    [string]$DbPassword = "fireflow2026",
+    [string]$DbPort = "5432",
+    [string]$DbName = "fireflow_local"
 )
 
+$ScriptDir = $PSScriptRoot
+
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "🔥 FireFlow Restaurant System Setup 🔥" -ForegroundColor Cyan
+Write-Host "   FireFlow Restaurant System Setup     " -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "This script will install PostgreSQL, Node.js, and FireFlow."
 Write-Host ""
 
-# Request Admin Rights
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Warning "Please run this script as Administrator!"
-    exit
+    Write-Warning "Please right-click this script and choose 'Run as Administrator'!"
+    Pause
+    exit 1
 }
 
 $InstallDir = "C:\FireFlow_Setup_Temp"
 if (-Not (Test-Path $InstallDir)) { New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null }
 
-# 1. Install PostgreSQL silently
-Write-Host "[1/4] Checking PostgreSQL..." -ForegroundColor Yellow
-if (-Not (Get-Command "psql" -ErrorAction SilentlyContinue)) {
+# ---- STEP 1: PostgreSQL ----
+Write-Host "[1/5] Checking PostgreSQL..." -ForegroundColor Yellow
+$pgBin = "C:\Program Files\PostgreSQL\14\bin"
+$psql = "$pgBin\psql.exe"
+
+if (-Not (Test-Path $psql)) {
     $PgInstaller = "$InstallDir\postgresql-installer.exe"
     if (-Not (Test-Path $PgInstaller)) {
         Write-Host "      Downloading PostgreSQL 14..."
         Invoke-WebRequest -Uri "https://get.enterprisedb.com/postgresql/postgresql-14.10-1-windows-x64.exe" -OutFile $PgInstaller
     }
-    Write-Host "      Installing PostgreSQL silently (this may take a few minutes)..."
-    $process = Start-Process -FilePath $PgInstaller -ArgumentList "--mode unattended --superpassword $DbPassword --serverport $DbPort" -Wait -PassThru
-    
-    # Add to PATH
-    $env:Path += ";C:\Program Files\PostgreSQL\14\bin"
-    [Environment]::SetEnvironmentVariable("PATH", $env:Path, [EnvironmentVariableTarget]::Machine)
-    Write-Host "      PostgreSQL Installed!" -ForegroundColor Green
+    Write-Host "      Installing PostgreSQL silently..."
+    $proc = Start-Process -FilePath $PgInstaller `
+        -ArgumentList "--mode unattended --superpassword `"$DbPassword`" --serverport $DbPort" `
+        -Wait -PassThru
+    $env:Path += ";$pgBin"
+    [Environment]::SetEnvironmentVariable("PATH", $env:Path + ";$pgBin", [EnvironmentVariableTarget]::Machine)
+    Write-Host "      PostgreSQL installed!" -ForegroundColor Green
 } else {
-    Write-Host "      PostgreSQL is already installed." -ForegroundColor Green
+    Write-Host "      PostgreSQL already installed." -ForegroundColor Green
+    $env:Path += ";$pgBin"
 }
 
-# 2. Install Node.js silently
-Write-Host "[2/4] Checking Node.js..." -ForegroundColor Yellow
+# ---- STEP 2: Node.js ----
+Write-Host "[2/5] Checking Node.js..." -ForegroundColor Yellow
 if (-Not (Get-Command "node" -ErrorAction SilentlyContinue)) {
     $NodeInstaller = "$InstallDir\node-installer.msi"
     if (-Not (Test-Path $NodeInstaller)) {
-        Write-Host "      Downloading Node.js..."
+        Write-Host "      Downloading Node.js 18..."
         Invoke-WebRequest -Uri "https://nodejs.org/dist/v18.19.0/node-v18.19.0-x64.msi" -OutFile $NodeInstaller
     }
     Write-Host "      Installing Node.js silently..."
     Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$NodeInstaller`" /qn" -Wait
-    Write-Host "      Node.js Installed!" -ForegroundColor Green
+    $env:Path = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::Machine)
+    Write-Host "      Node.js installed!" -ForegroundColor Green
 } else {
-    Write-Host "      Node.js is already installed." -ForegroundColor Green
+    Write-Host "      Node.js already installed: $(node --version)" -ForegroundColor Green
 }
 
-# 3. Setup Database
-Write-Host "[3/4] Configuring FireFlow Database..." -ForegroundColor Yellow
-Start-Sleep -Seconds 5 # Wait for PG to fully start
+# ---- STEP 3: Database ----
+Write-Host "[3/5] Setting up database..." -ForegroundColor Yellow
+Start-Sleep -Seconds 5
 $env:PGPASSWORD = $DbPassword
-& "C:\Program Files\PostgreSQL\14\bin\psql.exe" -U postgres -p $DbPort -c "CREATE DATABASE fireflow_db;" 2>$null
-Write-Host "      Database 'fireflow_db' is ready." -ForegroundColor Green
+& $psql -U postgres -p $DbPort -c "CREATE DATABASE $DbName;" 2>$null
+Write-Host "      Database '$DbName' is ready." -ForegroundColor Green
 
-# 4. Install FireFlow App
-Write-Host "[4/4] Launching FireFlow App Installer..." -ForegroundColor Yellow
-$AppInstaller = ".\release\Fireflow Restaurant System Setup 1.0.0.exe"
-if (Test-Path $AppInstaller) {
-    Start-Process -FilePath $AppInstaller
-    Write-Host "      Please follow the Windows installer prompt for FireFlow." -ForegroundColor Green
-} else {
-    Write-Host "      Could not find $AppInstaller! Please ensure it is in the 'release/' folder next to this script." -ForegroundColor Red
+# ---- STEP 4: Install .exe ----
+Write-Host "[4/5] Installing FireFlow application..." -ForegroundColor Yellow
+$AppInstaller = Get-ChildItem -Path $ScriptDir -Filter "Fireflow Restaurant System Setup*.exe" | Select-Object -First 1
+
+if ($null -eq $AppInstaller) {
+    Write-Error "Could not find FireFlow installer .exe in $ScriptDir"
+    Pause
+    exit 1
 }
 
+Write-Host "      Found: $($AppInstaller.Name)"
+$proc = Start-Process -FilePath $AppInstaller.FullName -Wait -PassThru
+Write-Host "      FireFlow installed!" -ForegroundColor Green
+
+# ---- STEP 5: Write .env + migrate + seed ----
+Write-Host "[5/5] Configuring environment and database schema..." -ForegroundColor Yellow
+
+$PossiblePaths = @(
+    "$env:LOCALAPPDATA\Programs\fireflow-restaurant-system",
+    "$env:PROGRAMFILES\Fireflow Restaurant System",
+    "C:\FireFlow"
+)
+
+$FireFlowDir = $null
+foreach ($p in $PossiblePaths) {
+    if (Test-Path "$p\resources\app\package.json") {
+        $FireFlowDir = "$p\resources\app"
+        break
+    }
+    if (Test-Path "$p\package.json") {
+        $FireFlowDir = $p
+        break
+    }
+}
+
+if ($null -eq $FireFlowDir) {
+    Write-Host "Please enter the full path where FireFlow was installed (contains package.json):"
+    $FireFlowDir = Read-Host "Path"
+}
+
+Write-Host "      FireFlow directory: $FireFlowDir"
+
+$EnvContent = @"
+# FireFlow Environment - auto-generated by installer
+# Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm")
+
+DATABASE_URL="postgresql://postgres:$DbPassword@localhost:$DbPort/$DbName?schema=public"
+DATABASE_USER=postgres
+DATABASE_PASSWORD=$DbPassword
+DATABASE_HOST=localhost
+DATABASE_NAME=$DbName
+DATABASE_PORT=$DbPort
+
+NODE_ENV=production
+SERVER_PORT=3001
+SERVER_HOST=localhost
+
+LOG_LEVEL=info
+DEBUG=fireflow:*
+"@
+
+$EnvPath = "$FireFlowDir\.env"
+$EnvContent | Out-File -FilePath $EnvPath -Encoding utf8 -Force
+Write-Host "      .env written to $EnvPath" -ForegroundColor Green
+
+Push-Location $FireFlowDir
+
+Write-Host "      Running database migrations..."
+& npx prisma migrate deploy
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "      Migrations applied!" -ForegroundColor Green
+} else {
+    Write-Warning "      Migration returned non-zero. Check DB connection."
+}
+
+Write-Host "      Seeding initial data..."
+& npm run db:seed
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "      Seed complete!" -ForegroundColor Green
+} else {
+    Write-Warning "      Seed returned non-zero."
+}
+
+Pop-Location
+
+Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "✅ Pre-requisite Installation Complete!" -ForegroundColor Cyan
-Write-Host "After FireFlow finishes installing, it will launch automatically."
-Write-Host "It will ask for your SaaS License Key to activate the restaurant."
+Write-Host " Installation Complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host " DB Password : $DbPassword"
+Write-Host " DB Name     : $DbName"
+Write-Host " App Dir     : $FireFlowDir"
+Write-Host ""
+Write-Host " FireFlow will launch automatically." -ForegroundColor White
+Write-Host " On first launch, enter your License Key to activate." -ForegroundColor White
+Write-Host ""
 Pause
