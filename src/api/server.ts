@@ -1869,7 +1869,12 @@ app.get('/api/menu_items', async (req, res) => {
             include: { menu_categories: true },
             orderBy: { name: 'asc' }
         });
-        res.json(items);
+        // Surface prep_time_minutes from features JSON for the frontend
+        const mapped = items.map((item: any) => ({
+            ...item,
+            prep_time_minutes: item.features?.prep_time_minutes ?? null
+        }));
+        res.json(mapped);
     } catch (e: any) {
         console.error('GET /api/menu_items ERROR:', e);
         res.status(500).json({ error: e.message });
@@ -1878,9 +1883,16 @@ app.get('/api/menu_items', async (req, res) => {
 
 app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
-        const item = await prisma.menu_items.create({ data: req.body });
-        io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: item });
-        res.json(item);
+        // Strip fields that don't exist as Prisma columns
+        const { category_id, category, station_id, prep_time_minutes, id: _id, ...rest } = req.body;
+        const prismaData: any = { ...rest };
+        // Store prep_time_minutes inside features JSON (no schema change)
+        if (prep_time_minutes !== undefined) {
+            prismaData.features = { ...(prismaData.features || {}), prep_time_minutes: Number(prep_time_minutes) };
+        }
+        const item = await prisma.menu_items.create({ data: prismaData });
+        io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: { ...item, prep_time_minutes } });
+        res.json({ ...item, prep_time_minutes: (item as any).features?.prep_time_minutes });
     } catch (e: any) {
         console.error('POST /api/menu_items ERROR:', e);
         res.status(500).json({ error: e.message });
@@ -1889,15 +1901,20 @@ app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'
 
 app.patch('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
-        const { id, ...data } = req.body;
+        const { id, category_id, category, station_id, prep_time_minutes, ...data } = req.body;
         if (!id) return res.status(400).json({ error: 'Item ID is required' });
+
+        // Store prep_time_minutes inside features JSON (no schema change)
+        if (prep_time_minutes !== undefined) {
+            data.features = { ...(data.features || {}), prep_time_minutes: Number(prep_time_minutes) };
+        }
 
         const item = await prisma.menu_items.update({
             where: { id: String(id) },
             data: data
         });
-        io.emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: item });
-        res.json(item);
+        io.emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: { ...item, prep_time_minutes } });
+        res.json({ ...item, prep_time_minutes: (item as any).features?.prep_time_minutes });
     } catch (e: any) {
         console.error('PATCH /api/menu_items ERROR:', e);
         res.status(500).json({ error: e.message });
