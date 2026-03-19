@@ -38,6 +38,7 @@ import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { fbrService } from './services/FBRService.js';
 import { updateService } from './services/UpdateService';
+import { NetworkDiscoveryService } from './services/NetworkDiscoveryService';
 
 // ==========================================
 // 📁 LOCAL FILE UPLOAD — Menu Item Images
@@ -146,6 +147,54 @@ if (config.NODE_ENV === 'production') {
         }
     }, 30000);
 }
+
+// ==========================================
+// 🚀 AUTO-CONFIG & STARTUP SEQUENCE
+// ==========================================
+let isActivated = false;
+
+(async () => {
+    try {
+        // 1. Run NetworkDiscoveryService.getBestLocalIP() and cache it
+        const bestIP = NetworkDiscoveryService.getBestLocalIP();
+        console.log(`[NETWORK] 🌐 Auto-detected LAN IP: ${bestIP}`);
+        
+        // 2. If RESTAURANT_ID is set in env, verify the local DB record exists
+        const restaurantId = process.env.RESTAURANT_ID;
+        if (restaurantId) {
+            const restaurant = await prisma.restaurants.findUnique({
+                where: { id: restaurantId },
+                select: { id: true }
+            });
+
+            if (restaurant) {
+                // 3. If DB record exists, set global isActivated = true
+                isActivated = true;
+                console.log(`[SYSTEM] ✅ Machine activated for Restaurant ID: ${restaurantId}`);
+
+                // 4. If isActivated, start subscriptionChecker job
+                startSubscriptionChecker();
+                console.log(`[JOBS] 🕒 Subscription checker started`);
+            }
+        }
+
+        // 5. Run cleanupExpiredCodes() on startup and every hour
+        await cleanupExpiredCodes();
+        setInterval(async () => {
+            await cleanupExpiredCodes();
+        }, 3600000); 
+
+        // 6. Log the local access URL
+        const localUrl = NetworkDiscoveryService.getServerURL();
+        console.log(`\n-----------------------------------------`);
+        console.log(`🔥 Fireflow POS is LIVE locally!`);
+        console.log(`📍 Access URL: ${localUrl}`);
+        console.log(`-----------------------------------------\n`);
+
+    } catch (err: any) {
+        console.error('[STARTUP] Error during intelligent configuration:', err.message);
+    }
+})();
 
 // --- Socket.IO Connection Handler ---
 io.on('connection', (socket) => {
@@ -278,9 +327,14 @@ app.get('/api/connectivity', (_req, res) => {
  */
 app.get('/api/setup/status', async (_req, res) => {
     const restaurantId = process.env.RESTAURANT_ID;
+    const bestIP = NetworkDiscoveryService.getBestLocalIP();
 
     if (!restaurantId) {
-        return res.json({ activated: false });
+        return res.json({ 
+            activated: false,
+            local_url: NetworkDiscoveryService.getServerURL(),
+            network_info: { ip: bestIP }
+        });
     }
 
     // Verify the local restaurant record actually exists
@@ -292,7 +346,12 @@ app.get('/api/setup/status', async (_req, res) => {
 
         if (!restaurant) {
             // ID in env but no local record — partial setup, re-activate
-            return res.json({ activated: false, reason: 'incomplete_setup' });
+            return res.json({ 
+                activated: false, 
+                reason: 'incomplete_setup',
+                local_url: NetworkDiscoveryService.getServerURL(),
+                network_info: { ip: bestIP }
+            });
         }
 
         return res.json({
@@ -301,9 +360,15 @@ app.get('/api/setup/status', async (_req, res) => {
             restaurant_name: restaurant.name,
             subscription_status: restaurant.subscription_status,
             subscription_plan: restaurant.subscription_plan,
+            local_url: NetworkDiscoveryService.getServerURL(),
+            network_info: { ip: bestIP }
         });
     } catch (err) {
-        return res.json({ activated: false, reason: 'db_error' });
+        return res.json({ 
+            activated: false, 
+            reason: 'db_error',
+            network_info: { ip: bestIP }
+        });
     }
 });
 
@@ -397,6 +462,45 @@ app.post('/api/setup/activate', async (req, res) => {
     } catch (err: any) {
         console.error('[SETUP] Activation error:', err.message);
         return res.status(500).json({ error: 'Activation failed: ' + err.message });
+    }
+});
+
+/**
+ * GET /api/setup/wizard-state
+ * Returns the current setup wizard state based on existing data.
+ */
+app.get('/api/setup/wizard-state', authMiddleware, async (req, res) => {
+    const restaurantId = req.restaurantId;
+
+    try {
+        const staffCount = await prisma.staff.count({ where: { restaurant_id: restaurantId } });
+        const menuCount = await prisma.menu_items.count({ where: { restaurant_id: restaurantId } });
+        const tableCount = await prisma.tables.count({ where: { restaurant_id: restaurantId } });
+
+        const featuresRecord = await prisma.restaurant_features.findUnique({
+            where: { restaurant_id: restaurantId! }
+        });
+
+        const completedSteps = [];
+        if (staffCount > 0) completedSteps.push('manager');
+        if (menuCount > 0) completedSteps.push('menu');
+        if (tableCount > 0) completedSteps.push('tables');
+
+        let step: 'license' | 'manager' | 'menu' | 'tables' | 'complete' = 'license';
+        if (staffCount === 0) step = 'manager';
+        else if (menuCount === 0) step = 'menu';
+        else if (tableCount === 0) step = 'tables';
+        else step = 'complete';
+
+        const setup_wizard_completed = (featuresRecord?.features as any)?.setup_wizard_completed || (step === 'complete');
+
+        res.json({
+            step,
+            completed_steps: completedSteps,
+            setup_wizard_completed
+        });
+    } catch (err: any) {
+        res.status(500).json({ error: 'Failed to fetch wizard state' });
     }
 });
 
@@ -3019,6 +3123,128 @@ app.post('/api/pairing/generate', pairingGenerateLimiter, async (req, res) => {
         console.error('[ERROR] /api/pairing/generate:', error.message);
         res.status(500).json({ error: 'Failed to generate pairing code' });
     }
+});
+
+/**
+ * GET /pair
+ * Public landing page for QR pairing
+ */
+app.get('/pair', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }), (req, res) => {
+    const { token, restaurant } = req.query;
+
+    if (!token || !restaurant) {
+        return res.send(`
+            <div style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1 style="color: #e11d48;">Invalid Link / غلط لنک</h1>
+                <p>Please scan the QR code from the server dashboard.</p>
+                <p>براہ کرم سرور ڈیش بورڈ سے QR کوڈ اسکین کریں۔</p>
+            </div>
+        `);
+    }
+
+    // Inline simplified device fingerprint logic
+    const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Fireflow Pairing | فائر فلو پیئرنگ</title>
+            <style>
+                body { font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f9fafb; color: #111827; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                .card { background: white; padding: 2rem; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 90%; }
+                .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #e11d48; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+                p { color: #6b7280; margin-bottom: 1.5rem; }
+                .error { color: #e11d48; display: none; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <div id="loading">
+                    <div class="spinner"></div>
+                    <h1>Connecting to Fireflow...</h1>
+                    <h1>فائر فلو سے جڑ رہا ہے...</h1>
+                </div>
+                <div id="error" class="error">
+                    <h1 id="err-en"></h1>
+                    <h1 id="err-ur"></h1>
+                    <p>Please ask your manager to generate a new code.</p>
+                    <p>براہ کرم اپنے مینیجر سے نیا کوڈ مانگیں۔</p>
+                </div>
+            </div>
+
+            <script>
+                async function pair() {
+                    try {
+                        // 1. Generate Fingerprint (djb2)
+                        const components = [
+                            navigator.userAgent,
+                            navigator.language,
+                            \`\${screen.width}x\${screen.height}\`,
+                            new Date().getTimezoneOffset().toString(),
+                            navigator.hardwareConcurrency?.toString() || '4',
+                            navigator.platform || 'unknown'
+                        ].join('|');
+
+                        let hash = 5381;
+                        for (let i = 0; i < components.length; i++) {
+                            hash = (hash * 33) ^ components.charCodeAt(i);
+                        }
+                        const fingerprint = (hash >>> 0).toString(16);
+
+                        // 2. Call verify endpoint
+                        const response = await fetch('/api/pairing/verify', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                restaurantId: '${restaurant}',
+                                code: '${token}',
+                                deviceFingerprint: fingerprint,
+                                deviceName: navigator.userAgent.split(') ')[0].split(' (')[1] || 'Mobile Device',
+                                userAgent: navigator.userAgent,
+                                platform: navigator.platform
+                            })
+                        });
+
+                        const data = await response.json();
+
+                        if (response.ok) {
+                            // 3. Store tokens and redirect
+                            localStorage.setItem('paired_token', data.authToken);
+                            localStorage.setItem('restaurant_id', '${restaurant}');
+                            window.location.href = '/?paired=true';
+                        } else {
+                            showError(data.error);
+                        }
+                    } catch (err) {
+                        showError('SERVER_OFFLINE');
+                    }
+                }
+
+                function showError(code) {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('error').style.display = 'block';
+                    
+                    const messages = {
+                        'CODE_EXPIRED': { en: 'Pairing code expired', ur: 'پیئرنگ کوڈ ختم ہو گیا' },
+                        'INVALID_CODE': { en: 'Invalid pairing code', ur: 'غلط پیئرنگ کوڈ' },
+                        'TOO_MANY_ATTEMPTS': { en: 'Too many attempts', ur: 'بہت زیادہ کوششیں' },
+                        'SERVER_OFFLINE': { en: 'System unreachable', ur: 'سسٹم سے رابطہ نہیں ہو رہا' }
+                    };
+
+                    const msg = messages[code] || { en: 'Pairing failed', ur: 'پیئرنگ ناکام ہو گئی' };
+                    document.getElementById('err-en').innerText = msg.en;
+                    document.getElementById('err-ur').innerText = msg.ur;
+                }
+
+                pair();
+            </script>
+        </body>
+        </html>
+    `;
+    res.send(html);
 });
 
 /**

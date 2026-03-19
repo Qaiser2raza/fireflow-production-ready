@@ -3,6 +3,7 @@ import { QrCode, Copy, RefreshCw, CheckCircle2, Clock, Smartphone, AlertCircle }
 import { useAppContext } from '../../client/App';
 import { useRestaurant } from '../../client/RestaurantContext';
 import { QRCodeSVG } from 'qrcode.react';
+import { getDeviceFingerprint } from '../../shared/lib/deviceFingerprint';
 
 interface PairingCode {
     id: string;
@@ -10,48 +11,17 @@ interface PairingCode {
     expires_at: string;
     is_used: boolean;
     is_expired: boolean;
+    qr_payload: string;
+    qr_expires_in: number;
 }
 
-interface DeviceFingerprint {
-    userAgent: string;
-    screenWidth: number;
-    screenHeight: number;
-    timezone: string;
-    hash: string;
+interface PairedDevice {
+    id: string;
+    device_name: string;
+    last_seen: string;
+    status: 'active' | 'inactive';
 }
 
-/**
- * Generate device fingerprint for pairing verification
- * 
- * This prevents code reuse across different devices.
- * Hash = SHA256(userAgent + screen dimensions + timezone)
- */
-function generateDeviceFingerprint(): DeviceFingerprint {
-    const userAgent = navigator.userAgent;
-    const screenWidth = window.screen.width;
-    const screenHeight = window.screen.height;
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-    // For client-side, we'll use a simple hash for now
-    // In production: use crypto.subtle.digest for SHA256
-    const fingerprintString = `${userAgent}|${screenWidth}|${screenHeight}|${timezone}`;
-    
-    // Simple hash function (not cryptographically secure, but good enough for device identification)
-    let hash = 0;
-    for (let i = 0; i < fingerprintString.length; i++) {
-        const char = fingerprintString.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32-bit integer
-    }
-
-    return {
-        userAgent,
-        screenWidth,
-        screenHeight,
-        timezone,
-        hash: Math.abs(hash).toString(16).padStart(8, '0')
-    };
-}
 
 export const QRCodePairing: React.FC = () => {
     const { currentUser } = useAppContext();
@@ -60,13 +30,28 @@ export const QRCodePairing: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [copied, setCopied] = useState(false);
     const [timeRemaining, setTimeRemaining] = useState<number>(0);
-    const [deviceFingerprint, setDeviceFingerprint] = useState<DeviceFingerprint | null>(null);
+    const [pairedDevices, setPairedDevices] = useState<PairedDevice[]>([]);
     const [error, setError] = useState<string | null>(null);
 
-    // Generate fingerprint on mount
+    // Fetch paired devices on mount and every 10s
     useEffect(() => {
-        setDeviceFingerprint(generateDeviceFingerprint());
-    }, []);
+        fetchDevices();
+        const interval = setInterval(fetchDevices, 10000);
+        return () => clearInterval(interval);
+    }, [currentRestaurant?.id]);
+
+    const fetchDevices = async () => {
+        if (!currentRestaurant?.id) return;
+        try {
+            const res = await fetch(`/api/pairing/devices?restaurantId=${currentRestaurant.id}`);
+            if (res.ok) {
+                const data = await res.json();
+                setPairedDevices(data.devices || []);
+            }
+        } catch (err) {
+            console.error('Failed to fetch devices:', err);
+        }
+    };
 
     // Timer for code expiry
     useEffect(() => {
@@ -79,8 +64,8 @@ export const QRCodePairing: React.FC = () => {
                 setTimeRemaining(remaining);
 
                 if (remaining === 0) {
-                    setPairingCode(null);
-                    setError('Pairing code expired. Generate a new one.');
+                    // Feature 1: Auto-regenerate on expiry
+                    generatePairingCode();
                 }
             }, 1000);
 
@@ -113,7 +98,7 @@ export const QRCodePairing: React.FC = () => {
 
             const data = await response.json();
             setPairingCode(data);
-            setTimeRemaining(15 * 60); // 15 minutes in seconds
+            setTimeRemaining(data.qr_expires_in || 900);
         } catch (error: any) {
             console.error('Failed to generate pairing code:', error);
             setError(error.message || 'Failed to generate pairing code');
@@ -136,15 +121,8 @@ export const QRCodePairing: React.FC = () => {
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const qrData = pairingCode && deviceFingerprint ? JSON.stringify({
-        code: pairingCode.pairing_code,
-        code_id: pairingCode.id,
-        restaurantId: currentRestaurant?.id,
-        restaurantName: currentRestaurant?.name,
-        deviceFingerprint: deviceFingerprint.hash,
-        type: 'device_pairing',
-        version: '1.0'
-    }) : '';
+    const qrData = pairingCode?.qr_payload || '';
+    const fingerprint = getDeviceFingerprint();
 
     return (
         <div className="h-full w-full bg-slate-950 p-6 overflow-y-auto">
@@ -293,8 +271,38 @@ export const QRCodePairing: React.FC = () => {
                                 </div>
                                 <div>
                                     <h3 className="text-white font-semibold mb-1">Verify Connection</h3>
-                                    <p className="text-slate-400 text-sm">Once paired, the device will appear in your Device Management dashboard with an "Online" status.</p>
+                                    <p className="text-slate-400 text-sm">Once paired, the device will appear in the "Registered Devices" list below.</p>
                                 </div>
+                            </div>
+                        </div>
+
+                        {/* Feature 1: Paired Device List */}
+                        <div className="mt-10">
+                            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">
+                                Registered Devices / رجسٹرڈ ڈیوائسز
+                            </h3>
+                            <div className="space-y-3">
+                                {pairedDevices.length === 0 ? (
+                                    <div className="text-slate-600 italic text-sm py-4 border-2 border-dashed border-slate-800 rounded-lg text-center">
+                                        No devices paired yet.
+                                    </div>
+                                ) : (
+                                    pairedDevices.map(device => (
+                                        <div key={device.id} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+                                            <div className="flex items-center gap-3">
+                                                <Smartphone className="w-4 h-4 text-cyan-400" />
+                                                <div>
+                                                    <div className="text-white text-sm font-medium">{device.device_name}</div>
+                                                    <div className="text-slate-500 text-xs">Last seen: {new Date(device.last_seen).toLocaleTimeString()}</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <div className={`w-2 h-2 rounded-full ${device.status === 'active' ? 'bg-green-500 animate-pulse' : 'bg-slate-600'}`} />
+                                                <span className="text-xs text-slate-400 capitalize">{device.status}</span>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
                             </div>
                         </div>
 
@@ -308,9 +316,9 @@ export const QRCodePairing: React.FC = () => {
                                         This device is identified by a unique fingerprint (based on screen size, browser, timezone).
                                         This prevents pairing codes from being reused across different devices.
                                     </p>
-                                    {deviceFingerprint && (
+                                    {fingerprint && (
                                         <p className="text-blue-200/60 text-xs font-mono">
-                                            Fingerprint: {deviceFingerprint.hash}
+                                            This Master Terminal ID: {fingerprint}
                                         </p>
                                     )}
                                 </div>

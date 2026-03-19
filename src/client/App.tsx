@@ -40,6 +40,8 @@ import { RestaurantProvider } from './RestaurantContext';
 // Services
 import { tableService } from '../shared/lib/tableService';
 import { socketIO } from '../shared/lib/socketClient';
+import { getDeviceFingerprint } from '../shared/lib/deviceFingerprint';
+import { getBilingualMessage } from '../shared/lib/userMessages';
 
 // --- 1. CONTEXT DEFINITION ---
 import { AppContext, useAppContext } from './contexts/AppContext';
@@ -68,7 +70,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [orderToEdit, setOrderToEdit] = useState<Order | null>(null);
   const [loading, setLoading] = useState(false);
   const [isRestaurantLoading, setIsRestaurantLoading] = useState(true);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('connected');
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'disconnected'>('connected');
   const [lastSyncAt, setLastSyncAt] = useState<Date>(new Date());
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [operationsConfig, setOperationsConfig] = useState<any>(null);
@@ -212,31 +214,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const getDeviceFingerprint = (): string => {
-    // Check if we already generated one for this browser/machine
-    const stored = localStorage.getItem('fireflow_device_fingerprint');
-    if (stored) return stored;
-
-    // Generate a stable fingerprint from browser characteristics
-    const raw = [
-        navigator.userAgent,
-        navigator.language,
-        screen.width + 'x' + screen.height,
-        new Date().getTimezoneOffset().toString(),
-        navigator.hardwareConcurrency?.toString() || '4'
-    ].join('|');
-
-    // Simple hash (not crypto-grade, but stable per machine)
-    let hash = 0;
-    for (let i = 0; i < raw.length; i++) {
-        const char = raw.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash;
-    }
-    const fingerprint = Math.abs(hash).toString(36) + '_' + Date.now().toString(36);
-    localStorage.setItem('fireflow_device_fingerprint', fingerprint);
-    return fingerprint;
-  };
 
   const login = async (pin: string) => {
     try {
@@ -556,10 +533,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearInterval(cleanupInterval);
   }, [currentUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const addNotification = (type: 'success' | 'error' | 'info' | 'warning', message: string) => {
+  const addNotification = (type: 'success' | 'error' | 'info' | 'warning', message: string, messageCode?: string) => {
     const id = Math.random().toString(36).substring(7);
-    setNotifications(prev => [...prev, { id, type, message }]);
-    setTimeout(() => removeNotification(id), 2000);
+    const finalMessage = messageCode ? getBilingualMessage(messageCode) : message;
+    setNotifications(prev => [...prev, { id, type, message: finalMessage }]);
+    setTimeout(() => removeNotification(id), type === 'error' ? 5000 : 3000);
   };
 
   const removeNotification = (id: string) => {
@@ -1103,6 +1081,7 @@ const AppContent = () => {
         {!isMobile && activeView !== 'POS' && (
           <RoleContextBar
             currentUser={currentUser}
+            connectionStatus={connectionStatus}
             pendingBills={orders.filter((o: Order) => o.status === 'READY').length}
             activeTables={tables.filter((t: Table) => t.status === TableStatus.OCCUPIED).length}
             pendingOrders={orders.filter(o => {
@@ -1237,9 +1216,13 @@ const AppContent = () => {
       )}
 
       {/* Global Notifications UI */}
-      <div className="fixed bottom-4 right-4 z-[100] space-y-2">
+      <div className="fixed bottom-4 right-4 z-[100] space-y-2 max-w-sm">
         {notifications.map(n => (
-          <div key={n.id} className={`p-4 rounded-lg shadow-2xl border ${n.type === 'error' ? 'bg-red-900/80 border-red-500' : 'bg-slate-900/80 border-gold-500'} text-white text-xs font-bold uppercase tracking-widest animate-in slide-in-from-right`}>
+          <div key={n.id} className={`p-4 rounded-xl shadow-2xl border backdrop-blur-md ${
+            n.type === 'error' ? 'bg-red-900/90 border-red-500/50 text-white' : 
+            n.type === 'warning' ? 'bg-amber-900/90 border-amber-500/50 text-white' :
+            'bg-slate-900/90 border-gold-500/50 text-white'
+          } text-xs font-medium whitespace-pre-line animate-in slide-in-from-right duration-300`}>
             {n.message}
           </div>
         ))}

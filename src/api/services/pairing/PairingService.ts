@@ -18,6 +18,7 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
+import { NetworkDiscoveryService } from '../NetworkDiscoveryService';
 
 const prisma = new PrismaClient();
 const SALT_ROUNDS = 12;
@@ -34,7 +35,13 @@ const MAX_VERIFY_ATTEMPTS = 5; // Lock after 5 failed attempts
 export async function generatePairingCode(
   restaurantId: string,
   staffId: string
-): Promise<{ code: string; expiresAt: Date; id: string }> {
+): Promise<{ 
+  code: string; 
+  expiresAt: Date; 
+  id: string;
+  qr_payload: string;
+  qr_expires_in: number;
+}> {
   // Generate 6-char alphanumeric code (using base36 for human readability)
   const plainCode = crypto.randomBytes(4).toString('hex').substring(0, 6).toUpperCase();
   const hashedCode = await bcrypt.hash(plainCode, SALT_ROUNDS);
@@ -56,6 +63,14 @@ export async function generatePairingCode(
     });
   });
 
+  // Feature 2A: Generate QR Payload
+  // Format: http://{LOCAL_IP}:3001/pair?token={plaintext_code}&restaurant={restaurant_id}&t={timestamp}
+  const bestIP = NetworkDiscoveryService.getBestLocalIP();
+  const port = process.env.PORT || 3001;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const qr_payload = `http://${bestIP}:${port}/pair?token=${plainCode}&restaurant=${restaurantId}&t=${timestamp}`;
+  const qr_expires_in = CODE_EXPIRY_MINUTES * 60;
+
   // Audit: Log code generation
   await prisma.audit_logs.create({
     data: {
@@ -70,7 +85,9 @@ export async function generatePairingCode(
   return {
     code: plainCode,
     expiresAt,
-    id: pairingCode.id
+    id: pairingCode.id,
+    qr_payload,
+    qr_expires_in
   };
 }
 

@@ -52,8 +52,8 @@ export const DashboardView: React.FC = () => {
       // Detailed reports definitely need rights
       if (hasAdminRights) {
         const todayStr = new Date().toISOString().split('T')[0];
-        const resMix = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/product-mix?start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
-        const resVel = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/velocity?start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
+        const resMix = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/product-mix?format=json&start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
+        const resVel = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/velocity?format=json&start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
 
         if (resMix.ok) {
           const pmixData = await resMix.json();
