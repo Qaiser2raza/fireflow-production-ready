@@ -2,8 +2,10 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
+import fs, { existsSync, mkdirSync } from 'fs';
 import http from 'http';
+import os from 'os';
+import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
@@ -36,6 +38,41 @@ import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { fbrService } from './services/FBRService.js';
 import { updateService } from './services/UpdateService';
+
+// ==========================================
+// 📁 LOCAL FILE UPLOAD — Menu Item Images
+// ==========================================
+
+// Ensure uploads directory exists
+const uploadsDir = path.join(process.cwd(), 'uploads', 'menu');
+if (!existsSync(uploadsDir)) {
+    mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Multer storage config — saves to uploads/menu/
+const menuImageStorage = multer.diskStorage({
+    destination: (_req, _file, cb) => {
+        cb(null, uploadsDir);
+    },
+    filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        const uniqueName = `menu_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+        cb(null, uniqueName);
+    }
+});
+
+const menuImageUpload = multer({
+    storage: menuImageStorage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+    fileFilter: (_req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        if (allowed.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only JPEG, PNG, WebP, and GIF images are allowed'));
+        }
+    }
+});
 
 const accounting = new AccountingService();
 import { superAdminService } from './services/SuperAdminService';
@@ -165,6 +202,11 @@ if (distPath) {
     console.warn('[SERVER] ⚠️ frontend "dist" folder not found in possible locations.');
 }
 
+// Serve uploaded menu images statically
+const uploadsPublicDir = path.join(process.cwd(), 'uploads');
+app.use('/uploads', express.static(uploadsPublicDir));
+console.log(`[SERVER] 📁 Serving uploads from: ${uploadsPublicDir}`);
+
 // Health check for Electron startup with monitoring
 app.get('/api/health', async (_req, res) => {
     try {
@@ -196,6 +238,32 @@ app.get('/api/debug/paths', (req, res) => {
             NODE_ENV: process.env.NODE_ENV,
             RESTAURANT_ID: !!process.env.RESTAURANT_ID
         }
+    });
+});
+
+app.get('/api/connectivity', (_req, res) => {
+    const hostname = os.hostname();
+    const networkInterfaces = os.networkInterfaces();
+    const addresses: string[] = [];
+    
+    for (const interfaceName in networkInterfaces) {
+        const interfaces = networkInterfaces[interfaceName];
+        if (interfaces) {
+            for (const iface of interfaces) {
+                // Skip IPv6 and internal (localhost) addresses
+                if (iface.family === 'IPv4' && !iface.internal) {
+                    addresses.push(iface.address);
+                }
+            }
+        }
+    }
+
+    res.json({
+        success: true,
+        hostname: hostname,
+        localUrl: `http://${hostname}.local:3000`,
+        ips: addresses.map(ip => `http://${ip}:3000`),
+        port: process.env.PORT || 3001
     });
 });
 
@@ -486,6 +554,53 @@ app.post('/api/auth/login', async (req, res) => {
             where: { id: user.id },
             data: { last_login: new Date() }
         });
+
+        // Auto-register device on login (upsert — safe to call every login)
+        const { device_fingerprint, device_name, user_agent } = req.body;
+        if (device_fingerprint) {
+            try {
+                const existingDevice = await prisma.registered_devices.findFirst({
+                    where: {
+                        restaurant_id: user.restaurant_id,
+                        device_fingerprint: device_fingerprint
+                    }
+                });
+
+                if (existingDevice) {
+                    // Update last seen
+                    await prisma.registered_devices.update({
+                        where: { id: existingDevice.id },
+                        data: {
+                            last_sync_at: new Date(),
+                            is_active: true,
+                            device_name: device_name || existingDevice.device_name,
+                            updated_at: new Date()
+                        }
+                    });
+                } else {
+                    // Register new device
+                    await prisma.registered_devices.create({
+                        data: {
+                            restaurant_id: user.restaurant_id,
+                            staff_id: user.id,
+                            device_name: device_name || 'Unknown Device',
+                            device_fingerprint: device_fingerprint,
+                            user_agent: user_agent || '',
+                            platform: user_agent?.includes('Win') ? 'win32' :
+                                      user_agent?.includes('Mac') ? 'darwin' :
+                                      user_agent?.includes('Linux') ? 'linux' : 'unknown',
+                            auth_token_hash: '',
+                            is_active: true,
+                            updated_at: new Date()
+                        }
+                    });
+                    console.log(`[DEVICE] New device registered for restaurant ${user.restaurant_id}`);
+                }
+            } catch (deviceErr: any) {
+                // Don't fail login if device registration fails
+                console.warn('[DEVICE] Device registration failed (non-fatal):', deviceErr.message);
+            }
+        }
 
         // Generate JWT tokens
         const accessToken = jwtService.generateAccessToken(
@@ -1435,7 +1550,7 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                     amountReceived: receivedAmount,
                     orderIds: [order.id],
                     processedBy: staffId || order.last_action_by || 'SYSTEM',
-                    settlementId: `POS-${order.id}`
+                    settlementId: order.id
                 }, tx);
             } else {
                 // For normal sales (Dine-In/Takeaway/Direct Delivery Settle)
@@ -1597,6 +1712,7 @@ app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {
 
     try {
         await prisma.$transaction([
+            // Order & Operational Data
             prisma.order_items.deleteMany({ where: { orders: { restaurant_id } } }),
             prisma.transactions.deleteMany({ where: { restaurant_id } }),
             prisma.dine_in_orders.deleteMany({ where: { orders: { restaurant_id } } }),
@@ -1604,11 +1720,13 @@ app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {
             prisma.delivery_orders.deleteMany({ where: { orders: { restaurant_id } } }),
             prisma.reservation_orders.deleteMany({ where: { orders: { restaurant_id } } }),
             prisma.order_intelligence.deleteMany({ where: { orders: { restaurant_id } } }),
-            prisma.parked_orders.deleteMany({}), // If parked_orders has no restaurant_id
+            prisma.parked_orders.deleteMany({ where: { restaurant_id } }),
+            prisma.orders.deleteMany({ where: { restaurant_id } }),
             
             // Financial & Ledger Reset
-            prisma.ledger_entries.deleteMany({ where: { restaurant_id } }),
+            prisma.journal_entry_lines.deleteMany({ where: { journal_entries: { restaurant_id } } }),
             prisma.journal_entries.deleteMany({ where: { restaurant_id } }),
+            prisma.ledger_entries.deleteMany({ where: { restaurant_id } }),
             prisma.rider_shifts.deleteMany({ where: { restaurant_id } }),
             prisma.cash_sessions.deleteMany({ where: { restaurant_id } }),
             prisma.rider_settlements.deleteMany({ where: { restaurant_id } }),
@@ -1617,8 +1735,27 @@ app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {
             prisma.expenses.deleteMany({ where: { restaurant_id } }),
             prisma.reservations.deleteMany({ where: { restaurant_id } }),
 
-            prisma.orders.deleteMany({ where: { restaurant_id } }),
-            // Reset tables to AVAILABLE (Green) and clear linked orders
+            // Inventory & Vendors
+            prisma.purchase_orders.deleteMany({ where: { restaurant_id } }),
+            prisma.inventory_items.deleteMany({ where: { restaurant_id } }),
+            prisma.vendors.deleteMany({ where: { restaurant_id } }),
+            prisma.suppliers.deleteMany({ where: { restaurant_id } }),
+
+            // Customer Data
+            prisma.customer_addresses.deleteMany({ where: { customers: { restaurant_id } } }),
+            prisma.customers.deleteMany({ where: { restaurant_id } }),
+
+            // Logs & Events
+            prisma.audit_logs.deleteMany({ where: { restaurant_id } }),
+            prisma.system_logs.deleteMany({ where: { restaurant_id } }),
+            prisma.fbr_sync_logs.deleteMany({ where: { restaurant_id } }),
+            prisma.security_events.deleteMany({ where: { restaurant_id } }),
+
+            // Connectivity
+            prisma.registered_devices.deleteMany({ where: { restaurant_id } }),
+            prisma.pairing_codes.deleteMany({ where: { restaurant_id } }),
+            
+            // Reset tables to AVAILABLE
             prisma.tables.updateMany({
                 where: { restaurant_id },
                 data: {
@@ -1860,6 +1997,21 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
 // ==========================================
 // 📜 4. MENU & CATEGORIES
 // ==========================================
+
+// Upload menu item image — saves to disk, returns local URL
+app.post('/api/upload/menu-image',
+    authMiddleware,
+    menuImageUpload.single('image'),
+    (req: any, res) => {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+        // Return a URL that the frontend can use directly
+        const fileUrl = `/uploads/menu/${req.file.filename}`;
+        console.log(`[UPLOAD] Menu image saved: ${fileUrl}`);
+        res.json({ success: true, url: fileUrl });
+    }
+);
 
 app.get('/api/menu_items', async (req, res) => {
     const { restaurant_id } = req.query;
@@ -2351,6 +2503,59 @@ app.delete('/api/stations', async (req, res) => {
 // ==========================================
 // 📦 6. SYSTEM UTILITIES
 // ==========================================
+
+// ==========================================
+// 📱 DEVICE MANAGEMENT ROUTES
+// ==========================================
+
+// GET /api/devices — List all registered devices for the restaurant
+app.get('/api/devices', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const devices = await prisma.registered_devices.findMany({
+            where: { restaurant_id: req.restaurantId },
+            select: {
+                id: true,
+                device_name: true,
+                platform: true,
+                is_active: true,
+                created_at: true,
+                last_sync_at: true,
+                updated_at: true,
+                staff_id: true
+            },
+            orderBy: { last_sync_at: 'desc' }
+        });
+        res.json(devices);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// DELETE /api/devices/:id — Revoke a device
+app.delete('/api/devices/:id', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const device = await prisma.registered_devices.findUnique({ where: { id } });
+
+        if (!device || device.restaurant_id !== req.restaurantId) {
+            return res.status(404).json({ error: 'Device not found' });
+        }
+
+        await prisma.registered_devices.update({
+            where: { id },
+            data: { is_active: false, updated_at: new Date() }
+        });
+
+        io.to(`restaurant:${req.restaurantId}`).emit('device_change', {
+            type: 'device_revoked',
+            device_id: id
+        });
+
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 app.post('/api/system/seed-restaurant', async (req, res) => {
     const { restaurantId } = req.body;

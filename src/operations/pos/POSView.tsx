@@ -18,7 +18,8 @@ import {
   Clock,
   CheckCircle2,
   CheckSquare,
-  History
+  History,
+  Eye
 } from 'lucide-react';
 import { useDebounce } from '../../hooks/useDebounce';
 import { useThermalPrinter } from '../../hooks/useThermalPrinter';
@@ -118,6 +119,9 @@ export const POSView: React.FC = () => {
           if (foundry) {
             setOrderToEdit(foundry);
             addNotification('success', `Recalled Order: ${foundry.order_number || scannedNumber}`);
+            if (foundry.payment_status !== 'PAID' && foundry.status !== 'CLOSED') {
+                setTimeout(() => setShowPaymentModal(true), 300); // UI needs time to populate order
+            }
           }
         }
         buffer = '';
@@ -133,6 +137,62 @@ export const POSView: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [orders, setOrderToEdit, addNotification]);
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleShortcuts = (e: KeyboardEvent) => {
+      // Don't trigger single-key shortcuts if typing in an input
+      const activeElement = document.activeElement;
+      const isInputFocused = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
+
+      // "/" -> Focus Search
+      if (e.key === '/' && !isInputFocused) {
+        e.preventDefault();
+        document.getElementById('pos-search-input')?.focus();
+      }
+
+      // "F9" or "Ctrl+Enter" -> Open Checkout/Payment
+      if (e.key === 'F9' || (e.ctrlKey && e.key === 'Enter')) {
+        e.preventDefault();
+        if (currentOrderItems.length > 0) {
+          setShowPaymentModal(true);
+        } else {
+          addNotification('info', 'Cart is empty');
+        }
+      }
+
+      // "F4" or "Alt+P" -> Quick Print
+      if (e.key === 'F4' || (e.altKey && e.key.toLowerCase() === 'p')) {
+        e.preventDefault();
+        // Fire print logic only if there is an active order
+        if (activeOrderId || currentOrderItems.length > 0) {
+           handlePrint();
+        } else {
+           addNotification('info', 'Nothing to print');
+        }
+      }
+
+      // "Alt+N" -> New Order (Reset Pad)
+      if (e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        resetPad();
+        addNotification('info', 'New Order Started');
+      }
+
+      // "Escape" -> Close Modals or Clear Pad
+      if (e.key === 'Escape') {
+        // Just clear pad if no dialogs are likely open
+        if (!isInputFocused) {
+            resetPad();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleShortcuts);
+    return () => window.removeEventListener('keydown', handleShortcuts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentOrderItems, activeOrderId]);
+
 
   // Load Order for Editing
   useEffect(() => {
@@ -451,11 +511,13 @@ export const POSView: React.FC = () => {
     if (orderType === 'DINE_IN' && !selectedTableId) {
       addNotification('info', 'Please select a table to fire order.');
       setShowDetailsModal(true);
+      setIsSubmitting(false);
       return;
     }
     if ((orderType === 'DELIVERY' || orderType === 'TAKEAWAY') && !customerPhone) {
       addNotification('info', 'Customer Phone helps track orders.');
       setShowDetailsModal(true);
+      setIsSubmitting(false);
       return;
     }
 
@@ -547,34 +609,114 @@ export const POSView: React.FC = () => {
   };
 
   const handlePrint = async () => {
-    const el = document.getElementById('receipt-print-area');
-    if (el) {
-        // Clone the element and force it visible so its HTML is fully renderable
-        const clone = el.cloneNode(true) as HTMLElement;
-        clone.style.display = 'block';
-        clone.style.visibility = 'visible';
-        clone.style.position = 'absolute';
-        clone.style.top = '-9999px';
-        document.body.appendChild(clone);
+    // ⚠️ DO NOT clone DOM or inject app stylesheets — that pulls in dark-mode Tailwind CSS which makes the thermal output solid black.
+    // Instead, generate a fully isolated receipt HTML from live state data.
+    const invoiceSettings = operationsConfig || JSON.parse(localStorage.getItem(`fireflow_operations_config_${currentUser?.restaurant_id}`) || '{}');
+    const isPaid = activeOrderData?.payment_status === 'PAID' || activeOrderData?.status === 'CLOSED';
+    const orderItems = currentOrderItems.length > 0 ? currentOrderItems : (activeOrderData?.order_items || []);
+    const orderNum = activeOrderData?.order_number || activeOrderId?.slice(-8).toUpperCase() || 'N/A';
+    const tableObj = tables.find(t => t.id === selectedTableId) || activeOrderData?.table;
 
-        // Collect print-specific styles from the page
-        const printStyles = Array.from(document.querySelectorAll('style'))
-            .map(s => s.innerHTML)
-            .join('\n');
-        
-        const content = `<html><head><style>
-            body { margin: 0; padding: 0; background: white; }
-            ${printStyles}
-            /* Force visible for thermal capture */
-            #receipt-print-area { display: block !important; visibility: visible !important; }
-        </style></head><body>${clone.innerHTML}</body></html>`;
-        
-        document.body.removeChild(clone);
-        await printReceipt(content);
-    } else {
-        window.print();
+    const fmtCur = (n: number) => `Rs. ${Math.round(n).toLocaleString()}`;
+    const fmtDate = (d: any) => new Date(d || Date.now()).toLocaleString('en-PK', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: true
+    });
+
+    const itemRows = orderItems.map(item => `
+      <tr>
+        <td style="width:8%;padding:2px 0;vertical-align:top;">${item.quantity}</td>
+        <td style="width:62%;padding:2px 0;vertical-align:top;text-transform:uppercase;">${item.item_name || item.menu_item?.name || 'Item'}</td>
+        <td style="width:30%;padding:2px 0;vertical-align:top;text-align:right;">${fmtCur((item.unit_price || 0) * item.quantity)}</td>
+      </tr>
+    `).join('');
+
+    const content = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Receipt</title>
+  <style>
+    /* ===== COMPLETELY ISOLATED STYLES — NO APP CSS ===== */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: #ffffff !important;
+      color: #000000 !important;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 11px;
+      line-height: 1.4;
     }
+    .receipt {
+      width: 72mm;
+      padding: 2mm 3mm;
+      background: #ffffff;
+      color: #000000;
+    }
+    h1 { font-size: 14px; font-weight: 900; text-align: center; text-transform: uppercase; margin-bottom: 2px; }
+    .sub { font-size: 9px; text-align: center; margin-bottom: 4px; }
+    .dashed { border-top: 1px dashed #000; margin: 5px 0; }
+    .badge { font-size: 10px; font-weight: 900; text-align: center; border: 2px solid #000; padding: 2px 10px; display: inline-block; text-transform: uppercase; letter-spacing: 2px; }
+    .badge-wrap { text-align: center; margin: 4px 0; }
+    .meta { font-size: 9px; margin-bottom: 6px; }
+    .meta-row { display: flex; justify-content: space-between; margin: 1px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    thead th { font-size: 9px; text-transform: uppercase; border-bottom: 1px solid #000; padding-bottom: 2px; text-align: left; }
+    thead th:last-child { text-align: right; }
+    .totals { font-size: 10px; margin-top: 4px; }
+    .total-row { display: flex; justify-content: space-between; margin: 1px 0; }
+    .grand { font-size: 13px; font-weight: 900; display: flex; justify-content: space-between; border-top: 2px solid #000; padding-top: 4px; margin-top: 4px; }
+    .paid-stamp { text-align: center; font-size: 11px; font-weight: 900; border: 2px solid #000; padding: 4px; margin-top: 8px; text-transform: uppercase; letter-spacing: 1px; }
+    .footer { font-size: 8px; text-align: center; margin-top: 12px; }
+    @page { size: 80mm auto; margin: 0; }
+  </style>
+</head>
+<body>
+<div class="receipt">
+  <h1>${invoiceSettings.businessName || invoiceSettings.business_name || activeOrderData?.restaurants?.name || 'FIREFLOW POS'}</h1>
+  ${(invoiceSettings.businessAddress || invoiceSettings.business_address || activeOrderData?.restaurants?.address) ? `<div class="sub">${invoiceSettings.businessAddress || invoiceSettings.business_address || activeOrderData?.restaurants?.address}</div>` : ''}
+  ${(invoiceSettings.businessPhone || invoiceSettings.business_phone || activeOrderData?.restaurants?.phone) ? `<div class="sub">Tel: ${invoiceSettings.businessPhone || invoiceSettings.business_phone || activeOrderData?.restaurants?.phone}</div>` : ''}
+  ${(invoiceSettings.ntnNumber || activeOrderData?.restaurants?.ntn) ? `<div class="sub">NTN: ${invoiceSettings.ntnNumber || activeOrderData?.restaurants?.ntn}</div>` : ''}
+  <div class="dashed"></div>
+  <div class="badge-wrap"><span class="badge">${
+    isPaid && (invoiceSettings.ntnNumber || invoiceSettings.tax_id || activeOrderData?.restaurants?.ntn)
+      ? 'TAX INVOICE'
+      : isPaid
+        ? 'CUSTOMER BILL'
+        : 'BILL'
+  }</span></div>
+  <div class="dashed"></div>
+  <div class="meta">
+    <div class="meta-row"><span>Date:</span><span>${fmtDate(activeOrderData?.created_at)}</span></div>
+    <div class="meta-row"><span>Order #:</span><span>${orderNum}</span></div>
+    <div class="meta-row"><span>Type:</span><span>${orderType}</span></div>
+    ${tableObj ? `<div class="meta-row"><span>Table:</span><span>${tableObj.name}</span></div>` : ''}
+    ${customerName ? `<div class="meta-row"><span>Customer:</span><span>${customerName}</span></div>` : ''}
+  </div>
+  <div class="dashed"></div>
+  <table>
+    <thead><tr><th>Qty</th><th>Description</th><th style="text-align:right;">Price</th></tr></thead>
+    <tbody>${itemRows}</tbody>
+  </table>
+  <div class="dashed"></div>
+  <div class="totals">
+    <div class="total-row"><span>Subtotal</span><span>${fmtCur(breakdown.subtotal)}</span></div>
+    ${breakdown.discount > 0 ? `<div class="total-row"><span>Discount</span><span>-${fmtCur(breakdown.discount)}</span></div>` : ''}
+    ${breakdown.serviceCharge > 0 ? `<div class="total-row"><span>Service Charge</span><span>${fmtCur(breakdown.serviceCharge)}</span></div>` : ''}
+    ${breakdown.tax > 0 ? `<div class="total-row"><span>Tax</span><span>${fmtCur(breakdown.tax)}</span></div>` : ''}
+    ${breakdown.deliveryFee > 0 ? `<div class="total-row"><span>Delivery Fee</span><span>${fmtCur(breakdown.deliveryFee)}</span></div>` : ''}
+  </div>
+  <div class="grand"><span>TOTAL PAYABLE</span><span>${fmtCur(breakdown.total)}</span></div>
+  ${isPaid ? `<div class="paid-stamp">✓ PAID — ${activeOrderData?.payment_method || 'CASH'}</div>` : ''}
+  <div class="dashed"></div>
+  ${invoiceSettings.receiptFooterText || invoiceSettings.receipt_footer ? `<div class="footer">${invoiceSettings.receiptFooterText || invoiceSettings.receipt_footer}</div>` : ''}
+  <div class="footer">Powered by Fireflow POS</div>
+</div>
+</body>
+</html>`;
+
+    await printReceipt(content);
   };
+
 
   return (
     <div className="flex h-full bg-[#020617] text-slate-200 overflow-hidden font-sans">
@@ -592,8 +734,9 @@ export const POSView: React.FC = () => {
           <div className="relative flex-1 min-w-[200px] max-w-sm ml-2 mr-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
             <input
+              id="pos-search-input"
               type="text"
-              placeholder="Search Items..."
+              placeholder="Search Items... (Press /)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs font-bold text-white outline-none focus:border-gold-500 transition-all placeholder:text-slate-600"
@@ -890,6 +1033,22 @@ export const POSView: React.FC = () => {
             </div>
           ) : (
             <div className="flex gap-2 h-10 mt-2">
+              {/* Preview Button */}
+              <button
+                onClick={() => {
+                  if (activeOrderData && activeOrderData.payment_status !== 'PAID') {
+                    updateOrder({ id: activeOrderId!, is_proforma_printed: true } as any);
+                  }
+                  setShowReceiptPreview(true);
+                }}
+                disabled={currentOrderItems.length === 0}
+                className="w-10 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
+                title="Preview Receipt"
+              >
+                <Eye size={16} />
+              </button>
+
+              {/* Print Button */}
               <button
                 onClick={() => {
                   if (activeOrderData && activeOrderData.payment_status !== 'PAID') {
@@ -910,21 +1069,20 @@ export const POSView: React.FC = () => {
                   <button
                     disabled={isSubmitting}
                     onClick={() => handleOrderAction(false)}
-                    className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 uppercase"
+                    className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 uppercase disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
-                    {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save / Update'}
+                    {isSubmitting ? <Loader2 className="animate-spin mx-auto" size={14} /> : 'Save / Update'}
                   </button>
 
                   <button
                     disabled={isSubmitting}
                     onClick={() => handleOrderAction(true)}
-                    className="flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-xl shadow-orange-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase italic"
+                    className="flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-xl shadow-orange-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase italic disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
-                    {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
-                      <>
-                        <Flame size={14} className="animate-pulse" />
-                        <span>Fire Order</span>
-                      </>
+                    {isSubmitting ? (
+                      <><Loader2 className="animate-spin" size={14} /><span>Firing...</span></>
+                    ) : (
+                      <><Flame size={14} className="animate-pulse" /><span>Fire Order</span></>
                     )}
                   </button>
                 </>
@@ -1166,16 +1324,13 @@ export const POSView: React.FC = () => {
               changeGiven: tendered ? tendered - total : 0,
               breakdown: { ...breakdown, discountReason }
             } as any);
-
-            // After successful payment — print then reset
-            if (operationsConfig?.auto_print_receipt) {
-              await handlePrint();
-            }
-            
-            setTimeout(() => {
-                resetPad();
-                setShowPaymentModal(false);
-            }, 500);
+          }}
+          onPrintReceipt={async () => {
+            await handlePrint();
+          }}
+          onPaymentCompleteClose={() => {
+            resetPad();
+            setShowPaymentModal(false);
           }}
         />
       )}
@@ -1200,16 +1355,13 @@ export const POSView: React.FC = () => {
               changeGiven: tendered ? tendered - total : 0,
               breakdown: { ...breakdown, discountReason }
             } as any);
-
-            // After successful payment — print then reset
-            if (operationsConfig?.auto_print_receipt) {
-              await handlePrint();
-            }
-            
-            setTimeout(() => {
-                resetPad();
-                setShowPaymentModal(false);
-            }, 500);
+          }}
+          onPrintReceipt={async () => {
+            await handlePrint();
+          }}
+          onPaymentCompleteClose={() => {
+            resetPad();
+            setShowPaymentModal(false);
           }}
         />
       )}

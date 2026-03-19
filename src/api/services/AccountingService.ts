@@ -395,8 +395,24 @@ export class AccountingService {
     /**
      * Retrieves current session metrics and calculated expected cash.
      */
-    async getSessionMetrics(restaurantId: string) {
-        const session = await this.getActiveSession(restaurantId);
+    async getSessionMetrics(restaurantId: string, businessDate?: string) {
+        let session;
+        
+        if (businessDate) {
+            const startOfDay = new Date(new Date(businessDate).setHours(0, 0, 0, 0));
+            const endOfDay = new Date(new Date(businessDate).setHours(23, 59, 59, 999));
+            
+            session = await prisma.cash_sessions.findFirst({
+                where: {
+                    restaurant_id: restaurantId,
+                    opened_at: { gte: startOfDay, lte: endOfDay }
+                },
+                orderBy: { opened_at: 'desc' }
+            });
+        } else {
+            session = await this.getActiveSession(restaurantId);
+        }
+
         if (!session) return null;
 
         const entries = await prisma.ledger_entries.findMany({
@@ -440,6 +456,9 @@ export class AccountingService {
             .plus(settlements) // Net settlements (In - Out)
             .minus(payouts);
 
+        // Calculate order count for the session
+        const orderCount = entries.filter(e => e.reference_type === 'ORDER' && e.transaction_type === 'CREDIT' && !e.account_id).length;
+
         return {
             ...session,
             metrics: {
@@ -448,9 +467,30 @@ export class AccountingService {
                 payouts,
                 settlements,
                 expectedCash,
-                totalRevenue
+                totalRevenue,
+                orderCount
             }
         };
+    }
+
+    /**
+     * Export Ledger to CSV
+     */
+    async exportLedgerToCSV(restaurantId: string, limit: number = 1000) {
+        const entries = await this.getRecentLedger(restaurantId, limit);
+        
+        const header = "Date,Description,Type,Amount,Reference,Processed By\n";
+        const rows = entries.map(e => {
+            const date = new Date(e.created_at).toLocaleString();
+            const desc = `"${(e.description || '').replace(/"/g, '""')}"`;
+            const type = e.transaction_type;
+            const amount = e.amount;
+            const ref = `${e.reference_type} [${e.reference_id?.slice(-6).toUpperCase() || ''}]`;
+            const by = e.processed_by || '';
+            return `${date},${desc},${type},${amount},${ref},${by}`;
+        }).join("\n");
+
+        return header + rows;
     }
 
     /**

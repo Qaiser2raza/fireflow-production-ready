@@ -238,29 +238,8 @@ export const TableCard: React.FC<TableCardProps> = ({
                                 );
                             })()}
 
-                            {/* Quick Action Menu on Hover — role-based */}
+                            {/* Quick Action Menu on Hover — universal actions */}
                             <div className="absolute inset-x-5 bottom-5 opacity-0 group-hover:opacity-100 transition-all duration-200 space-y-1.5 z-20">
-                              {/* WAITER / SERVER: simplified — View Details + Add Items only */}
-                              {['SERVER', 'WAITER'].includes(currentUser?.role || '') ? (
-                                <>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); setShowDetailModal(true); }}
-                                    className="w-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                  >
-                                    <Eye size={12} />
-                                    View Order
-                                  </button>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
-                                    className="w-full bg-gold-500/90 backdrop-blur-md border border-gold-400/30 hover:bg-gold-400 text-black font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                  >
-                                    <Plus size={12} />
-                                    Add Items
-                                  </button>
-                                </>
-                              ) : (
-                                /* CASHIER / MANAGER / ADMIN: full action set */
-                                <>
                                   {order.status === 'READY' && onMarkServed && (
                                     <button
                                       onClick={(e) => { e.stopPropagation(); handleMarkServed(); }}
@@ -289,21 +268,19 @@ export const TableCard: React.FC<TableCardProps> = ({
                                     </button>
                                   )}
                                   <button
+                                    onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
+                                    className="w-full bg-gold-500/90 backdrop-blur-md border border-gold-400/30 hover:bg-gold-400 text-black font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                                  >
+                                    <Plus size={12} />
+                                    Add Items
+                                  </button>
+                                  <button
                                     onClick={(e) => { e.stopPropagation(); setShowDetailModal(true); }}
                                     className="w-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
                                   >
                                     <Eye size={12} />
                                     View Details
                                   </button>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
-                                    className="w-full bg-gold-500/90 backdrop-blur-md border border-gold-400/30 hover:bg-gold-400 text-black font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                  >
-                                    <Edit2 size={12} />
-                                    Edit in POS
-                                  </button>
-                                </>
-                              )}
                             </div>
                         </div>
                     )}

@@ -7,6 +7,7 @@ import {
    User, AlertTriangle
 } from 'lucide-react';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
+import { useThermalPrinter } from '../../hooks/useThermalPrinter';
 
 /* ─────────────────────────── helpers ─────────────────────────── */
 const fmt = (n: number) => `Rs. ${Number(n).toLocaleString()}`;
@@ -16,6 +17,7 @@ const elapsed = (date: string | Date) =>
 /* ─────────────────────────── component ─────────────────────────── */
 export const LogisticsHub: React.FC = () => {
    const { orders, drivers, addNotification, currentUser, fetchInitialData, completeDelivery, failDelivery } = useAppContext();
+   const { printReceipt } = useThermalPrinter();
 
    const [activeTab, setActiveTab] = useState<'DISPATCH' | 'MONITOR' | 'SETTLE'>('DISPATCH');
    const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
@@ -94,12 +96,72 @@ export const LogisticsHub: React.FC = () => {
             if (!d.success) throw new Error(d.error);
          }
          addNotification?.('success', `${selectedOrderIds.length} order(s) dispatched to ${drivers.find(d => d.id === dispatchRiderId)?.name}`);
+         
+         // Trigger Rider Print
+         await handlePrintRiderSlip(selectedOrderIds, dispatchRiderId);
+
          setSelectedOrderIds([]);
          setDispatchRiderId(null);
          fetchInitialData();
       } catch (e: any) {
          addNotification?.('error', e.message || 'Dispatch failed');
       } finally { setIsProcessing(false); }
+   };
+
+   const handlePrintRiderSlip = async (orderIds: string[], riderId: string) => {
+      const rider = drivers.find(d => d.id === riderId);
+      if (!rider) return;
+
+      const assignedOrders = orders.filter(o => orderIds.includes(o.id));
+      const totalAmount = assignedOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+
+      const html = `
+         <div style="font-family: monospace; width: 100%; font-size: 11px; padding: 5px;">
+            <div style="text-align: center; border-bottom: 1px dashed #000; padding-bottom: 5px; margin-bottom: 10px;">
+               <h2 style="margin: 0; font-size: 16px;">RIDER DISPATCH</h2>
+               <p style="margin: 2px 0;"><b>Rider: ${rider.name}</b></p>
+               <p style="margin: 0;">${new Date().toLocaleString()}</p>
+            </div>
+            <table style="width: 100%; border-collapse: collapse;">
+               <thead>
+                  <tr style="border-bottom: 1px solid #000;">
+                     <th style="text-align: left; padding: 2px 0;">Order</th>
+                     <th style="text-align: right; padding: 2px 0;">Total</th>
+                  </tr>
+               </thead>
+               <tbody>
+                  ${assignedOrders.map(o => `
+                     <tr style="border-top: 1px dotted #eee;">
+                        <td style="padding: 5px 0;">
+                           <b>#${o.id.slice(-6).toUpperCase()}</b><br/>
+                           ${o.customer_name || 'Customer'}<br/>
+                           <span style="font-size: 10px;">${o.delivery_address || 'No Address'}</span>
+                        </td>
+                        <td style="text-align: right; padding: 5px 0; vertical-align: top;">
+                           <b>Rs. ${Number(o.total || 0).toLocaleString()}</b>
+                        </td>
+                     </tr>
+                  `).join('')}
+               </tbody>
+            </table>
+            <div style="margin-top: 15px; border-top: 2px solid #000; padding-top: 5px;">
+               <div style="display: flex; justify-content: space-between;">
+                  <span>ORDERS:</span>
+                  <span>${assignedOrders.length}</span>
+               </div>
+               <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; margin-top: 5px;">
+                  <span>TO COLLECT:</span>
+                  <span>Rs. ${totalAmount.toLocaleString()}</span>
+               </div>
+            </div>
+            <div style="text-align: center; margin-top: 20px; font-size: 9px; border-top: 1px dashed #eee; padding-top: 10px;">
+               --- END OF BATCH ---<br/>
+               FIREFLOW LOGISTICS
+            </div>
+         </div>
+      `;
+
+      await printReceipt(html);
    };
 
    const handleMarkDelivered = async (orderId: string) => {
@@ -204,8 +266,9 @@ export const LogisticsHub: React.FC = () => {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({
-                  receivedAmount: Number(order.total),
-                  method: 'CASH',
+                  amount: Number(order.total),          // backend reads 'amount'
+                  paymentMethod: 'CASH',                 // backend reads 'paymentMethod'
+                  payment_method: 'CASH',                // fallback alias
                   processedBy: currentUser?.id
                }),
             });

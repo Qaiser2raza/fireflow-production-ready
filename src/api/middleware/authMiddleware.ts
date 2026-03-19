@@ -62,14 +62,22 @@ export async function authMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
-    // 1. Extract token from Authorization header
+    // 1. Extract token from Authorization header OR query param (for downloads)
     const authHeader = req.headers.authorization;
-    const token = extractTokenFromHeaderLocal(authHeader);
+    let token = extractTokenFromHeaderLocal(authHeader);
+
+    // Support window.open/downloads where headers aren't possible
+    if (!token && req.query.token) {
+      const queryToken = req.query.token as string;
+      token = queryToken.trim(); // Harden: Remove whitespace/newlines
+    }
 
     if (!token) {
+      console.warn(`[AUTH] Missing credentials for ${req.method} ${req.path}`);
       res.status(401).json({
         error: 'Missing or invalid Authorization header',
-        detail: 'Expected: Authorization: Bearer <token>'
+        detail: 'Expected: Authorization: Bearer <token> OR URL parameter ?token=<token>',
+        hint: 'If you are seeing this, ensure your request includes a valid JWT token.'
       });
       return;
     }

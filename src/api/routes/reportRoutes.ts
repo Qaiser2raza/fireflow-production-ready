@@ -1,12 +1,13 @@
-
 import { Router } from 'express';
 import * as ReportsService from '../services/ReportsService';
 import { getDailySalesReport } from '../services/reports/DailySalesReport';
 import { getTaxLiabilityReport } from '../services/reports/TaxLiabilityReport';
 import { getLossPreventionReport } from '../services/reports/LossPreventionReport';
 import { getStaffPerformanceReport } from '../services/reports/StaffPerformanceReport';
-import { getEnhancedProductMixReport } from '../services/reports/EnhancedProductMixReport';
-import { getPayoutExpenseReport } from '../services/reports/PayoutExpenseReport';
+import { getCategorySalesReport } from '../services/reports/CategorySalesReport';
+import { getPaymentMethodReport } from '../services/reports/PaymentMethodReport';
+import { getRiderAuditReport } from '../services/reports/RiderAuditReport';
+import { renderReport } from '../services/reports/reportTemplates';
 import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/authMiddleware';
 
@@ -19,162 +20,51 @@ const reportQuerySchema = z.object({
     end: z.string().datetime()
 });
 
-// ══════════════════════════════════════════════════
-// PHASE 1: Enterprise Management Reports
-// ══════════════════════════════════════════════════
-
 /**
- * GET /api/reports/daily-sales
- * Daily Sales Report — the #1 report
+ * Helper to handle report requests and return HTML or JSON
  */
-router.get('/daily-sales', async (req, res) => {
+async function handleReport(req: any, res: any, title: string, type: string, fetchFn: Function) {
     try {
         const { start, end } = reportQuerySchema.parse(req.query);
-        const data = await getDailySalesReport(req.restaurantId!, {
+        const data = await fetchFn(req.restaurantId!, {
             start: new Date(start),
             end: new Date(end)
         });
-        res.json({ success: true, data });
+
+        // Add restaurant metadata if available
+        const restaurant_id = req.restaurantId;
+
+        // If explicitly requested as JSON (e.g. from dashboard), return JSON
+        if (req.query.format === 'json') {
+            return res.json({ success: true, data });
+        }
+
+        // Default to HTML for printable view
+        const html = renderReport(title, { ...data, restaurant_id }, type);
+        res.setHeader('Content-Type', 'text/html');
+        res.send(html);
     } catch (e: any) {
         res.status(400).json({ error: e.message });
     }
-});
+}
 
-/**
- * GET /api/reports/tax-liability
- * Tax Liability Report — FBR compliance
- */
-router.get('/tax-liability', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const data = await getTaxLiabilityReport(req.restaurantId!, {
-            start: new Date(start),
-            end: new Date(end)
-        });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
+router.get('/daily-sales', (req, res) => handleReport(req, res, 'Daily Sales Report', 'daily-sales', getDailySalesReport));
+router.get('/tax-liability', (req, res) => handleReport(req, res, 'Tax Liability Report', 'tax-liability', getTaxLiabilityReport));
+router.get('/loss-prevention', (req, res) => handleReport(req, res, 'Loss Prevention (Audit)', 'loss-prevention', getLossPreventionReport));
+router.get('/staff-performance', (req, res) => handleReport(req, res, 'Staff Efficiency Performance', 'staff-performance', getStaffPerformanceReport));
+router.get('/category-sales', (req, res) => handleReport(req, res, 'Category Sales Analysis', 'category-sales', getCategorySalesReport));
+router.get('/payment-methods', (req, res) => handleReport(req, res, 'Payment Method Analysis', 'payment-methods', getPaymentMethodReport));
 
-/**
- * GET /api/reports/loss-prevention
- * Loss Prevention Report — voids & cancellations analysis
- */
-router.get('/loss-prevention', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const data = await getLossPreventionReport(req.restaurantId!, {
-            start: new Date(start),
-            end: new Date(end)
-        });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-// ══════════════════════════════════════════════════
-// PHASE 2: Operational & Staff Reports
-// ══════════════════════════════════════════════════
-
-/**
- * GET /api/reports/staff-performance
- * Waiter, Cashier, Rider efficiency metrics
- */
-router.get('/staff-performance', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const data = await getStaffPerformanceReport(req.restaurantId!, {
-            start: new Date(start),
-            end: new Date(end)
-        });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-/**
- * GET /api/reports/enhanced-product-mix
- * Pareto 80/20 product ranking
- */
-router.get('/enhanced-product-mix', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const data = await getEnhancedProductMixReport(req.restaurantId!, {
-            start: new Date(start),
-            end: new Date(end)
-        });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-/**
- * GET /api/reports/payout-expense
- * Cash outflow timeline and category breakdown
- */
-router.get('/payout-expense', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const data = await getPayoutExpenseReport(req.restaurantId!, {
-            start: new Date(start),
-            end: new Date(end)
-        });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-// ══════════════════════════════════════════════════
-// Legacy Reports (Product Mix, Velocity, etc.)
-// ══════════════════════════════════════════════════
-
-router.get('/product-mix', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const restaurantId = req.restaurantId!;
-        const data = await ReportsService.getProductMix(restaurantId, { start: new Date(start), end: new Date(end) });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-router.get('/velocity', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const restaurantId = req.restaurantId!;
-        const data = await ReportsService.getSalesVelocity(restaurantId, { start: new Date(start), end: new Date(end) });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-router.get('/security', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const restaurantId = req.restaurantId!;
-        const data = await ReportsService.getSecurityAudit(restaurantId, { start: new Date(start), end: new Date(end) });
-        res.json({ success: true, data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-router.get('/over-capacity', async (req, res) => {
-    try {
-        const { start, end } = reportQuerySchema.parse(req.query);
-        const restaurantId = req.restaurantId!;
-        const data = await ReportsService.getOverCapacityReport(restaurantId, { start: new Date(start), end: new Date(end) });
-        res.json({ success: true, ...data });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
+// Legacy Reports (Keep for compatibility but wrap in HTML)
+router.get('/product-mix', (req, res) => handleReport(req, res, 'Product Mix Trend', 'product-mix', ReportsService.getProductMix));
+router.get('/velocity', (req, res) => handleReport(req, res, 'Sales Velocity (Hourly)', 'velocity', ReportsService.getSalesVelocity));
+router.get('/security', (req, res) => handleReport(req, res, 'Security Audit Logs', 'security', ReportsService.getSecurityAudit));
+router.get('/over-capacity', (req, res) => handleReport(req, res, 'Table Over-Capacity Report', 'over-capacity', ReportsService.getOverCapacityReport));
+router.get('/rider-audit', (req, res) => {
+    const riderId = req.query.riderId as string;
+    return handleReport(req, res, 'Rider Performance Audit', 'rider-audit', 
+        (restId: string, range: any) => getRiderAuditReport(restId, range, riderId)
+    );
 });
 
 export default router;

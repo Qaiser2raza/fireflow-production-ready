@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Delete, ArrowRight, Lock, User, Smartphone } from 'lucide-react';
+import { Shield, Delete, ArrowRight, Lock, User, Smartphone, X, RefreshCcw, Wifi } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+
 
 interface LoginViewProps {
   onLogin: (pin: string) => Promise<boolean | void> | void;
@@ -12,6 +14,24 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, o
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [connectivity, setConnectivity] = useState<any>(null);
+  const [loadingConnectivity, setLoadingConnectivity] = useState(false);
+
+  const fetchConnectivity = async () => {
+    setLoadingConnectivity(true);
+    try {
+      const resp = await fetch('/api/connectivity');
+      const data = await resp.json();
+      if (data.success) {
+        setConnectivity(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch connectivity info:", err);
+    } finally {
+      setLoadingConnectivity(false);
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -196,8 +216,87 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, o
             </button>
           )}
 
+          <button
+            onClick={() => { setShowConnectModal(true); fetchConnectivity(); }}
+            className="w-full py-2 mt-2 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all text-slate-500 hover:text-gold-400 text-[10px] border border-dashed border-slate-800 hover:border-gold-500/50"
+          >
+            <Wifi size={14} />
+            Connect Mobile
+          </button>
+
         </div>
       </div>
+
+      {/* Connectivity Modal */}
+      {showConnectModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-2xl max-w-sm w-full relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-gold-500/0 via-gold-500 to-gold-500/0"></div>
+            
+            <button 
+              onClick={() => setShowConnectModal(false)}
+              className="absolute top-6 right-6 p-2 hover:bg-slate-800 rounded-full text-slate-500 transition-colors"
+            >
+              <X size={20} />
+            </button>
+
+            <div className="text-center mb-8">
+              <div className="inline-flex p-3 bg-gold-500/10 rounded-2xl text-gold-500 mb-4">
+                <Smartphone size={24} />
+              </div>
+              <h3 className="text-2xl font-serif font-bold text-white">Connect Mobile</h3>
+              <p className="text-slate-400 text-sm mt-2">Scan to open POS on your phone</p>
+            </div>
+
+            <div className="bg-white p-6 rounded-3xl mb-8 flex items-center justify-center shadow-[0_0_50px_rgba(234,179,8,0.1)] mx-auto w-fit">
+              {loadingConnectivity ? (
+                <div className="w-48 h-48 flex items-center justify-center">
+                  <RefreshCcw size={32} className="text-slate-200 animate-spin" />
+                </div>
+              ) : connectivity ? (
+                <QRCodeSVG 
+                  value={connectivity.ips?.[0] || connectivity.localUrl} 
+                  size={192}
+                  level="H"
+                  includeMargin={false}
+                />
+              ) : (
+                <div className="w-48 h-48 flex items-center justify-center text-red-500 text-xs font-bold text-center px-4">
+                  Failed to load Network Info
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Direct Link (Type in browser)</p>
+                <code className="text-gold-400 font-mono text-xs break-all">
+                  {connectivity?.ips?.[0] || connectivity?.localUrl || 'Loading...'}
+                </code>
+              </div>
+
+              <div className="text-center">
+                <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-2">Alternative Addresses</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <span className="text-[10px] font-mono text-slate-500 bg-slate-800/50 px-2 py-1 rounded-lg">
+                    {connectivity?.localUrl?.replace('http://', '')}
+                  </span>
+                  {connectivity?.ips?.slice(1).map((ip: string) => (
+                    <span key={ip} className="text-[10px] font-mono text-slate-500 bg-slate-800/50 px-2 py-1 rounded-lg">
+                      {ip.replace('http://', '')}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-center text-[10px] text-slate-500 mt-8 leading-relaxed">
+              Ensure your phone is on the <b>SAME WI-FI</b><br />
+              as this computer.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Subtle Cravex Branding at the bottom - hidden on small mobiles if too tight */}
       <div className="absolute bottom-4 left-0 w-full flex flex-col items-center pointer-events-none opacity-40 px-4 text-center">

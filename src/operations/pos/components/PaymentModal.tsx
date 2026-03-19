@@ -7,13 +7,17 @@ interface PaymentModalProps {
     breakdown: PaymentBreakdown; // We should pass the calculated breakdown
     onClose: () => void;
     onProcessPayment: (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET', tenderedAmount?: number, discountReason?: string) => Promise<void>;
+    onPrintReceipt?: () => Promise<void>;
+    onPaymentCompleteClose?: () => void;
 }
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({
     order,
     breakdown,
     onClose,
-    onProcessPayment
+    onProcessPayment,
+    onPrintReceipt,
+    onPaymentCompleteClose
 }) => {
     const [method, setMethod] = useState<'CASH' | 'CARD' | 'RAAST'>('CASH');
     const [tenderedAmount, setTenderedAmount] = useState<string>('');
@@ -84,11 +88,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         try {
             await onProcessPayment(finalTotal, method, parsedTendered, discountReason);
             setCompleted(true);
-            
-
-            setTimeout(() => {
-                onClose();
-            }, 2000);
         } catch (error) {
             console.error("Payment failed", error);
             setIsProcessing(false);
@@ -98,12 +97,34 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     if (completed) {
         return (
             <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 flex flex-col items-center text-center shadow-2xl scale-100 animate-in zoom-in-95 duration-200">
+                <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-12 flex flex-col items-center text-center shadow-2xl scale-100 animate-in zoom-in-95 duration-200 max-w-lg w-full">
                     <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center mb-6">
                         <CheckCircle2 size={48} className="text-green-500" />
                     </div>
-                    <h2 className="text-3xl font-bold text-white mb-2">Payment Successful!</h2>
-                    <p className="text-slate-400 text-lg">Change Due: <span className="text-white font-bold">Rs. {change > 0 ? change.toLocaleString() : 0}</span></p>
+                    <h2 className="text-3xl font-black text-white mb-2 uppercase tracking-tighter">Payment Received!</h2>
+                    <p className="text-slate-400 text-lg mb-8">Change Due: <span className="text-white font-bold tracking-widest text-2xl font-mono mx-2">Rs. {change > 0 ? change.toLocaleString() : 0}</span></p>
+                    
+                    <div className="flex gap-4 w-full">
+                        <button
+                            onClick={async () => {
+                                if (onPrintReceipt) await onPrintReceipt();
+                                if (onPaymentCompleteClose) onPaymentCompleteClose();
+                                else onClose();
+                            }}
+                            className="flex-1 bg-white hover:bg-slate-200 text-black font-black py-4 rounded-xl uppercase tracking-widest text-sm transition-all shadow-xl font-sans"
+                        >
+                            Print Receipt
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (onPaymentCompleteClose) onPaymentCompleteClose();
+                                else onClose();
+                            }}
+                            className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black py-4 rounded-xl uppercase tracking-widest text-sm transition-all shadow-xl font-sans border border-slate-700"
+                        >
+                            No Thanks
+                        </button>
+                    </div>
                 </div>
             </div>
         );

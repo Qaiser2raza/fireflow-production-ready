@@ -53,12 +53,11 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
 
     return (
         <div
-            className="bg-white text-black font-mono text-[12px] leading-tight p-6 shadow-lg mx-auto relative receipt-paper"
+            className="bg-white text-black font-mono text-[12px] leading-tight p-6 mx-auto relative receipt-paper"
             style={{
                 width: width,
                 fontFamily: "'Courier New', Courier, monospace",
-                filter: 'grayscale(100%) contrast(1.1)',
-                color: '#1a1a1a'
+                color: '#000'
             }}
         >
             {/* Header */}
@@ -227,10 +226,20 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                     </div>
                 )}
 
-                {/* Barcode placeholder */}
-                <div className="mt-4 h-8 bg-black/10 flex items-center justify-center text-[8px] tracking-[0.5em] uppercase">
-                    ||| || ||| || |||
-                </div>
+                {/* Real Barcode for Scanning */}
+                {order.order_number && (
+                    <div className="mt-4 text-center">
+                        <style>
+                            {`@import url('https://fonts.googleapis.com/css2?family=Libre+Barcode+128&display=swap');`}
+                        </style>
+                        <div 
+                            style={{ fontFamily: "'Libre Barcode 128', sans-serif", fontSize: '48px', lineHeight: '48px' }}
+                        >
+                            {order.order_number}
+                        </div>
+                        <div className="text-[8px] font-mono tracking-widest">{order.order_number}</div>
+                    </div>
+                )}
             </div>
 
             {/* Paper tear effect at bottom */}

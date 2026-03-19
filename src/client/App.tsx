@@ -212,12 +212,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const getDeviceFingerprint = (): string => {
+    // Check if we already generated one for this browser/machine
+    const stored = localStorage.getItem('fireflow_device_fingerprint');
+    if (stored) return stored;
+
+    // Generate a stable fingerprint from browser characteristics
+    const raw = [
+        navigator.userAgent,
+        navigator.language,
+        screen.width + 'x' + screen.height,
+        new Date().getTimezoneOffset().toString(),
+        navigator.hardwareConcurrency?.toString() || '4'
+    ].join('|');
+
+    // Simple hash (not crypto-grade, but stable per machine)
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+        const char = raw.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+    }
+    const fingerprint = Math.abs(hash).toString(36) + '_' + Date.now().toString(36);
+    localStorage.setItem('fireflow_device_fingerprint', fingerprint);
+    return fingerprint;
+  };
+
   const login = async (pin: string) => {
     try {
+      const deviceFingerprint = getDeviceFingerprint();
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin })
+        body: JSON.stringify({
+            pin,
+            device_fingerprint: deviceFingerprint,
+            device_name: `${navigator.platform || 'Device'} - ${new Date().toLocaleDateString()}`,
+            user_agent: navigator.userAgent
+        })
       });
 
       if (!res.ok) throw new Error('Invalid PIN');

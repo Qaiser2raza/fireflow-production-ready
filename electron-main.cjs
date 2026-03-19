@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const fs = require('fs');
 
 let store;
 (async () => {
@@ -50,42 +51,55 @@ ipcMain.handle('print-thermal', async (event, { html, printerName, silent = true
     console.log(`[IPC] Thermal Print initiated to: ${printerName} (Silent: ${silent})`);
     const printWindow = new BrowserWindow({ 
         show: false, 
-        width: 300, // Small width for layout simulation
+        width: 300,
+        backgroundColor: '#ffffff',
         webPreferences: { 
             nodeIntegration: false,
             contextIsolation: true
         } 
     });
     
-    // Verify printer existence if not using default
     if (printerName && printerName !== 'Default') {
         try {
             const printers = await printWindow.webContents.getPrintersAsync();
             const exists = printers.some(p => p.name === printerName);
             if (!exists) {
-                console.warn(`[IPC] Printer "${printerName}" not found in system printers. Available:`, printers.map(p => p.name).join(', '));
+                console.warn(`[IPC] Printer "${printerName}" not found. Available:`, printers.map(p => p.name).join(', '));
                 printWindow.close();
-                return { success: false, error: `Printer "${printerName}" not found. Available printers: ${printers.map(p => p.name).join(', ')}` };
+                return { success: false, error: `Printer "${printerName}" not found.` };
             }
         } catch (e) {
             console.error("[IPC] Failed to verify printers:", e);
         }
     }
 
-    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-    
+    const tempFile = path.join(app.getPath('temp'), `print_thermal_${Date.now()}.html`);
+    fs.writeFileSync(tempFile, html, 'utf8');
+
     return new Promise((resolve) => {
-        printWindow.webContents.print({
-            silent: silent,
-            printBackground: true,
-            deviceName: (printerName === 'Default' || !printerName) ? undefined : printerName,
-            margins: { marginType: 'none' },
-            pageSize: { width: 80000, height: 297000 } // Standard 80mm roll width
-        }, (success, errorType) => {
-            console.log(`[IPC] Print result: ${success}, Error: ${errorType}`);
-            printWindow.close();
-            resolve({ success, error: errorType });
+        // ✅ Wait for page to fully render before printing
+        printWindow.webContents.once('did-finish-load', () => {
+            // Set a title for the spooler job
+            printWindow.setTitle('Thermal Receipt');
+            
+            // 🕒 Small grace period for paint stabilization
+            setTimeout(() => {
+                printWindow.webContents.print({
+                    silent: silent,
+                    printBackground: false, // Prevents printing full black slips on thermal
+                    deviceName: (printerName === 'Default' || !printerName) ? undefined : printerName,
+                    margins: { marginType: 'none' }
+                }, (success, errorType) => {
+                    console.log(`[IPC] Print result: ${success}, Error: ${errorType}`);
+                    printWindow.close();
+                    try { fs.unlinkSync(tempFile); } catch(e) {}
+                    resolve({ success, error: errorType });
+                });
+            }, 200);
         });
+
+        // Load file instead of data URL
+        printWindow.loadFile(tempFile);
     });
 });
 
@@ -119,20 +133,30 @@ ipcMain.handle('print-a4', async (event, { html, printerName }) => {
         }
     }
 
-    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    const tempFile = path.join(app.getPath('temp'), `print_a4_${Date.now()}.html`);
+    fs.writeFileSync(tempFile, html, 'utf8');
 
     return new Promise((resolve) => {
-        printWindow.webContents.print({
-            silent: true,
-            printBackground: true,
-            deviceName: (printerName === 'Default' || !printerName) ? undefined : printerName,
-            margins: { marginType: 'printableArea' },
-            pageSize: 'A4'
-        }, (success, errorType) => {
-            console.log(`[IPC] A4 Print result: ${success}, Error: ${errorType}`);
-            printWindow.close();
-            resolve({ success, error: errorType });
+        // ✅ Wait for page to fully render before printing
+        printWindow.webContents.once('did-finish-load', () => {
+            printWindow.setTitle('A4 Document');
+            setTimeout(() => {
+                printWindow.webContents.print({
+                    silent: true,
+                    printBackground: true,
+                    deviceName: (printerName === 'Default' || !printerName) ? undefined : printerName,
+                    margins: { marginType: 'printableArea' },
+                    pageSize: 'A4'
+                }, (success, errorType) => {
+                    console.log(`[IPC] A4 Print result: ${success}, Error: ${errorType}`);
+                    printWindow.close();
+                    try { fs.unlinkSync(tempFile); } catch(e) {}
+                    resolve({ success, error: errorType });
+                });
+            }, 200);
         });
+
+        printWindow.loadFile(tempFile);
     });
 });
 
@@ -214,17 +238,26 @@ function generateSlip(order) {
             webPreferences: { nodeIntegration: false, contextIsolation: true }
         });
 
-        printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
-            printWindow.webContents.print({
-                silent: true,
-                printBackground: true,
-                margins: { marginType: 'none' },
-                pageSize: { width: 80000, height: 297000 }
-            }, (success, errorType) => {
-                console.log(`[DELIVERY SLIP] Print result: ${success}, Error: ${errorType}`);
-                printWindow.close();
-            });
+        const tempFile = path.join(app.getPath('temp'), `print_slip_${Date.now()}.html`);
+        fs.writeFileSync(tempFile, html, 'utf8');
+
+        printWindow.webContents.once('did-finish-load', () => {
+            printWindow.setTitle('Delivery Slip');
+            setTimeout(() => {
+                printWindow.webContents.print({
+                    silent: true,
+                    printBackground: true,
+                    margins: { marginType: 'none' },
+                    pageSize: { width: 80000, height: 297000 }
+                }, (success, errorType) => {
+                    console.log(`[DELIVERY SLIP] Print result: ${success}, Error: ${errorType}`);
+                    printWindow.close();
+                    try { fs.unlinkSync(tempFile); } catch(e) {}
+                });
+            }, 200);
         });
+
+        printWindow.loadFile(tempFile);
     } else {
         console.log('[DELIVERY SLIP] mainWindow not available, skipping print.');
     }

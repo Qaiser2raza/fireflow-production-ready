@@ -16,7 +16,12 @@ export const RecallModal: React.FC<RecallModalProps> = ({ orders, isOpen, onClos
 
     const draftOrders = useMemo(() => {
         return orders
-            .filter(o => o.status === OrderStatus.ACTIVE)
+            .filter(o =>
+                o.status === OrderStatus.ACTIVE ||
+                o.status === OrderStatus.READY ||
+                o.status === ('PENDING' as any) ||
+                o.status === ('PREPARING' as any)
+            )
             .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }, [orders]);
 

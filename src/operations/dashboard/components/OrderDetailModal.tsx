@@ -1,14 +1,15 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { Order, Table } from '../../../shared/types';
-import { X, Clock, Users, Receipt, Edit2, CheckCircle2, FileText } from 'lucide-react';
+import { X, Clock, Users, Receipt, Edit2, CheckCircle2, FileText, Printer, Download } from 'lucide-react';
+import { useThermalPrinter } from '../../../hooks/useThermalPrinter';
 
 interface OrderDetailModalProps {
     isOpen: boolean;
     onClose: () => void;
     order: Order;
     table: Table;
-    onMarkServed: () => Promise<void>;
-    onRequestBill: () => Promise<void>;
+    onMarkServed?: () => Promise<void>;
+    onRequestBill?: () => Promise<void>;
     onEditInPOS: () => void;
     currentUser: any;
 }
@@ -23,6 +24,9 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     onEditInPOS,
     currentUser
 }) => {
+    const { printReceipt } = useThermalPrinter();
+    const receiptRef = useRef<HTMLDivElement>(null);
+
     const elapsedMinutes = useMemo(() => {
         return Math.floor((Date.now() - new Date(order.created_at).getTime()) / 60000);
     }, [order.created_at]);
@@ -52,11 +56,102 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
         return 'text-slate-500';
     };
 
+    /** Build a plain-text HTML string for the receipt  */
+    const buildReceiptHTML = () => {
+        const formatCurrency = (n: number) => `Rs. ${Math.round(n).toLocaleString()}`;
+        const items = (order.order_items || []).map(item => `
+            <tr>
+                <td>${item.quantity}</td>
+                <td style="padding: 0 4px;">${item.menu_item?.name || item.item_name}</td>
+                <td style="text-align:right;">${formatCurrency(item.unit_price * item.quantity)}</td>
+            </tr>
+        `).join('');
+
+        const isProforma = order.payment_status !== 'PAID' && order.status !== 'CLOSED';
+
+        return `<html><head><title>Receipt</title>
+        <style>
+            * { box-sizing: border-box; }
+            body { margin: 0; padding: 0; background: white; color: black; font-family: 'Courier New', Courier, monospace; }
+            .receipt { width: 65mm; padding: 4mm; background: white; color: black; }
+            h1 { font-size: 13px; font-weight: 900; text-align: center; text-transform: uppercase; margin: 0 0 4px 0; }
+            .center { text-align: center; }
+            .info { font-size: 9px; text-align: center; margin-bottom: 8px; }
+            .divider { border-top: 1px dashed #000; margin: 6px 0; }
+            .badge { font-size: 10px; font-weight: 900; text-align: center; border: 2px solid black; padding: 2px 8px; display: inline-block; text-transform: uppercase; letter-spacing: 2px; margin: 4px auto; }
+            .meta { font-size: 9px; margin-bottom: 8px; }
+            .meta-row { display: flex; justify-content: space-between; }
+            table { width: 100%; font-size: 10px; border-collapse: collapse; }
+            th { font-size: 9px; text-transform: uppercase; border-bottom: 1px solid #000; padding-bottom: 3px; }
+            th:last-child, td:last-child { text-align: right; }
+            td { padding: 2px 0; vertical-align: top; }
+            .totals { font-size: 10px; margin-top: 4px; }
+            .total-row { display: flex; justify-content: space-between; }
+            .grand-total { font-size: 13px; font-weight: 900; display: flex; justify-content: space-between; border-top: 1px solid #000; padding-top: 4px; margin-top: 4px; }
+            .payment-badge { text-align: center; font-size: 10px; font-weight: 900; border: 2px solid #000; padding: 3px; margin-top: 8px; text-transform: uppercase; letter-spacing: 1px; }
+            .footer { font-size: 8px; text-align: center; margin-top: 12px; }
+            @page { size: 80mm auto; margin: 0; }
+        </style>
+        </head><body><div class="receipt">
+            <h1>${order.restaurants?.name || 'FIREFLOW RESTAURANT'}</h1>
+            <div class="info">${order.restaurants?.address || ''}</div>
+            <div class="divider"></div>
+            <div class="center">
+                <div class="badge">${isProforma ? 'PROFORMA BILL' : 'TAX INVOICE'}</div>
+            </div>
+            <div class="divider"></div>
+            <div class="meta">
+                <div class="meta-row"><span>Date:</span><span>${new Date(order.created_at || Date.now()).toLocaleString('en-PK', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true})}</span></div>
+                <div class="meta-row"><span>Order #:</span><span>${order.order_number || order.id?.slice(-8).toUpperCase()}</span></div>
+                <div class="meta-row"><span>Type:</span><span>${order.type}</span></div>
+                ${table?.name ? `<div class="meta-row"><span>Table:</span><span>${table.name}</span></div>` : ''}
+                ${order.customer_name ? `<div class="meta-row"><span>Customer:</span><span>${order.customer_name}</span></div>` : ''}
+            </div>
+            <div class="divider"></div>
+            <table>
+                <thead><tr><th>Qty</th><th>Item</th><th>Price</th></tr></thead>
+                <tbody>${items}</tbody>
+            </table>
+            <div class="divider"></div>
+            <div class="totals">
+                <div class="total-row"><span>Subtotal</span><span>${formatCurrency(order.breakdown?.subtotal || order.total || 0)}</span></div>
+                ${(order.service_charge || 0) > 0 ? `<div class="total-row"><span>Service Charge</span><span>${formatCurrency(order.service_charge!)}</span></div>` : ''}
+                ${(order.tax || 0) > 0 ? `<div class="total-row"><span>Tax</span><span>${formatCurrency(order.tax!)}</span></div>` : ''}
+                ${(order.discount || 0) > 0 ? `<div class="total-row"><span>Discount</span><span>-${formatCurrency(order.discount!)}</span></div>` : ''}
+            </div>
+            <div class="grand-total"><span>TOTAL</span><span>${formatCurrency(order.total || 0)}</span></div>
+            ${!isProforma ? `<div class="payment-badge">PAID VIA ${order.payment_method || 'CASH'}</div>` : ''}
+            <div class="footer">
+                <p>*** Thank You! ***</p>
+                <p>Powered by Fireflow POS</p>
+            </div>
+        </div></body></html>`;
+    };
+
+    const handlePrint = async () => {
+        const html = buildReceiptHTML();
+        await printReceipt(html);
+    };
+
+    const handleDownload = () => {
+        const html = buildReceiptHTML();
+        const blob = new Blob([html], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `receipt-${order.order_number || order.id?.slice(-8)}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
     if (!isOpen) return null;
 
     const items = order.order_items || [];
     const readyItems = items.filter(i => i.item_status === 'DONE' || i.item_status === 'SERVED');
     const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
+    const isPaid = order.payment_status === 'PAID' || order.status === 'CLOSED';
 
     return (
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -73,11 +168,16 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                 <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${getStatusColor(order.status)}`}>
                                     {order.status.replace('_', ' ')}
                                 </div>
+                                {isPaid && (
+                                    <div className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
+                                        PAID
+                                    </div>
+                                )}
                             </div>
                             <div className="flex items-center gap-4 text-slate-400 text-sm">
                                 <div className="flex items-center gap-1.5">
                                     <Receipt size={14} />
-                                    <span className="font-mono text-xs">#{order.order_number || order.id.slice(-8).toUpperCase()}</span>
+                                    <span className="font-mono text-xs">#{order.order_number || order.id?.slice(-8).toUpperCase()}</span>
                                 </div>
                                 <div className="flex items-center gap-1.5">
                                     <Users size={14} />
@@ -99,7 +199,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                 </div>
 
                 {/* Content */}
-                <div className="p-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
+                <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
                     <div className="grid grid-cols-3 gap-6">
 
                         {/* Left Column: Items */}
@@ -197,6 +297,15 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                             </div>
                                         </div>
                                     )}
+                                    {isPaid && (
+                                        <div className="flex items-start gap-2">
+                                            <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5" />
+                                            <div>
+                                                <p className="text-xs text-white font-bold">Payment Received</p>
+                                                <p className="text-[10px] text-emerald-500 font-bold uppercase">{order.payment_method || 'CASH'}</p>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -260,42 +369,53 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                 </div>
 
                 {/* Footer Actions */}
-                <div className="bg-[#0a0e1a] p-6 border-t border-slate-800">
+                <div className="bg-[#0a0e1a] p-6 border-t border-slate-800 space-y-3">
+                    {/* Print & Download row — always visible when order has items */}
+                    {items.length > 0 && (
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={handlePrint}
+                                className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-[10px] transition-all flex items-center justify-center gap-2 border border-slate-700 hover:border-slate-600"
+                            >
+                                <Printer size={14} />
+                                {isPaid ? 'Reprint Receipt' : 'Print Bill'}
+                            </button>
+                            <button
+                                onClick={handleDownload}
+                                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-black py-2.5 rounded-xl uppercase tracking-wider text-[10px] transition-all flex items-center justify-center gap-2 border border-slate-700 hover:border-slate-600"
+                            >
+                                <Download size={14} />
+                                Download
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Operational Actions */}
                     <div className="flex items-center gap-3">
                         {order.status === 'READY' && (
-                            <button
-                                onClick={async () => {
-                                    await onMarkServed();
-                                    onClose();
-                                }}
-                                className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition-all flex items-center justify-center gap-2 shadow-lg"
-                            >
+                            <button onClick={() => onMarkServed?.()} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-black py-3 rounded-xl uppercase tracking-widest text-[10px] transition-all flex items-center justify-center gap-2">
                                 <CheckCircle2 size={16} />
-                                Mark as Served
+                                Mark Served
                             </button>
                         )}
                         {order.status === 'READY' && (
-                            <button
-                                onClick={async () => {
-                                    await onRequestBill();
-                                    onClose();
-                                }}
-                                className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition-all flex items-center justify-center gap-2 shadow-lg"
-                            >
+                            <button onClick={() => onRequestBill?.()} className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl uppercase tracking-widest text-[10px] transition-all flex items-center justify-center gap-2">
                                 <FileText size={16} />
                                 Request Bill
                             </button>
                         )}
-                        <button
-                            onClick={() => {
-                                onEditInPOS();
-                                onClose();
-                            }}
-                            className="flex-1 bg-gold-500 hover:bg-gold-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition-all flex items-center justify-center gap-2 shadow-lg"
-                        >
-                            <Edit2 size={16} />
-                            Edit in POS
-                        </button>
+                        {!isPaid && (
+                            <button
+                                onClick={() => {
+                                    onEditInPOS();
+                                    onClose();
+                                }}
+                                className="flex-1 bg-gold-500 hover:bg-gold-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition-all flex items-center justify-center gap-2 shadow-lg"
+                            >
+                                <Edit2 size={16} />
+                                Edit in POS
+                            </button>
+                        )}
                     </div>
                 </div>
 

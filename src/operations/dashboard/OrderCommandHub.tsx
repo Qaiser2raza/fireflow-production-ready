@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App';
 import {
-  CheckCircle2, Loader2, Bike, Zap, LayoutGrid, Map as MapIcon, Circle
+  CheckCircle2, Loader2, Bike, Zap, LayoutGrid, Map as MapIcon, Circle, History as HistoryIcon
 } from 'lucide-react';
 import { LiveFloorView } from './LiveFloorView';
 import { TableCard } from './components/TableCard';
@@ -9,11 +9,16 @@ import { MetricsDashboard } from './components/MetricsDashboard';
 import { RecallModal } from './components/RecallModal';
 import { Order, OrderStatus } from '../../shared/types';
 
+import { OrderDetailModal } from './components/OrderDetailModal';
+
 export const OrderCommandHub: React.FC = () => {
   const { tables, orders, sections, setActiveView, seatGuests, setOrderToEdit, updateOrderStatus, cancelOrder, currentUser } = useAppContext();
   const [activeZone, setActiveZone] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'GRID' | 'FLOOR'>('GRID');
   const [showRecallModal, setShowRecallModal] = useState(false);
+  const [asideTab, setAsideTab] = useState<'LIVE' | 'HISTORY'>('LIVE');
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
 
   // Filter tables by zone
   const filteredTables = useMemo(() => {
@@ -28,12 +33,15 @@ export const OrderCommandHub: React.FC = () => {
 
   // Get takeaway/delivery orders for pulse feed
   const pulseOrders = useMemo(() => {
-    return orders.filter(o =>
-      (o.type === 'TAKEAWAY' || o.type === 'DELIVERY') &&
-      o.status !== OrderStatus.CLOSED &&
-      o.status !== OrderStatus.CANCELLED
-    ).sort((a, b) => new Date(b.created_at || b.timestamp || 0).getTime() - new Date(a.created_at || a.timestamp || 0).getTime());
-  }, [orders]);
+    return orders.filter(o => {
+      if (asideTab === 'HISTORY') {
+        return o.status === OrderStatus.CLOSED || o.payment_status === 'PAID';
+      }
+      return (o.type === 'TAKEAWAY' || o.type === 'DELIVERY') &&
+        o.status !== OrderStatus.CLOSED &&
+        o.status !== OrderStatus.CANCELLED;
+    }).sort((a, b) => new Date(b.created_at || b.timestamp || 0).getTime() - new Date(a.created_at || a.timestamp || 0).getTime());
+  }, [orders, asideTab]);
 
   // Sort tables by urgency
   const sortedTables = useMemo(() => {
@@ -58,7 +66,10 @@ export const OrderCommandHub: React.FC = () => {
   }, [filteredTables, dineInOrders]);
 
   const handleOrderClick = (order: Order) => {
-    if (order.type === 'DELIVERY' && order.status === OrderStatus.READY) {
+    if (order.status === OrderStatus.CLOSED || order.payment_status === 'PAID') {
+        setSelectedOrder(order);
+        setShowDetailModal(true);
+    } else if (order.type === 'DELIVERY' && order.status === OrderStatus.READY) {
       setActiveView('dispatch');
     } else {
       setOrderToEdit(order);
@@ -191,21 +202,47 @@ export const OrderCommandHub: React.FC = () => {
       {/* RIGHT PULSE FEED */}
       <aside className="w-80 bg-[#050810] border-l border-slate-800/50 flex flex-col overflow-hidden">
         <div className="p-4 border-b border-slate-800/50">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Zap size={16} className="text-gold-500" />
               <h2 className="text-sm font-black uppercase tracking-widest">The Pulse</h2>
             </div>
-            <span className="bg-gold-500 text-black text-xs font-black px-2 py-1 rounded">
-              {pulseOrders.length} Active
-            </span>
+            {asideTab === 'LIVE' && (
+              <span className="bg-gold-500 text-black text-[9px] font-black px-2 py-1 rounded">
+                {pulseOrders.length} Active
+              </span>
+            )}
+          </div>
+
+          <div className="flex bg-black/40 p-1 rounded-xl border border-white/5">
+              <button 
+                onClick={() => setAsideTab('LIVE')}
+                className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${asideTab === 'LIVE' ? 'bg-slate-800 text-white' : 'text-slate-500'}`}
+              >
+                Live Feed
+              </button>
+              <button 
+                onClick={() => setAsideTab('HISTORY')}
+                className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${asideTab === 'HISTORY' ? 'bg-slate-800 text-white' : 'text-slate-500'}`}
+              >
+                Recent History
+              </button>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {pulseOrders.map(order => (
-            <PulseCard key={order.id} order={order} />
-          ))}
+          {pulseOrders.length > 0 ? (
+            pulseOrders.map(order => (
+              <div key={order.id} onClick={() => handleOrderClick(order)} className="cursor-pointer">
+                <PulseCard order={order} />
+              </div>
+            ))
+          ) : (
+              <div className="h-full flex flex-col items-center justify-center opacity-20 transform -rotate-6">
+                  <HistoryIcon size={48} className="mb-4" />
+                  <span className="text-[10px] font-black uppercase tracking-[0.2em]">No {asideTab === 'LIVE' ? 'Live' : 'History'} Orders</span>
+              </div>
+          )}
         </div>
       </aside>
 
@@ -221,6 +258,24 @@ export const OrderCommandHub: React.FC = () => {
           currentUser={currentUser}
           orders={orders}
         />
+      )}
+
+      {/* Order Detail Modal for Reprinting/History */}
+      {selectedOrder && (
+          <OrderDetailModal
+            isOpen={showDetailModal}
+            onClose={() => {
+                setShowDetailModal(false);
+                setSelectedOrder(null);
+            }}
+            order={selectedOrder}
+            table={tables.find(t => t.id === selectedOrder.table_id) as any}
+            currentUser={currentUser}
+            onEditInPOS={() => {
+                setOrderToEdit(selectedOrder);
+                setActiveView('pos');
+            }}
+          />
       )}
     </div>
   );

@@ -37,9 +37,27 @@ const payoutSchema = z.object({
  */
 router.get('/session', async (req, res) => {
     try {
-        const restaurantId = req.restaurantId!; // SaaS Security
-        const session = await accounting.getSessionMetrics(restaurantId);
+        const restaurantId = req.restaurantId!; 
+        const { date } = req.query;
+        const session = await accounting.getSessionMetrics(restaurantId, date as string);
         res.json({ success: true, session });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * GET /api/accounting/ledger/export
+ * Download CSV export of ledger
+ */
+router.get('/ledger/export', async (req, res) => {
+    try {
+        const restaurantId = req.restaurantId!;
+        const csv = await accounting.exportLedgerToCSV(restaurantId);
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename=ledger_${new Date().toISOString().split('T')[0]}.csv`);
+        res.send(csv);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }

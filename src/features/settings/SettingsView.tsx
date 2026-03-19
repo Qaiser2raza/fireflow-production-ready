@@ -19,6 +19,7 @@ import { BusinessProfilePanel } from './config/BusinessProfilePanel';
 import { ReceiptSetupPanel } from './config/ReceiptSetupPanel';
 import { SetupWizard } from './config/SetupWizard';
 import { InvoiceTemplatesPanel } from './config/InvoiceTemplatesPanel';
+import { DeviceManagementView } from './DeviceManagementView';
 
 import { CustomersView } from '../../operations/customers/CustomersView';
 import { MenuView } from '../../operations/menu/MenuView';
@@ -80,6 +81,7 @@ export const SettingsView: React.FC = () => {
       items: [
         { id: 'printers', label: 'Printers', icon: Printer },
         { id: 'invoice-templates', label: 'Invoice templates', icon: FileType },
+        { id: 'devices', label: 'Device Management', icon: Cpu },
       ]
     },
     {
@@ -178,9 +180,10 @@ export const SettingsView: React.FC = () => {
             {activePanel === 'billing' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><BillingView /></div>}
             {activePanel === 'active-orders' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><OrdersView /></div>}
             {activePanel === 'transactions' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><TransactionsView /></div>}
-            {activePanel === 'audit-log' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><ActivityLog /></div>}
-            {activePanel === 'modules' && <FeaturesPanel />}
-            {activePanel === 'system-update' && <SystemUpdatePanel />}
+            { activePanel === 'audit-log' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><ActivityLog /></div> }
+            { activePanel === 'modules' && <FeaturesPanel /> }
+            { activePanel === 'system-update' && <SystemUpdatePanel /> }
+            { activePanel === 'devices' && <div className="h-[80vh] bg-slate-950/20 border border-slate-800 rounded-2xl overflow-hidden"><DeviceManagementView /></div> }
           </div>
         </div>
       </div>

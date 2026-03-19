@@ -7,7 +7,7 @@ import {
   TrendingUp, BarChart2, Package, LayoutGrid,
   ToggleLeft, ToggleRight,
   ChefHat, Activity, Save, X, Network,
-  AlertCircle, RefreshCw, Clock
+  AlertCircle, RefreshCw, Clock, Upload
 } from 'lucide-react';
 
 import { Button } from '../../shared/ui/Button';
@@ -31,7 +31,8 @@ export const MenuView: React.FC = () => {
     addStation,
     updateStation,
     deleteStation,
-    fetchInitialData
+    fetchInitialData,
+    addNotification
   } = useAppContext();
 
   // Hub State
@@ -45,6 +46,7 @@ export const MenuView: React.FC = () => {
 
   // Station Management State
   const [isStationAdding, setIsStationAdding] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [newStationName, setNewStationName] = useState('');
   const [editingStationId, setEditingStationId] = useState<string | null>(null);
   const [editingStationName, setEditingStationName] = useState('');
@@ -126,11 +128,11 @@ export const MenuView: React.FC = () => {
         description: '',
         price: '',
         cost_price: '0',
-        category_id: menuCategories[0]?.id || '',
+        category_id: '',
         image_url: '',
         is_available: true,
         station: '',
-        station_id: stations[0]?.id || '',
+        station_id: '',
         requires_prep: true,
         track_stock: false,
         daily_stock: '0',
@@ -142,6 +144,15 @@ export const MenuView: React.FC = () => {
 
   const onItemSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.category_id) {
+        addNotification('error', 'Please select a Category for this item.');
+        return;
+    }
+    if (formData.requires_prep && !formData.station_id) {
+        addNotification('error', 'Please select a Routing Station since preparation is required.');
+        return;
+    }
+
     const payload = {
       ...formData,
       price: parseFloat(formData.price) || 0,
@@ -215,6 +226,37 @@ export const MenuView: React.FC = () => {
         name: editingStationName.toUpperCase()
       });
       setEditingStationId(null);
+    }
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    try {
+        const formDataUpload = new FormData();
+        formDataUpload.append('image', file);
+
+        const token = sessionStorage.getItem('accessToken');
+        const res = await fetch('/api/upload/menu-image', {
+            method: 'POST',
+            headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+            body: formDataUpload
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || 'Upload failed');
+        }
+
+        const data = await res.json();
+        setFormData(prev => ({ ...prev, image_url: data.url }));
+        addNotification('success', 'Image uploaded successfully');
+    } catch (err: any) {
+        addNotification('error', `Upload failed: ${err.message}`);
+    } finally {
+        setIsUploading(false);
     }
   };
 
@@ -641,6 +683,7 @@ export const MenuView: React.FC = () => {
                 value={formData.category_id}
                 onChange={e => setFormData({ ...formData, category_id: e.target.value })}
               >
+                <option value="" disabled>SELECT CATEGORY</option>
                 {menuCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
@@ -658,12 +701,47 @@ export const MenuView: React.FC = () => {
                 {stations.map(s => <option key={s.id} value={s.id}>{s.name} {s.is_active ? '●' : '○'}</option>)}
               </select>
             </div>
-            <div className="space-y-1.5 flex flex-col justify-end">
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block pl-1">Asset Reference Link (Image URL)</label>
-              <div className="flex gap-2">
-                <Input value={formData.image_url} onChange={e => setFormData({ ...formData, image_url: e.target.value })} className="bg-slate-950 border-slate-800 font-mono text-[10px] h-12 flex-1" placeholder="https://..." />
+            <div className="space-y-1.5 flex flex-col justify-end col-span-2">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block pl-1">Item Image</label>
+              <div className="flex gap-2 items-center">
+                {/* URL input — still works for external URLs */}
+                <Input
+                  value={formData.image_url}
+                  onChange={e => setFormData({ ...formData, image_url: e.target.value })}
+                  className="bg-slate-950 border-slate-800 font-mono text-[10px] h-12 flex-1"
+                  placeholder="https://... or upload below"
+                />
+                {/* Upload button */}
+                <label className={`shrink-0 h-12 px-4 rounded-xl border flex items-center gap-2 cursor-pointer transition-all text-[10px] font-black uppercase tracking-widest ${isUploading ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600/20 border-blue-500/40 text-blue-400 hover:bg-blue-600/30'}`}>
+                  {isUploading ? (
+                    <>
+                      <RefreshCw size={14} className="animate-spin" />
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={14} />
+                      <span>Upload</span>
+                    </>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    className="hidden"
+                    disabled={isUploading}
+                    onChange={handleImageUpload}
+                  />
+                </label>
+                {/* Preview */}
                 <div className="size-12 rounded-lg bg-slate-900 border border-slate-800 shrink-0 overflow-hidden">
-                  {formData.image_url && <img src={formData.image_url} alt="Preview" className="w-full h-full object-cover" />}
+                  {formData.image_url && (
+                    <img
+                      src={formData.image_url}
+                      alt="Preview"
+                      className="w-full h-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  )}
                 </div>
               </div>
             </div>

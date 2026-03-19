@@ -43,16 +43,12 @@ export const ReceiptView: React.FC<ReceiptViewProps> = ({
             visibility: visible !important;
           }
           #receipt-print-area {
-            position: absolute;
-            left: 0;
-            top: 0;
             width: 65mm !important;
             padding: 2mm !important;
             margin: 0 !important;
             background: white !important;
             color: black !important;
             box-sizing: border-box !important;
-            overflow: hidden !important;
           }
           @page {
             size: 80mm auto;

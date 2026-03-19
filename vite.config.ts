@@ -21,6 +21,10 @@ export default defineConfig(({ mode }) => {
           target: 'http://127.0.0.1:3001',
           ws: true,
         },
+        '/uploads': {
+          target: 'http://127.0.0.1:3001',
+          changeOrigin: true,
+        },
       },
     },
     plugins: [
