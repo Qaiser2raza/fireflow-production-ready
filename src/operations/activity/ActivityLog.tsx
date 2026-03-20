@@ -12,7 +12,7 @@ import {
 import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
 
 export const ActivityLog: React.FC = () => {
-   const { orders, tables, setOrderToEdit, setActiveView, currentUser, addNotification, fetchInitialData } = useAppContext();
+   const { orders, tables, setOrderToEdit, setActiveView, currentUser, addNotification, fetchInitialData, voidOrder } = useAppContext();
 
    // States
    const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED'>('ALL');
@@ -161,7 +161,7 @@ export const ActivityLog: React.FC = () => {
       if (!pin) return;
 
       try {
-         const success = await useAppContext().voidOrder(
+         const success = await voidOrder(
             order.id,
             reason,
             'Administrative Void from Command Hub',
