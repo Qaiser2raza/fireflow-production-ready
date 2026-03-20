@@ -89,7 +89,7 @@ export const LogisticsHub: React.FC = () => {
          for (const orderId of selectedOrderIds) {
             const res = await fetchWithAuth(`${API}/orders/${orderId}/assign-driver`, {
                method: 'POST',
-               headers: { 'Content-Type': 'application/json', 'x-staff-id': currentUser?.id || '', 'x-restaurant-id': currentUser?.restaurant_id || '' },
+               headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ driverId: dispatchRiderId, processedBy: currentUser?.id }),
             });
             const d = await res.json();

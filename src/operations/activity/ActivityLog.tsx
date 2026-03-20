@@ -154,22 +154,25 @@ export const ActivityLog: React.FC = () => {
       }
    };
    const handleVoidOrder = async (order: Order) => {
-      if (!confirm(`VOID ORDER #${order.order_number || order.id.slice(-4)}? This is a permanent administrative action.`)) return;
-      try {
-         const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/orders?id=${order.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-               status: 'VOIDED',
-               last_action_desc: 'Administrative Void from Command Hub',
-               updated_at: new Date()
-            })
-         });
+      const reason = window.prompt(`Enter VOID reason for Order #${order.order_number || order.id.slice(-4)}:`, 'Mistake / Customer Cancellation');
+      if (!reason) return;
+      
+      const pin = window.prompt('Enter Manager PIN to authorize VOID:');
+      if (!pin) return;
 
-         if (!res.ok) throw new Error('Failed to void order');
-         addNotification('warning', 'Order has been VOIDED');
-         setSelectedOrder(null);
-         fetchInitialData();
+      try {
+         const success = await useAppContext().voidOrder(
+            order.id,
+            reason,
+            'Administrative Void from Command Hub',
+            'CASH', // Default refund method for now
+            pin
+         );
+
+         if (success) {
+            setSelectedOrder(null);
+            fetchInitialData();
+         }
       } catch (err: any) {
          addNotification('error', err.message);
       }
@@ -178,7 +181,7 @@ export const ActivityLog: React.FC = () => {
    const handleDeleteOrder = async (order: Order) => {
       if (!confirm(`DELETE ORDER #${order.order_number || order.id.slice(-4)}? This cannot be undone and will be removed from logs.`)) return;
       try {
-         const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/orders?id=${order.id}`, {
+         const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/orders/${order.id}`, {
             method: 'DELETE'
          });
 
