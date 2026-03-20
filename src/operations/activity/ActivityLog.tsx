@@ -6,8 +6,10 @@ import {
    Search, Clock, Receipt, ArrowRight, ShoppingBag,
    Truck, Utensils, XCircle, CheckCircle2, History,
    FileText, Calendar, Wallet, HandCoins, Timer,
-   LayoutGrid, List as ListIcon, MoreHorizontal, Unlock
+   LayoutGrid, List as ListIcon, MoreHorizontal, Unlock,
+   Printer, Trash2, Slash, PowerOff
 } from 'lucide-react';
+import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
 
 export const ActivityLog: React.FC = () => {
    const { orders, tables, setOrderToEdit, setActiveView, currentUser, addNotification, fetchInitialData } = useAppContext();
@@ -18,6 +20,7 @@ export const ActivityLog: React.FC = () => {
    const [viewMode, setViewMode] = useState<'CARDS' | 'LIST'>('CARDS');
    const [searchQuery, setSearchQuery] = useState('');
    const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+   const [showPrintModal, setShowPrintModal] = useState(false);
 
    // Grouped Statuses for Filter Logic (v3.0)
    const activeStatuses = ['ACTIVE', 'READY'];
@@ -144,6 +147,43 @@ export const ActivityLog: React.FC = () => {
          }
 
          addNotification('success', 'Order unlocked and returned to ACTIVE state.');
+         setSelectedOrder(null);
+         fetchInitialData();
+      } catch (err: any) {
+         addNotification('error', err.message);
+      }
+   };
+   const handleVoidOrder = async (order: Order) => {
+      if (!confirm(`VOID ORDER #${order.order_number || order.id.slice(-4)}? This is a permanent administrative action.`)) return;
+      try {
+         const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/orders?id=${order.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+               status: 'VOIDED',
+               last_action_desc: 'Administrative Void from Command Hub',
+               updated_at: new Date()
+            })
+         });
+
+         if (!res.ok) throw new Error('Failed to void order');
+         addNotification('warning', 'Order has been VOIDED');
+         setSelectedOrder(null);
+         fetchInitialData();
+      } catch (err: any) {
+         addNotification('error', err.message);
+      }
+   };
+
+   const handleDeleteOrder = async (order: Order) => {
+      if (!confirm(`DELETE ORDER #${order.order_number || order.id.slice(-4)}? This cannot be undone and will be removed from logs.`)) return;
+      try {
+         const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/orders?id=${order.id}`, {
+            method: 'DELETE'
+         });
+
+         if (!res.ok) throw new Error('Failed to delete order');
+         addNotification('success', 'Order has been deleted');
          setSelectedOrder(null);
          fetchInitialData();
       } catch (err: any) {
@@ -580,25 +620,60 @@ export const ActivityLog: React.FC = () => {
                </div>
 
                {/* Command Override */}
-               <div className="p-6 border-t border-slate-800 bg-slate-950 shadow-[0_-10px_20_rgba(0,0,0,0.5)]">
-                  {activeStatuses.includes(selectedOrder.status as string) ? (
+               <div className="p-6 border-t border-slate-800 bg-slate-950/80 backdrop-blur-sm space-y-3">
+                  <div className="flex gap-3">
                      <button
-                        onClick={() => handleEditOrder(selectedOrder)}
-                        className="w-full py-5 bg-gradient-to-r from-gold-600 to-gold-400 text-slate-950 font-black uppercase tracking-[0.2em] rounded-2xl hover:from-gold-500 hover:to-gold-300 transition-all shadow-xl shadow-gold-500/20 flex items-center justify-center gap-3 active:scale-95 transition-transform"
+                        onClick={() => setShowPrintModal(true)}
+                        className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-white font-black uppercase tracking-widest rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 active:scale-95"
                      >
-                        <Receipt size={18} /> Recall Transaction
+                        <Printer size={18} /> Print
                      </button>
-                  ) : (
-                     ['ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(currentUser?.role || '') && (
+                     
+                     {activeStatuses.includes(selectedOrder.status as string) ? (
                         <button
-                           onClick={() => handleUnlockOrder(selectedOrder)}
-                           className="w-full py-5 bg-gradient-to-r from-rose-600/20 to-rose-400/20 text-rose-500 border border-rose-500/50 font-black uppercase tracking-[0.2em] rounded-2xl hover:bg-rose-500/30 transition-all shadow-xl flex items-center justify-center gap-3 active:scale-95 transition-transform"
+                           onClick={() => handleEditOrder(selectedOrder)}
+                           className="flex-[2] py-4 bg-gradient-to-r from-gold-600 to-gold-400 text-slate-950 font-black uppercase tracking-[0.2em] rounded-xl hover:from-gold-500 hover:to-gold-300 transition-all shadow-xl shadow-gold-500/10 flex items-center justify-center gap-3 active:scale-95"
                         >
-                           <Unlock size={18} /> Unlock Order
+                           <Receipt size={18} /> Recall
                         </button>
-                     )
+                     ) : (
+                        ['ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(currentUser?.role || '') && (
+                           <button
+                              onClick={() => handleUnlockOrder(selectedOrder)}
+                              className="flex-[2] py-4 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 font-black uppercase tracking-[0.2em] rounded-xl hover:bg-indigo-500/20 transition-all shadow-xl flex items-center justify-center gap-3 active:scale-95"
+                           >
+                              <Unlock size={18} /> Unlock
+                           </button>
+                        )
+                     )}
+                  </div>
+
+                  {/* Destructive Actions (Admin/Manager Only) */}
+                  {['ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(currentUser?.role || '') && (
+                     <div className="flex gap-3 pt-2">
+                        <button
+                           onClick={() => handleVoidOrder(selectedOrder)}
+                           className="flex-1 py-3 bg-red-900/10 hover:bg-red-900/20 text-red-500 border border-red-500/20 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2"
+                        >
+                           <Slash size={14} /> Void
+                        </button>
+                        <button
+                           onClick={() => handleDeleteOrder(selectedOrder)}
+                           className="flex-1 py-3 bg-slate-900 hover:bg-red-500 hover:text-white border border-slate-800 text-slate-500 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2"
+                        >
+                           <Trash2 size={14} /> Delete
+                        </button>
+                     </div>
                   )}
                </div>
+
+               {/* Print Modal */}
+               <ReceiptPreviewModal 
+                  isOpen={showPrintModal}
+                  onClose={() => setShowPrintModal(false)}
+                  order={selectedOrder}
+                  title={`Order #${selectedOrder.order_number || selectedOrder.id.slice(-6)}`}
+               />
             </div>
          )}
       </div>

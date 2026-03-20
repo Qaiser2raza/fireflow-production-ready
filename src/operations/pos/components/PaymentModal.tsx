@@ -178,16 +178,52 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         )}
                     </div>
 
-                    {/* Totals */}
-                    <div className="p-6 bg-slate-900 border-t border-slate-800">
-                        <div className="flex justify-between text-slate-400 mb-2">
-                            <span>Subtotal</span>
-                            <span>{breakdown.subtotal.toLocaleString()}</span>
+                    {/* Totals Breakdown */}
+                    <div className="p-6 bg-black/20 border-t border-slate-800 space-y-2">
+                        <div className="flex justify-between text-xs text-slate-400">
+                            <span>Gross Subtotal</span>
+                            <span className="font-mono">Rs. {breakdown.subtotal.toLocaleString()}</span>
                         </div>
-                        <div className="flex justify-between items-end pt-4 border-t border-slate-800/50">
-                            <span className="text-sm font-bold text-slate-400 uppercase tracking-widest">Payable Total</span>
-                            <span className="text-3xl font-black text-white italic">
-                                <span className="text-lg text-slate-600 font-normal mr-1">Rs.</span>
+                        
+                        {breakdown.discount > 0 && (
+                            <div className="flex justify-between text-xs text-red-400/80 italic">
+                                <span>Discount ({breakdown.discountPercent > 0 ? `${breakdown.discountPercent}%` : 'Flat'})</span>
+                                <span className="font-mono">-Rs. {breakdown.discount.toLocaleString()}</span>
+                            </div>
+                        )}
+
+                        {breakdown.serviceCharge > 0 && (
+                            <div className="flex justify-between text-xs text-blue-400/80">
+                                <span>Service Charge</span>
+                                <span className="font-mono">Rs. {breakdown.serviceCharge.toLocaleString()}</span>
+                            </div>
+                        )}
+
+                        {breakdown.tax > 0 && (
+                            <div className="flex justify-between text-xs text-gold-500/80">
+                                <span>{order.breakdown?.taxLabel || 'Tax'}</span>
+                                <span className="font-mono">Rs. {breakdown.tax.toLocaleString()}</span>
+                            </div>
+                        )}
+
+                        {breakdown.deliveryFee > 0 && (
+                            <div className="flex justify-between text-xs text-purple-400/80">
+                                <span>Delivery Fee</span>
+                                <span className="font-mono">Rs. {breakdown.deliveryFee.toLocaleString()}</span>
+                            </div>
+                        )}
+
+                        {roundToNearest10 && (finalTotal - breakdown.total) !== 0 && (
+                            <div className="flex justify-between text-[10px] text-slate-600 border-t border-white/5 pt-1">
+                                <span>Rounding Adjustment</span>
+                                <span className="font-mono">{(finalTotal - breakdown.total) > 0 ? '+' : ''}Rs. {(finalTotal - breakdown.total).toLocaleString()}</span>
+                            </div>
+                        )}
+
+                        <div className="flex justify-between items-end pt-4 border-t border-slate-700/50 mt-2">
+                            <span className="text-sm font-bold text-slate-400 uppercase tracking-widest leading-none pb-1">Total Payable</span>
+                            <span className="text-4xl font-black text-white italic tracking-tighter">
+                                <span className="text-xl text-slate-600 font-normal mr-1 not-italic">Rs.</span>
                                 {finalTotal.toLocaleString()}
                             </span>
                         </div>

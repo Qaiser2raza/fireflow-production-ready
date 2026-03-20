@@ -6,11 +6,10 @@ import { QRCodeSVG } from 'qrcode.react';
 interface LoginViewProps {
   onLogin: (pin: string) => Promise<boolean | void> | void;
   onStartRegistration?: () => void;
-  onStartPairing?: () => void;
   restaurantName?: string;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, onStartRegistration, restaurantName }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartRegistration, restaurantName }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -207,14 +206,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartPairing, o
             </button>
           )}
 
-          {onStartPairing && (
-            <button
-              onClick={onStartPairing}
-              className="w-full py-2 mt-2 rounded-xl font-bold uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all text-slate-600 hover:text-cyan-400 text-[10px]"
-            >
-              Pair Device
-            </button>
-          )}
 
           <button
             onClick={() => { setShowConnectModal(true); fetchConnectivity(); }}

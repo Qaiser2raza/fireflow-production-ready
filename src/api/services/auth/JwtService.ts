@@ -88,10 +88,13 @@ export class JwtService {
     staffId: string,
     restaurantId: string,
     role: string,
-    name: string
+    name: string,
+    expiresInSeconds?: number
   ): string {
     const now = Math.floor(Date.now() / 1000);
-    const exp = now + JWT_ACCESS_EXPIRY_MINUTES * 60;
+    const exp = expiresInSeconds 
+      ? now + expiresInSeconds 
+      : now + JWT_ACCESS_EXPIRY_MINUTES * 60;
 
     const payload: JwtPayload = {
       staffId,

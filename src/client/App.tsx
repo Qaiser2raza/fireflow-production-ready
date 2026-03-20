@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Vendor, Station } from '../shared/types';
-import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History } from 'lucide-react';
+import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History, Truck, Package } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
 import { fetchWithAuth } from '../shared/lib/authInterceptor';
 import { calculateBill, getDefaultBillConfig } from '../lib/billEngine';
@@ -33,6 +33,8 @@ import { BillingView } from '../features/restaurant/BillingView';
 import FinancialCommandCenter from '../operations/finance/FinancialCommandCenter';
 import { RoleContextBar } from './components/RoleContextBar';
 import { CommandPalette } from './components/CommandPalette';
+import { SessionExpiredView } from '../auth/views/SessionExpiredView';
+import { RiderView } from '../operations/logistics/RiderView';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { PreferencesProvider } from './contexts/PreferencesContext';
 import { RestaurantProvider } from './RestaurantContext';
@@ -338,6 +340,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
     }
 
+    const handleSessionExpired = () => {
+      logout();
+      setActiveView('SESSION_EXPIRED');
+    };
+
+    window.addEventListener('session:expired', handleSessionExpired);
+
     // Real-time DB listeners
     socketIO.on('db_change', (payload: any) => {
       if (process.env.NODE_ENV === 'development') console.log("Real-time DB Change:", payload);
@@ -490,6 +499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       socketIO.off('db_change');
+      window.removeEventListener('session:expired', handleSessionExpired);
       // We don't call disconnect() here to prevent "flapping" 
       // when React unmounts/remounts during login cycles.
       // The singleton will handle cleanup when needed.
@@ -834,6 +844,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           addNotification('error', e.message);
         }
       },
+
     } as any}>
       {children}
     </AppContext.Provider>
@@ -842,10 +853,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 // --- 3. THE UI CONTENT WRAPPER ---
 const AppContent = () => {
-  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables } = useAppContext();
+  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, connectionStatus } = useAppContext();
   const isMobile = useIsMobile();
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
-  const [showDevicePairing, setShowDevicePairing] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -874,21 +884,11 @@ const AppContent = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  if (showDevicePairing) {
-    const { DevicePairingVerificationView } = require('../auth/views/DevicePairingVerificationView');
-    return (
-      <DevicePairingVerificationView
-        onPairingSuccess={() => {
-          setShowDevicePairing(false);
-          // Reload to pick up auth token and proceed to login
-          window.location.reload();
-        }}
-        onCancel={() => setShowDevicePairing(false)}
-      />
-    );
+  if (activeView === 'SESSION_EXPIRED') {
+    return <SessionExpiredView onBackToLogin={() => setActiveView('LOGIN')} />;
   }
 
-  if (!currentUser) return <LoginView onLogin={login} onStartPairing={() => setShowDevicePairing(true)} />;
+  if (!currentUser) return <LoginView onLogin={login} />;
 
   const getMenuItems = () => {
     if (currentUser.role === 'SUPER_ADMIN') {
@@ -900,8 +900,9 @@ const AppContent = () => {
       { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Hub', roles: ['ADMIN', 'MANAGER', 'SERVER', 'WAITER', 'CASHIER'] },
       { id: 'POS', icon: Grid, label: 'POS Control', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
       { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed', roles: ['ADMIN', 'MANAGER', 'CHEF'] },
-      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub', roles: ['ADMIN', 'MANAGER', 'RIDER', 'CASHIER'] },
-      { id: 'ACTIVITY', icon: History, label: 'Command Hub', roles: ['ADMIN', 'MANAGER'] },
+      { id: 'LOGISTICS', icon: Package, label: 'Logistics Hub', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
+      { id: 'RIDER_VIEW', icon: Bike, label: 'Rider Portal', roles: ['RIDER'] },
+      { id: 'ACTIVITY', icon: History, label: 'Command Hub', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
       { id: 'FINANCE', icon: CreditCard, label: 'Finance', roles: ['ADMIN', 'MANAGER'] },
       { id: 'REGISTER', icon: CreditCard, label: 'Register', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
       { id: 'SETTINGS', icon: Settings, label: 'System', roles: ['ADMIN', 'MANAGER'] },
@@ -921,7 +922,9 @@ const AppContent = () => {
     { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: '🛒', roles: ['ADMIN', 'MANAGER', 'CASHIER'], action: () => setActiveView('POS') },
     { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: '👨‍🍳', roles: ['ADMIN', 'MANAGER', 'CHEF'], action: () => setActiveView('KITCHEN') },
     { id: 'nav-orders', label: 'Go to Dine-In Hub', shortcut: 'G O', category: 'Navigation', icon: '🍽️', roles: ['ADMIN', 'MANAGER', 'SERVER', 'WAITER', 'CASHIER'], action: () => setActiveView('ORDER_HUB') },
-    { id: 'nav-logistics', label: 'Go to Logistics', shortcut: 'G L', category: 'Navigation', icon: '🚚', roles: ['ADMIN', 'MANAGER', 'RIDER', 'CASHIER'], action: () => setActiveView('LOGISTICS') },
+    { id: 'nav-logistics', label: 'Go to Logistics', shortcut: 'G L', category: 'Navigation', icon: '🚚', roles: ['ADMIN', 'MANAGER', 'CASHIER'], action: () => setActiveView('LOGISTICS') },
+    { id: 'nav-rider-view', label: 'Go to Rider Portal', shortcut: 'G R', category: 'Navigation', icon: '🏍️', roles: ['RIDER'], action: () => setActiveView('RIDER_VIEW') },
+    { id: 'nav-activity', label: 'Go to Command Hub', shortcut: 'G A', category: 'Navigation', icon: '⚡', roles: ['ADMIN', 'MANAGER', 'SERVER', 'CASHIER'], action: () => setActiveView('ACTIVITY') },
     { id: 'nav-billing', label: 'Go to Billing', shortcut: 'G B', category: 'Navigation', icon: '💳', roles: ['ADMIN', 'MANAGER'], action: () => setActiveView('BILLING') },
     { id: 'nav-menu', label: 'Go to Menu', shortcut: 'G M', category: 'Navigation', icon: '☕', roles: ['ADMIN', 'MANAGER'], action: () => setActiveView('MENU') },
     { id: 'nav-settings', label: 'Go to Settings', shortcut: 'G S', category: 'Navigation', icon: '⚙️', roles: ['ADMIN', 'MANAGER'], action: () => setActiveView('SETTINGS') },
@@ -1102,7 +1105,8 @@ const AppContent = () => {
                 activeView === 'DASHBOARD' ? <DashboardView /> :
                   activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
                     activeView === 'KITCHEN' ? <KDSView /> :
-                      activeView === 'LOGISTICS' ? <LogisticsHub /> :
+                      active_view === 'RIDER_VIEW' || activeView === 'RIDER_VIEW' ? <RiderView /> :
+                        activeView === 'LOGISTICS' ? <LogisticsHub /> :
                         activeView === 'ACTIVITY' ? <ActivityLog /> :
                           activeView === 'REGISTER' ? <TransactionsView /> :
                             activeView === 'BILLING' ? <BillingView /> :
@@ -1116,39 +1120,25 @@ const AppContent = () => {
         {/* Mobile Bottom Navigation Bar */}
         {isMobile && currentUser && (
           <nav className="bg-[#0B0F19]/95 backdrop-blur-2xl border-t border-white/5 px-2 py-3 flex items-center justify-around shrink-0 relative z-[70] pb-6">
-            <button 
-              onClick={() => setActiveView('DASHBOARD')}
-              className={`flex flex-col items-center gap-1.5 transition-all ${activeView === 'DASHBOARD' ? 'text-gold-500 translate-y-[-2px]' : 'text-slate-500'}`}
-            >
-              <Layout size={20} className={activeView === 'DASHBOARD' ? 'fill-gold-500/20' : ''} />
-              <span className="text-[8px] font-black uppercase tracking-widest">Aura Dash</span>
-            </button>
+            {menuItems.slice(0, 4).map((item) => (
+              <button 
+                key={item.id}
+                onClick={() => setActiveView(item.id)}
+                className={`flex flex-col items-center gap-1.5 transition-all ${activeView === item.id ? 'text-gold-500 translate-y-[-2px]' : 'text-slate-500'}`}
+              >
+                {item.id === 'POS' ? (
+                  <div className={`p-2 rounded-2xl ${activeView === 'POS' ? 'bg-gold-500 text-black shadow-lg shadow-gold-500/20 ring-4 ring-gold-500/10' : 'bg-slate-900'}`}>
+                    <item.icon size={22} />
+                  </div>
+                ) : (
+                  <>
+                    <item.icon size={20} className={activeView === item.id ? 'fill-gold-500/20' : ''} />
+                    <span className="text-[8px] font-black uppercase tracking-widest">{item.label}</span>
+                  </>
+                )}
+              </button>
+            ))}
             
-            <button 
-              onClick={() => setActiveView('ORDER_HUB')}
-              className={`flex flex-col items-center gap-1.5 transition-all ${activeView === 'ORDER_HUB' ? 'text-gold-500 translate-y-[-2px]' : 'text-slate-500'}`}
-            >
-              <Utensils size={20} className={activeView === 'ORDER_HUB' ? 'fill-gold-500/20' : ''} />
-              <span className="text-[8px] font-black uppercase tracking-widest">Order Hub</span>
-            </button>
-
-            <button 
-              onClick={() => setActiveView('POS')}
-              className={`flex flex-col items-center gap-1 transition-all ${activeView === 'POS' ? 'text-gold-500 translate-y-[-2px]' : 'text-slate-500'}`}
-            >
-              <div className={`p-2 rounded-2xl ${activeView === 'POS' ? 'bg-gold-500 text-black shadow-lg shadow-gold-500/20 ring-4 ring-gold-500/10' : 'bg-slate-900'}`}>
-                <Grid size={22} />
-              </div>
-            </button>
-
-            <button 
-              onClick={() => setActiveView('KITCHEN')}
-              className={`flex flex-col items-center gap-1.5 transition-all ${activeView === 'KITCHEN' ? 'text-gold-500 translate-y-[-2px]' : 'text-slate-500'}`}
-            >
-              <Coffee size={20} className={activeView === 'KITCHEN' ? 'fill-gold-500/20' : ''} />
-              <span className="text-[8px] font-black uppercase tracking-widest">KDS Feed</span>
-            </button>
-
             <button 
               onClick={() => setShowMobileMenu(true)}
               className={`flex flex-col items-center gap-1.5 transition-all ${showMobileMenu ? 'text-gold-500' : 'text-slate-500'}`}

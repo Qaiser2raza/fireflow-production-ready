@@ -77,9 +77,11 @@ export const POSView: React.FC = () => {
   );
 
   // Reset bill config to order-type defaults when order type changes
+  // v3.1: Skip reset if we are currently loading an order to edit (recall)
   useEffect(() => {
+    if (orderToEdit) return; 
     setBillConfig(getDefaultBillConfig(orderType, operationsConfig || {}));
-  }, [orderType, operationsConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [orderType, operationsConfig, orderToEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track mobile breakpoint
   useEffect(() => {
@@ -241,6 +243,22 @@ export const POSView: React.FC = () => {
         setCustomerPhone(deliveryData?.customer_phone || deliveryData?.customerPhone || orderToEdit.customer_phone || orderToEdit.customerPhone || '');
         setDeliveryAddress(deliveryData?.delivery_address || deliveryData?.deliveryAddress || orderToEdit.delivery_address || orderToEdit.deliveryAddress || '');
       }
+
+
+      // Restore Bill Config (v3.1 Fix: maintain accurate discounts/taxes on recall)
+      const savedBreakdown = orderToEdit.breakdown;
+      setBillConfig({
+        discountType: orderToEdit.discount_type || (savedBreakdown?.discountPercent > 0 ? 'percent' : 'flat'),
+        discountValue: orderToEdit.discount_value || orderToEdit.discount || savedBreakdown?.discountValue || savedBreakdown?.discount || 0,
+        serviceChargeEnabled: orderToEdit.service_charge !== undefined ? orderToEdit.service_charge > 0 : (savedBreakdown?.serviceCharge > 0),
+        serviceChargeRate: orderToEdit.service_charge_rate || savedBreakdown?.serviceChargeRate || 5,
+        taxEnabled: orderToEdit.tax !== undefined ? orderToEdit.tax > 0 : (savedBreakdown?.tax > 0),
+        taxRate: orderToEdit.tax_rate || savedBreakdown?.taxRate || (operationsConfig?.taxRate ?? 16),
+        taxLabel: orderToEdit.tax_label || savedBreakdown?.taxLabel || (operationsConfig?.taxLabel ?? 'GST'),
+        taxInclusive: orderToEdit.tax_type === 'INCLUSIVE' || (savedBreakdown?.taxInclusive ?? false),
+        deliveryFeeEnabled: orderToEdit.type === 'DELIVERY',
+        deliveryFee: orderToEdit.delivery_fee || savedBreakdown?.deliveryFee || 0,
+      });
 
       addNotification('info', `Editing Order #${orderToEdit.id.slice(-6)}`);
     }

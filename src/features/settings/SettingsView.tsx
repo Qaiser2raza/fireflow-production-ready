@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { useAppContext } from '../../client/contexts/AppContext';
 import { 
   Building2, Receipt, Calculator, Box, Map, Store, Printer, 
-  FileType, Users, Wand2, Database, LayoutGrid, Cpu
+  FileType, Users, Wand2, Database, LayoutGrid, Cpu, QrCode
 } from 'lucide-react';
 import { OperationsPanel } from './config/OperationsPanel';
 import { ZonesPanel } from './config/ZonesPanel';
@@ -20,6 +20,7 @@ import { ReceiptSetupPanel } from './config/ReceiptSetupPanel';
 import { SetupWizard } from './config/SetupWizard';
 import { InvoiceTemplatesPanel } from './config/InvoiceTemplatesPanel';
 import { DeviceManagementView } from './DeviceManagementView';
+import { QRCodePairing } from './QRCodePairing';
 
 import { CustomersView } from '../../operations/customers/CustomersView';
 import { MenuView } from '../../operations/menu/MenuView';
@@ -81,6 +82,7 @@ export const SettingsView: React.FC = () => {
       items: [
         { id: 'printers', label: 'Printers', icon: Printer },
         { id: 'invoice-templates', label: 'Invoice templates', icon: FileType },
+        { id: 'pairing', label: 'Device Pairing', icon: QrCode },
         { id: 'devices', label: 'Device Management', icon: Cpu },
       ]
     },
@@ -184,6 +186,8 @@ export const SettingsView: React.FC = () => {
             { activePanel === 'modules' && <FeaturesPanel /> }
             { activePanel === 'system-update' && <SystemUpdatePanel /> }
             { activePanel === 'devices' && <div className="h-[80vh] bg-slate-950/20 border border-slate-800 rounded-2xl overflow-hidden"><DeviceManagementView /></div> }
+            { activePanel === 'pairing' && <div className="h-[80vh] bg-slate-950/20 border border-slate-800 rounded-2xl overflow-hidden"><QRCodePairing /></div> }
+
           </div>
         </div>
       </div>

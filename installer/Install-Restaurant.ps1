@@ -1,6 +1,4 @@
-# FireFlow Complete Restaurant Setup Script
-# Run this script as Administrator
-
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
 param (
     [string]$DbPassword = "fireflow_admin",
     [string]$DbPort = "5432"
@@ -30,7 +28,8 @@ if (-Not (Get-Command "psql" -ErrorAction SilentlyContinue)) {
         Invoke-WebRequest -Uri "https://get.enterprisedb.com/postgresql/postgresql-14.10-1-windows-x64.exe" -OutFile $PgInstaller
     }
     Write-Host "      Installing PostgreSQL silently (this may take a few minutes)..."
-    $process = Start-Process -FilePath $PgInstaller -ArgumentList "--mode unattended --superpassword $DbPassword --serverport $DbPort" -Wait -PassThru
+    Start-Process -FilePath $PgInstaller -ArgumentList "--mode unattended --superpassword $DbPassword --serverport $DbPort" -Wait
+
     
     # Add to PATH
     $env:Path += ";C:\Program Files\PostgreSQL\14\bin"

@@ -13,6 +13,8 @@ import { Button } from '../../shared/ui/Button';
 import { Input } from '../../shared/ui/Input';
 import { Card } from '../../shared/ui/Card';
 import { Badge } from '../../shared/ui/Badge';
+import { getDeviceFingerprint } from '../../shared/lib/deviceFingerprint';
+
 
 interface DeviceFingerprint {
     userAgent: string;
@@ -49,23 +51,14 @@ function generateDeviceFingerprint(): DeviceFingerprint {
     const screenWidth = window.screen.width;
     const screenHeight = window.screen.height;
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-    const fingerprintString = `${userAgent}|${screenWidth}|${screenHeight}|${timezone}`;
-
-    // Same algorithm as QRCodePairing.tsx for consistency
-    let hash = 0;
-    for (let i = 0; i < fingerprintString.length; i++) {
-        const char = fingerprintString.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash;
-    }
+    const hash = getDeviceFingerprint();
 
     return {
         userAgent,
         screenWidth,
         screenHeight,
         timezone,
-        hash: Math.abs(hash).toString(16).padStart(8, '0')
+        hash
     };
 }
 

@@ -382,7 +382,7 @@ export abstract class BaseOrderService implements IOrderService {
 
             // 4. Socket.IO Trigger: Emit for FIRED items
             if (updatedItems.length > 0) {
-                io.emit('NEW_KITCHEN_ORDER', {
+                io.to(`restaurant:${order.restaurant_id}`).emit('NEW_KITCHEN_ORDER', {
                     order_id: orderId,
                     restaurant_id: order.restaurant_id,
                     items: updatedItems,
@@ -391,7 +391,7 @@ export abstract class BaseOrderService implements IOrderService {
             }
 
             // Also emit a general update for the Order Hub
-            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: order });
+            io.to(`restaurant:${order.restaurant_id}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: order });
 
             return order;
         });

@@ -8,7 +8,7 @@ import os from 'os';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../shared/lib/prisma';
 import rateLimit from 'express-rate-limit';
 import { logger, LogLevel, requestLoggerMiddleware } from '../shared/lib/logger';
 import { config, isCloudEnabled } from '../config/env';
@@ -125,7 +125,7 @@ import {
     setupGlobalErrorHandlers();
 })();
 
-const prisma = new PrismaClient();
+// Removed: const prisma = new PrismaClient();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -151,7 +151,7 @@ if (config.NODE_ENV === 'production') {
 // ==========================================
 // 🚀 AUTO-CONFIG & STARTUP SEQUENCE
 // ==========================================
-let isActivated = false;
+
 
 (async () => {
     try {
@@ -169,7 +169,7 @@ let isActivated = false;
 
             if (restaurant) {
                 // 3. If DB record exists, set global isActivated = true
-                isActivated = true;
+
                 console.log(`[SYSTEM] ✅ Machine activated for Restaurant ID: ${restaurantId}`);
 
                 // 4. If isActivated, start subscriptionChecker job
@@ -244,6 +244,8 @@ for (const p of possibleDistPaths) {
     }
 }
 
+
+
 if (distPath) {
     console.log(`[SERVER] ✅ Serving static frontend from: ${distPath}`);
     app.use(express.static(distPath));
@@ -276,7 +278,7 @@ app.get('/api/health', async (_req, res) => {
     }
 });
 
-app.get('/api/debug/paths', (req, res) => {
+app.get('/api/debug/paths', (_req, res) => {
     res.json({
         cwd: process.cwd(),
         dirname: _dirname,
@@ -458,12 +460,398 @@ app.post('/api/setup/activate', async (req, res) => {
             trial_ends_at: cloudReg.data.trial_ends_at,
             restaurant_name: restaurantName.trim(),
         });
-
     } catch (err: any) {
         console.error('[SETUP] Activation error:', err.message);
         return res.status(500).json({ error: 'Activation failed: ' + err.message });
     }
 });
+
+
+// ==========================================
+// 🔐 DEVICE PAIRING ENDPOINTS (SECURE)
+// ==========================================
+
+// Rate limiters
+const pairingGenerateLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute window
+    max: 5, // 5 requests per minute per IP
+    message: 'Too many pairing code requests, please wait before generating another',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+const pairingVerifyLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10, // 10 attempts per minute
+    message: 'Too many pairing attempts, please wait',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+/**
+ * POST /api/pairing/generate
+ * Generate a new pairing code for device registration
+ * 
+ * Auth: Required (must be logged-in staff)
+ * Rate limit: 5/min per IP
+ */
+app.post('/api/pairing/generate', 
+    authMiddleware, 
+    requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'),
+    pairingGenerateLimiter, 
+    async (req, res) => {
+    const { restaurantId, targetStaffId, durationHours } = req.body;
+    const staffId = req.staffId; // manager generating the code
+
+    // Input validation
+    if (!restaurantId || !staffId || !targetStaffId || durationHours === undefined) {
+        return res.status(400).json({ error: 'Missing restaurantId, targetStaffId or durationHours' });
+    }
+
+    const validDurations = [2, 8, 24, 72, 168, 87600];
+    if (!validDurations.includes(Number(durationHours))) {
+        return res.status(400).json({ error: 'Invalid duration' });
+    }
+
+    try {
+        // Generate pairing code with target staff info
+        const result = await generatePairingCode(
+            restaurantId, 
+            staffId, 
+            targetStaffId, 
+            Number(durationHours)
+        );
+
+        res.json({
+            success: true,
+            ...result,
+            expires_in_minutes: 15,
+            message: 'Pairing code generated. Valid for 15 minutes.'
+        });
+    } catch (error: any) {
+        console.error('[ERROR] /api/pairing/generate:', error.message);
+        res.status(500).json({ error: error.message || 'Failed to generate pairing code' });
+    }
+});
+
+/**
+ * GET /pair
+ * Public landing page for QR pairing. This page automatically verifies the code
+ * and logs the staff member in.
+ */
+app.get('/pair', (req, res) => {
+    const { token, restaurant } = req.query;
+
+    if (!token || !restaurant) {
+        return res.send(
+            '<div style="font-family: sans-serif; text-align: center; padding: 50px;">' +
+            '<h2>Invalid Pairing Link / غلط لنک</h2>' +
+            '<p>Please scan the QR code again from the Master Terminal.</p>' +
+            '<p>براہ کرم ماسٹر ٹرمینل سے دوبارہ QR کوڈ اسکین کریں۔</p>' +
+            '</div>'
+        );
+    }
+
+    // Using single quotes for the HTML to avoid backtick nesting issues
+    const html = '<!DOCTYPE html>' +
+        '<html lang="en">' +
+        '<head>' +
+            '<meta charset="UTF-8">' +
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+            '<title>Pairing Device | Fireflow</title>' +
+            '<style>' +
+                'body { font-family: -apple-system, system-ui, sans-serif; background: #020617; color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }' +
+                '.card { background: #0f172a; padding: 40px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; max-width: 320px; width: 90%; border: 1px solid #1e293b; }' +
+                '.spinner { border: 4px solid rgba(255,255,255,0.1); border-left-color: #06b6d4; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px; }' +
+                '@keyframes spin { to { transform: rotate(360deg); } }' +
+                '.success-icon { font-size: 50px; color: #10b981; margin-bottom: 20px; }' +
+                '.error-icon { font-size: 50px; color: #ef4444; margin-bottom: 20px; }' +
+                'h2 { margin: 0 0 10px; font-size: 20px; }' +
+                'p { color: #94a3b8; font-size: 14px; margin: 5px 0; }' +
+                '.urdu { font-weight: bold; font-size: 18px; margin-top: 10px; color: #cbd5e1; }' +
+            '</style>' +
+        '</head>' +
+        '<body>' +
+            '<div class="card" id="status-card">' +
+                '<div class="spinner" id="loader"></div>' +
+                '<div id="status-text">' +
+                    '<h2>Verifying Device...</h2>' +
+                    '<p>Connecting to Fireflow...</p>' +
+                    '<div class="urdu">ڈیوائس کی تصدیق ہو رہی ہے...</div>' +
+                '</div>' +
+            '</div>' +
+
+            '<script>' +
+                'async function startPairing() {' +
+                    'const params = new URLSearchParams(window.location.search);' +
+                    'const token = params.get(\'token\');' +
+                    'const restaurantId = params.get(\'restaurant\');' +
+                    
+                    'if (!token || !restaurantId) return;' +
+
+                    'let fingerprint;' +
+                    'try {' +
+                        'const raw = [' +
+                            'navigator.userAgent,' +
+                            'screen.width,' +
+                            'screen.height,' +
+                            'new Date().getTimezoneOffset()' +
+                        '].join(\'|\');' +
+                        'fingerprint = btoa(unescape(encodeURIComponent(raw)));' +
+                    '} catch (e) {' +
+                        'fingerprint = "safe-fprint-" + Math.random().toString(36).substring(7);' +
+                    '}' +
+
+                    'try {' +
+                        'const res = await fetch(\'/api/pairing/verify\', {' +
+                            'method: \'POST\',' +
+                            'headers: { \'Content-Type\': \'application/json\' },' +
+                            'body: JSON.stringify({' +
+                                'restaurantId,' +
+                                'code: token,' +
+                                'deviceFingerprint: fingerprint,' +
+                                'deviceName: "Mobile / فون",' +
+                                'userAgent: navigator.userAgent,' +
+                                'platform: \'mobile\'' +
+                            '})' +
+                        '});' +
+
+                        'const text = await res.text();' +
+                        'let data;' +
+                        'try { data = JSON.parse(text); } catch (e) { data = { error: text }; }' +
+
+                        'if (res.ok && data.success) {' +
+                            'sessionStorage.setItem(\'accessToken\', data.session_jwt);' +
+                            'if (data.expires_at) {' +
+                                'sessionStorage.setItem(\'accessTokenExpiry\', new Date(data.expires_at).getTime().toString());' +
+                            '}' +
+                            
+                            'document.getElementById(\'status-card\').innerHTML = ' +
+                                '\'<div class="success-icon">✓</div>\' +' +
+                                '\'<h2>Welcome, \' + data.staff_name + \'!</h2>\' +' +
+                                '\'<p>Redirecting to dashboard...</p>\' +' +
+                                '\'<div class="urdu">خوش آمدید، \' + data.staff_name + \'!</div>\';' +
+                            
+                            'setTimeout(() => { window.location.href = \'/\'; }, 1500);' +
+                        '} else {' +
+                            'throw new Error(data.error || (\'HTTP \' + res.status + \': \' + text.substring(0, 50)));' +
+                        '}' +
+                    '} catch (err) {' +
+                        'document.getElementById(\'status-card\').innerHTML = ' +
+                            '\'<div class="error-icon">✕</div>\' +' +
+                            '\'<h2>Pairing Failed</h2>\' +' +
+                            '\'<p style="color: #ef4444; font-family: monospace; background: #1a1a1a; padding: 10px; border-radius: 5px; word-break: break-all;">\' + err.message + \'</p>\' +' +
+                            '\'<div class="urdu">پیئرنگ ناکام ہو گئی</div>\' +' +
+                            '\'<p style="margin-top: 20px;"><a href="/" style="color: #06b6d4; text-decoration: none;">Try Manual Login</a></p>\';' +
+                    '}' +
+                '}' +
+
+                'startPairing();' +
+            '</script>' +
+        '</body>' +
+        '</html>';
+    
+    res.send(html);
+});
+
+
+
+/**
+ * POST /api/pairing/verify
+ * Verify pairing code and register device
+ * 
+ * Auth: NOT required (device doesn't have token yet)
+ * Rate limit: 10/min per IP
+ * 
+ * Body:
+ * - restaurantId: UUID
+ * - codeId: UUID (from generate response)
+ * - code: String (6-char code user entered)
+ * - deviceFingerprint: String (hash of userAgent + screen + timezone)
+ * - deviceName: String (user-friendly name)
+ * - userAgent: String
+ * - platform: String (ios|android|linux|darwin|win32)
+ */
+app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
+    console.log('[DEBUG] /api/pairing/verify incoming:', req.body);
+    const {
+        restaurantId,
+        codeId,
+        code,
+        deviceFingerprint,
+        deviceName,
+        userAgent,
+        platform
+    } = req.body;
+
+    // Input validation (codeId is optional if code is present)
+    if (!restaurantId || !code || !deviceFingerprint || !deviceName || !platform) {
+        return res.status(400).json({ error: 'Missing required pairing fields' });
+    }
+
+    // Validate code format (should be 6 chars)
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+        return res.status(400).json({ error: 'Invalid code format' });
+    }
+
+    try {
+        // 1. Find Pairing Code record
+        let pairingCode;
+        if (codeId) {
+            pairingCode = await prisma.pairing_codes.findUnique({
+                where: { id: codeId }
+            });
+        } else {
+            // Search by code and restaurant (lookup for automated flows)
+            pairingCode = await prisma.pairing_codes.findFirst({
+                where: { 
+                    pairing_code: code,
+                    restaurant_id: restaurantId,
+                    is_used: false,
+                    expires_at: { gt: new Date() }
+                }
+        });
+        }
+
+        console.log('[DEBUG] pairingCode lookup result:', pairingCode ? 'FOUND' : 'NOT_FOUND', { 
+            id: pairingCode?.id, 
+            restaurant_id: pairingCode?.restaurant_id,
+            is_used: pairingCode?.is_used,
+            expires_at: pairingCode?.expires_at 
+        });
+
+        if (!pairingCode || String(pairingCode.restaurant_id).toLowerCase() !== String(restaurantId).toLowerCase()) {
+            console.log('[DEBUG] Pairing check failed:', {
+                hasCode: !!pairingCode,
+                codeRestaurant: pairingCode?.restaurant_id,
+                requestedRestaurant: restaurantId,
+                match: String(pairingCode?.restaurant_id).toLowerCase() === String(restaurantId).toLowerCase()
+            });
+            return res.status(404).json({ error: 'Pairing code not found or expired' });
+        }
+
+        // Get the staff member who created this code (for audit)
+        // In production: extract staffId from JWT. For now, we need it from somewhere.
+        // TEMPORARY: We'll use the code's used_by field after verification
+        // TODO: After JWT implementation, get staffId from token
+
+        // For now, we'll do verification first, then use the staff context
+        // This is a temporary workaround — proper auth will fix this in Phase 2b
+
+        const result = await verifyPairingCode(
+            restaurantId,
+            pairingCode.id,
+            code,
+            deviceFingerprint,
+            deviceName,
+            userAgent,
+            platform
+        );
+
+        // Notify restaurant via Socket.IO: new device paired
+        io.to(`restaurant:${restaurantId}`).emit('device_change', {
+            type: 'device_registered',
+            device_id: result.deviceId,
+            device_name: deviceName,
+            platform: platform
+        });
+
+        res.json({
+            success: true,
+            device_id: result.deviceId,
+            auth_token: result.authToken,
+            session_jwt: result.sessionJwt,
+            staff_id: result.staffId,
+            staff_name: result.staffName,
+            staff_role: result.staffRole,
+            expires_at: result.expiresAt,
+            message: 'Device paired successfully'
+        });
+    } catch (error: any) {
+        const errorMap: Record<string, number> = {
+            'INVALID_CODE': 401,
+            'CODE_EXPIRED': 410,
+            'CODE_ALREADY_USED': 409,
+            'TOO_MANY_ATTEMPTS': 429
+        };
+
+        const statusCode = errorMap[error.message] || 500;
+        console.error('[ERROR] /api/pairing/verify:', error.message);
+        res.status(statusCode).json({ error: error.message || 'Pairing verification failed' });
+    }
+});
+
+/**
+ * GET /api/pairing/devices
+ * List all paired devices for the current staff member
+ * 
+ * Auth: Required (via JWT or x-staff-id header)
+ * TODO: After JWT implementation, validate token
+ */
+app.get('/api/pairing/devices', authMiddleware, async (req, res) => {
+    const staffId = req.staffId;
+    const restaurantId = req.restaurantId;
+
+    if (!staffId || !restaurantId) {
+        return res.status(400).json({ error: 'Missing staffId or restaurantId' });
+    }
+
+    try {
+        const devices = await listPairedDevices(restaurantId, staffId);
+        res.json({ success: true, devices });
+    } catch (error: any) {
+        console.error('[ERROR] /api/pairing/devices:', error.message);
+        res.status(500).json({ error: 'Failed to fetch devices' });
+    }
+});
+
+/**
+ * DELETE /api/pairing/devices/:deviceId
+ * Disable a paired device (revoke without deleting)
+ * 
+ * Auth: Required
+ */
+app.delete('/api/pairing/devices/:deviceId', authMiddleware, async (req, res) => {
+    const { deviceId } = req.params;
+    const staffId = req.staffId;
+    const restaurantId = req.restaurantId;
+
+    if (!staffId || !restaurantId) {
+        return res.status(400).json({ error: 'Missing staffId or restaurantId' });
+    }
+
+    try {
+        await disableDevice(deviceId, staffId, restaurantId);
+
+        // Notify restaurant: device disabled
+        io.to(`restaurant:${restaurantId}`).emit('device_change', {
+            type: 'device_disabled',
+            device_id: deviceId
+        });
+
+        res.json({ success: true, message: 'Device disabled' });
+    } catch (error: any) {
+        console.error('[ERROR] /api/pairing/devices DELETE:', error.message);
+        res.status(error.message.includes('UNAUTHORIZED') ? 403 : 500).json({
+            error: error.message || 'Failed to disable device'
+        });
+    }
+});
+
+
+
+
+
+// Cleanup job: Delete expired pairing codes every 5 minutes
+setInterval(async () => {
+    try {
+        await cleanupExpiredCodes();
+    } catch (error) {
+        console.error('Pairing cleanup job failed:', error);
+    }
+}, 5 * 60 * 1000);
+
+// ==========================================
 
 /**
  * GET /api/setup/wizard-state
@@ -671,16 +1059,28 @@ app.post('/api/auth/login', async (req, res) => {
                 });
 
                 if (existingDevice) {
-                    // Update last seen
-                    await prisma.registered_devices.update({
-                        where: { id: existingDevice.id },
-                        data: {
-                            last_sync_at: new Date(),
-                            is_active: true,
-                            device_name: device_name || existingDevice.device_name,
-                            updated_at: new Date()
-                        }
-                    });
+                    // Check if device has expired
+                    const device = existingDevice as any;
+                    const isExpired = device.expires_at && new Date() > new Date(device.expires_at);
+                    
+                    if (isExpired) {
+                        console.log(`[DEVICE] Device ${existingDevice.id} has expired.`);
+                        await (prisma.registered_devices as any).update({
+                            where: { id: existingDevice.id },
+                            data: { is_active: false, updated_at: new Date() }
+                        });
+                    } else {
+                        // Update last seen
+                        await (prisma.registered_devices as any).update({
+                            where: { id: existingDevice.id },
+                            data: {
+                                last_sync_at: new Date(),
+                                is_active: true,
+                                device_name: device_name || existingDevice.device_name,
+                                updated_at: new Date()
+                            }
+                        });
+                    }
                 } else {
                     // Register new device
                     await prisma.registered_devices.create({
@@ -921,7 +1321,7 @@ app.patch('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'A
             where: { id: String(id) },
             data: data
         });
-        io.emit('db_change', { table: 'staff', eventType: 'UPDATE', data: staff });
+        io.to(`restaurant:${staff.restaurant_id}`).emit('db_change', { table: 'staff', eventType: 'UPDATE', data: staff });
         res.json(staff);
     } catch (e: any) {
         console.error('PATCH /api/staff ERROR:', e);
@@ -940,7 +1340,7 @@ app.delete('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', '
             data: { status: 'terminated' }
         });
 
-        io.emit('db_change', { table: 'staff', eventType: 'DELETE', id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'staff', eventType: 'DELETE', id });
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -1240,7 +1640,7 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
             taxRate: restaurant.tax_rate?.toString(),
             serviceChargeEnabled: restaurant.service_charge_enabled,
             serviceChargeRate: restaurant.service_charge_rate?.toString(),
-            defaultDeliveryFee: restaurant.default_delivery_fee?.toString(),
+            defaultDeliveryFee: (extendedFeatures as any)?.defaultDeliveryFee?.toString() || '250',
             defaultGuestCount: restaurant.default_guest_count,
             defaultRiderFloat: restaurant.default_rider_float?.toString(),
             fbrEnabled: restaurant.fbr_enabled,
@@ -1274,6 +1674,9 @@ app.patch('/api/operations/config/:restaurantId', authMiddleware, requireRole('M
 
     try {
         const config = parseFullConfigFromAPI(req.body);
+        if (!config) {
+            return res.status(400).json({ error: 'Invalid configuration data' });
+        }
 
         // 1. Update Core Restaurant Attributes
         await prisma.restaurants.update({
@@ -1335,7 +1738,7 @@ app.patch('/api/operations/config/:restaurantId', authMiddleware, requireRole('M
             }
         });
 
-        io.emit('config:updated', { restaurantId, config });
+        io.to(`restaurant:${restaurantId}`).emit('config:updated', { restaurantId, config });
 
         res.json({
             success: true,
@@ -1380,7 +1783,7 @@ app.post('/api/orders/upsert', authMiddleware, async (req, res) => {
             });
         }
 
-        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
         res.json(result);
     } catch (e: any) {
         console.error("Critical Order Upsert Error:", {
@@ -1441,7 +1844,7 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
         const service = OrderServiceFactory.getService(data.type);
         const result = await service.createOrder(data);
 
-        io.emit('db_change', { table: 'orders', eventType: 'INSERT', data: result });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'INSERT', data: result });
         res.json(result);
     } catch (e: any) {
         console.error("Critical Order Create Error:", {
@@ -1479,7 +1882,7 @@ app.patch('/api/orders/:id', authMiddleware, async (req, res) => {
         const service = OrderServiceFactory.getService(data.type);
         const result = await service.updateOrder(id, data);
 
-        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
         res.json(result);
     } catch (e: any) {
         console.error("PATCH /api/orders error:", e);
@@ -1549,7 +1952,7 @@ app.post('/api/orders/:id/unlock', authMiddleware, async (req, res) => {
             return updatedOrder;
         });
 
-        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', id });
+        io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', id });
         res.json({ success: true, order: result });
     } catch (e: any) {
         console.error("POST /api/orders/:id/unlock error:", e);
@@ -1573,10 +1976,10 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
         const success = await service.deleteOrder(id);
 
         if (success) {
-            io.emit('db_change', { table: 'orders', eventType: 'DELETE', id });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id });
             // If it was a DINE_IN order, also notify about table change
             if (order.type === 'DINE_IN' && order.table_id) {
-                io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: order.table_id, data: { status: 'AVAILABLE', active_order_id: null } });
+                io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: order.table_id, data: { status: 'AVAILABLE', active_order_id: null } });
             }
             res.json({ success: true });
         } else {
@@ -1633,12 +2036,12 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                 }
             });
 
-            // 3. Clear Table (if Dine-In)
+            // 3. Release Table (if Dine-In) - Mark as DIRTY for cleanup (v3.0 pattern)
             if (order.type === 'DINE_IN' && order.table_id) {
                 await tx.tables.update({
                     where: { id: order.table_id },
                     data: {
-                        status: 'AVAILABLE',
+                        status: 'DIRTY',
                         active_order_id: null
                     }
                 });
@@ -1661,16 +2064,22 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                 await accounting.recordOrderSale(order.id, tx);
             }
 
-            return updatedOrder;
+            return { updatedOrder };
         });
 
-        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id });
-        io.emit('db_change', { table: 'transactions', eventType: 'INSERT' });
-        if (result.type === 'DINE_IN' && result.table_id) {
-            io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: result.table_id });
+        // 5. FBR Auto-Sync (if enabled)
+        const restaurant = await prisma.restaurants.findUnique({ where: { id: req.restaurantId! } });
+        if (restaurant?.fbr_enabled) {
+            fbrService.syncOrder(id).catch(err => console.error('[FBR] Background sync error:', err));
         }
 
-        res.json({ success: true, order: result });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result.updatedOrder, id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'transactions', eventType: 'INSERT' });
+        if (result.updatedOrder.type === 'DINE_IN' && result.updatedOrder.table_id) {
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: result.updatedOrder.table_id });
+        }
+
+        res.json({ success: true, order: result.updatedOrder });
     } catch (e: any) {
         console.error("Order Settle Error:", e);
         res.status(500).json({ error: e.message });
@@ -2168,13 +2577,13 @@ app.post('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'
             prepTimes[item.id] = Number(prep_time_minutes);
             
             await prisma.restaurant_features.upsert({
-                where: { restaurant_id: req.restaurantId },
-                create: { restaurant_id: req.restaurantId, features: { ...featuresData, menu_item_prep_times: prepTimes } },
+                where: { restaurant_id: req.restaurantId! },
+                create: { restaurant_id: req.restaurantId!, features: { ...featuresData, menu_item_prep_times: prepTimes } },
                 update: { features: { ...featuresData, menu_item_prep_times: prepTimes } }
             });
         }
 
-        io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: { ...item, prep_time_minutes } });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: { ...item, prep_time_minutes } });
         res.json({ ...item, prep_time_minutes });
     } catch (e: any) {
         console.error('POST /api/menu_items ERROR:', e);
@@ -2203,12 +2612,12 @@ app.patch('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN
             
             await prisma.restaurant_features.upsert({
                 where: { restaurant_id: req.restaurantId },
-                create: { restaurant_id: req.restaurantId, features: { ...featuresData, menu_item_prep_times: prepTimes } },
+                create: { restaurant_id: req.restaurantId as string, features: { ...featuresData, menu_item_prep_times: prepTimes } },
                 update: { features: { ...featuresData, menu_item_prep_times: prepTimes } }
             });
         }
 
-        io.emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: { ...item, prep_time_minutes } });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: { ...item, prep_time_minutes } });
         res.json({ ...item, prep_time_minutes });
     } catch (e: any) {
         console.error('PATCH /api/menu_items ERROR:', e);
@@ -2220,7 +2629,7 @@ app.delete('/api/menu_items', authMiddleware, requireRole('MANAGER', 'SUPER_ADMI
     const { id } = req.query;
     try {
         await prisma.menu_items.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'menu_items', eventType: 'DELETE', id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_items', eventType: 'DELETE', id });
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2245,7 +2654,7 @@ app.get('/api/menu_categories', async (req, res) => {
 app.post('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const cat = await prisma.menu_categories.create({ data: req.body });
-        io.emit('db_change', { table: 'menu_categories', eventType: 'INSERT', data: cat });
+        io.to(`restaurant:${cat.restaurant_id}`).emit('db_change', { table: 'menu_categories', eventType: 'INSERT', data: cat });
         res.json(cat);
     } catch (e: any) {
         console.error('POST /api/menu_categories ERROR:', e);
@@ -2257,7 +2666,7 @@ app.patch('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER_
     const { id, ...data } = req.body;
     try {
         const cat = await prisma.menu_categories.update({ where: { id: String(id) }, data });
-        io.emit('db_change', { table: 'menu_categories', eventType: 'UPDATE', data: cat });
+        io.to(`restaurant:${cat.restaurant_id}`).emit('db_change', { table: 'menu_categories', eventType: 'UPDATE', data: cat });
         res.json(cat);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2268,7 +2677,7 @@ app.delete('/api/menu_categories', authMiddleware, requireRole('MANAGER', 'SUPER
     const { id } = req.query;
     try {
         await prisma.menu_categories.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'menu_categories', eventType: 'DELETE', id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_categories', eventType: 'DELETE', id });
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2423,7 +2832,7 @@ app.get('/api/vendors', async (req, res) => {
 app.post('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         console.log('POST /api/sections body:', req.body);
-        const section = await createSection(req.body, io);
+        const section = await createSection(req.restaurantId!, req.body, io);
         res.json(section);
     } catch (e: any) {
         console.error('POST /api/sections ERROR:', e);
@@ -2458,7 +2867,7 @@ app.post('/api/sections/reorder', authMiddleware, requireRole('MANAGER', 'SUPER_
 app.delete('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id } = req.query;
     try {
-        await deleteSection(String(id), io);
+        await deleteSection(String(id), req.restaurantId!, io);
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2468,7 +2877,7 @@ app.delete('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN'
 // Tables
 app.post('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
-        const table = await createTable(req.body, io);
+        const table = await createTable(req.restaurantId!, req.body, io);
         res.json(table);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2489,7 +2898,7 @@ app.patch('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', '
 app.delete('/api/tables', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     const { id } = req.query;
     try {
-        await deleteTable(String(id), io);
+        await deleteTable(String(id), req.restaurantId!, io);
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2515,7 +2924,7 @@ app.get('/api/floor/layout/:restaurantId', async (req, res) => {
 app.post('/api/customers', async (req, res) => {
     try {
         const customer = await prisma.customers.create({ data: req.body });
-        io.emit('db_change', { table: 'customers', eventType: 'INSERT', data: customer });
+        io.to(`restaurant:${customer.restaurant_id}`).emit('db_change', { table: 'customers', eventType: 'INSERT', data: customer });
         res.json(customer);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2526,7 +2935,7 @@ app.patch('/api/customers', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const customer = await prisma.customers.update({ where: { id }, data });
-        io.emit('db_change', { table: 'customers', eventType: 'UPDATE', data: customer });
+        io.to(`restaurant:${customer.restaurant_id}`).emit('db_change', { table: 'customers', eventType: 'UPDATE', data: customer });
         res.json(customer);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2537,7 +2946,7 @@ app.patch('/api/customers', async (req, res) => {
 app.post('/api/vendors', async (req, res) => {
     try {
         const vendor = await prisma.vendors.create({ data: req.body });
-        io.emit('db_change', { table: 'vendors', eventType: 'INSERT', data: vendor });
+        io.to(`restaurant:${vendor.restaurant_id}`).emit('db_change', { table: 'vendors', eventType: 'INSERT', data: vendor });
         res.json(vendor);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2548,7 +2957,7 @@ app.patch('/api/vendors', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const vendor = await prisma.vendors.update({ where: { id }, data });
-        io.emit('db_change', { table: 'vendors', eventType: 'UPDATE', data: vendor });
+        io.to(`restaurant:${vendor.restaurant_id}`).emit('db_change', { table: 'vendors', eventType: 'UPDATE', data: vendor });
         res.json(vendor);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2574,7 +2983,7 @@ app.get('/api/stations', async (req, res) => {
 app.post('/api/stations', async (req, res) => {
     try {
         const station = await prisma.stations.create({ data: req.body });
-        io.emit('db_change', { table: 'stations', eventType: 'INSERT', data: station });
+        io.to(`restaurant:${station.restaurant_id}`).emit('db_change', { table: 'stations', eventType: 'INSERT', data: station });
         res.json(station);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2585,7 +2994,7 @@ app.patch('/api/stations', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const station = await prisma.stations.update({ where: { id }, data });
-        io.emit('db_change', { table: 'stations', eventType: 'UPDATE', data: station });
+        io.to(`restaurant:${station.restaurant_id}`).emit('db_change', { table: 'stations', eventType: 'UPDATE', data: station });
         res.json(station);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2595,8 +3004,11 @@ app.patch('/api/stations', async (req, res) => {
 app.delete('/api/stations', async (req, res) => {
     const { id } = req.query;
     try {
-        await prisma.stations.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'stations', eventType: 'DELETE', id });
+        const station = await prisma.stations.findUnique({ where: { id: String(id) } });
+        if (station) {
+            await prisma.stations.delete({ where: { id: String(id) } });
+            io.to(`restaurant:${station.restaurant_id}`).emit('db_change', { table: 'stations', eventType: 'DELETE', id });
+        }
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2904,9 +3316,9 @@ app.post('/api/system/reset-environment', authMiddleware, async (req, res) => {
         console.log('✅ RESET COMPLETE');
 
         // Broadcast to all clients
-        io.emit('db_change', { table: 'orders', eventType: 'DELETE', id: 'ALL' });
-        io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: 'ALL' });
-        io.emit('db_change', { table: 'transactions', eventType: 'DELETE', id: 'ALL' });
+        io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id: 'ALL' });
+        io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: 'ALL' });
+        io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'transactions', eventType: 'DELETE', id: 'ALL' });
 
         res.json({ success: true, message: "Environment reset successfully. Database is now clean." });
     } catch (e: any) {
@@ -2954,462 +3366,6 @@ app.get('/api/orders/:id', async (req, res, next) => {
         res.status(500).json({ error: e.message });
     }
 });
-
-app.post('/api/orders/:id/settle', async (req, res) => {
-    const { id } = req.params;
-    const { amount, payment_method, transaction_ref, restaurant_id, staff_id, tax, service_charge, discount, breakdown } = req.body;
-
-    try {
-        const order = await prisma.orders.findUnique({
-            where: { id },
-            include: { dine_in_orders: true }
-        });
-
-        if (!order) return res.status(404).json({ error: 'Order not found' });
-
-        // Check for active session
-        const activeSession = await accounting.getActiveSession(restaurant_id);
-        if (!activeSession) {
-            return res.status(403).json({ error: 'No active session. Please open business day in Financial HUD first.' });
-        }
-
-        const result = await prisma.$transaction(async (tx) => {
-            // 1. Create Transaction
-            const transaction = await tx.transactions.create({
-                data: {
-                    restaurant_id,
-                    order_id: id,
-                    amount,
-                    payment_method,
-                    status: 'PAID',
-                    transaction_ref,
-                    created_at: new Date()
-                }
-            });
-
-            // 2. Update Order Status, Total, and Audit Trail (v3.0: CLOSED + PAID)
-            const updatedOrder = await (tx.orders as any).update({
-                where: { id },
-                data: {
-                    status: 'CLOSED', // v3.0: PAID is no longer a status, use CLOSED
-                    payment_status: 'PAID', // v3.0: Explicit payment status
-                    total: amount,
-                    tax: tax !== undefined ? tax : order.tax,
-                    service_charge: service_charge !== undefined ? service_charge : order.service_charge,
-                    discount: discount !== undefined ? discount : order.discount,
-                    breakdown: breakdown || order.breakdown,
-                    last_action_by: staff_id,
-                    last_action_desc: `Settle: ${payment_method} - Rs. ${amount}`,
-                    updated_at: new Date()
-                }
-            });
-
-            // 3. If Dine-In, Release Table (Mark as DIRTY for cleanup)
-            const dineIn = order.dine_in_orders; // v3.0: Corrected from array to object access
-            if (order.type === 'DINE_IN' && dineIn) {
-                const tableId = (dineIn as any).table_id;
-                await tx.tables.update({
-                    where: { id: tableId },
-                    data: {
-                        status: 'DIRTY',
-                        active_order_id: null
-                    }
-                });
-            }
-
-            // 4. Record in Financial Ledger
-            await accounting.recordOrderSale(id, tx);
-
-            return { transaction, updatedOrder };
-        });
-
-        // 3.5 FBR Auto-Sync
-        const restaurant = await prisma.restaurants.findUnique({ where: { id: restaurant_id } });
-        if ((restaurant as any)?.fbr_enabled) {
-            // Run in background to not block response
-            fbrService.syncOrder(id).catch(err => console.error('[FBR] Background sync error:', err));
-        }
-
-        // 4. Notify via Socket
-        io.to(`restaurant:${restaurant_id}`).emit('db_change', {
-            table: 'orders',
-            eventType: 'UPDATE',
-            data: result.updatedOrder
-        });
-
-        io.to(`restaurant:${restaurant_id}`).emit('db_change', {
-            table: 'transactions',
-            eventType: 'INSERT',
-            data: result.transaction
-        });
-
-        if (order.type === 'DINE_IN' && order.dine_in_orders) {
-            const tableId = order.dine_in_orders.table_id;
-            const updatedTable = await prisma.tables.findUnique({ where: { id: tableId } });
-            io.to(`restaurant:${restaurant_id}`).emit('db_change', {
-                table: 'tables',
-                eventType: 'UPDATE',
-                data: updatedTable
-            });
-        }
-
-        res.json({ success: true, ...result });
-    } catch (e: any) {
-        console.error(`POST /api/orders/${id}/settle ERROR:`, e);
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// ==========================================
-// 🔐 DEVICE PAIRING ENDPOINTS (SECURE)
-// ==========================================
-
-// Rate limiters
-const pairingGenerateLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute window
-    max: 5, // 5 requests per minute per IP
-    message: 'Too many pairing code requests, please wait before generating another',
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-
-const pairingVerifyLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 10, // 10 attempts per minute
-    message: 'Too many pairing attempts, please wait',
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-
-/**
- * POST /api/pairing/generate
- * Generate a new pairing code for device registration
- * 
- * Auth: Required (must be logged-in staff)
- * Rate limit: 5/min per IP
- */
-app.post('/api/pairing/generate', pairingGenerateLimiter, async (req, res) => {
-    const { restaurantId } = req.body;
-    const staffId = req.headers['x-staff-id'] as string; // TODO: Replace with JWT after Phase 2b
-
-    // Input validation
-    if (!restaurantId || !staffId) {
-        return res.status(400).json({ error: 'Missing restaurantId or staffId' });
-    }
-
-    try {
-        // Verify staff exists and belongs to restaurant
-        const staff = await prisma.staff.findUnique({
-            where: { id: staffId },
-            select: { restaurant_id: true, status: true }
-        });
-
-        if (!staff || staff.restaurant_id !== restaurantId || (staff.status?.toLowerCase() !== 'active')) {
-            return res.status(403).json({ error: 'Unauthorized to generate pairing codes' });
-        }
-
-        // Generate pairing code
-        const { code, expiresAt, id } = await generatePairingCode(restaurantId, staffId);
-
-        res.json({
-            success: true,
-            pairing_code: code,
-            code_id: id,
-            expires_at: expiresAt,
-            expires_in_minutes: 15,
-            message: 'Pairing code generated. Valid for 15 minutes.'
-        });
-    } catch (error: any) {
-        console.error('[ERROR] /api/pairing/generate:', error.message);
-        res.status(500).json({ error: 'Failed to generate pairing code' });
-    }
-});
-
-/**
- * GET /pair
- * Public landing page for QR pairing
- */
-app.get('/pair', rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }), (req, res) => {
-    const { token, restaurant } = req.query;
-
-    if (!token || !restaurant) {
-        return res.send(`
-            <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-                <h1 style="color: #e11d48;">Invalid Link / غلط لنک</h1>
-                <p>Please scan the QR code from the server dashboard.</p>
-                <p>براہ کرم سرور ڈیش بورڈ سے QR کوڈ اسکین کریں۔</p>
-            </div>
-        `);
-    }
-
-    // Inline simplified device fingerprint logic
-    const html = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Fireflow Pairing | فائر فلو پیئرنگ</title>
-            <style>
-                body { font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f9fafb; color: #111827; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-                .card { background: white; padding: 2rem; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 90%; }
-                .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #e11d48; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
-                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-                p { color: #6b7280; margin-bottom: 1.5rem; }
-                .error { color: #e11d48; display: none; }
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <div id="loading">
-                    <div class="spinner"></div>
-                    <h1>Connecting to Fireflow...</h1>
-                    <h1>فائر فلو سے جڑ رہا ہے...</h1>
-                </div>
-                <div id="error" class="error">
-                    <h1 id="err-en"></h1>
-                    <h1 id="err-ur"></h1>
-                    <p>Please ask your manager to generate a new code.</p>
-                    <p>براہ کرم اپنے مینیجر سے نیا کوڈ مانگیں۔</p>
-                </div>
-            </div>
-
-            <script>
-                async function pair() {
-                    try {
-                        // 1. Generate Fingerprint (djb2)
-                        const components = [
-                            navigator.userAgent,
-                            navigator.language,
-                            \`\${screen.width}x\${screen.height}\`,
-                            new Date().getTimezoneOffset().toString(),
-                            navigator.hardwareConcurrency?.toString() || '4',
-                            navigator.platform || 'unknown'
-                        ].join('|');
-
-                        let hash = 5381;
-                        for (let i = 0; i < components.length; i++) {
-                            hash = (hash * 33) ^ components.charCodeAt(i);
-                        }
-                        const fingerprint = (hash >>> 0).toString(16);
-
-                        // 2. Call verify endpoint
-                        const response = await fetch('/api/pairing/verify', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                restaurantId: '${restaurant}',
-                                code: '${token}',
-                                deviceFingerprint: fingerprint,
-                                deviceName: navigator.userAgent.split(') ')[0].split(' (')[1] || 'Mobile Device',
-                                userAgent: navigator.userAgent,
-                                platform: navigator.platform
-                            })
-                        });
-
-                        const data = await response.json();
-
-                        if (response.ok) {
-                            // 3. Store tokens and redirect
-                            localStorage.setItem('paired_token', data.authToken);
-                            localStorage.setItem('restaurant_id', '${restaurant}');
-                            window.location.href = '/?paired=true';
-                        } else {
-                            showError(data.error);
-                        }
-                    } catch (err) {
-                        showError('SERVER_OFFLINE');
-                    }
-                }
-
-                function showError(code) {
-                    document.getElementById('loading').style.display = 'none';
-                    document.getElementById('error').style.display = 'block';
-                    
-                    const messages = {
-                        'CODE_EXPIRED': { en: 'Pairing code expired', ur: 'پیئرنگ کوڈ ختم ہو گیا' },
-                        'INVALID_CODE': { en: 'Invalid pairing code', ur: 'غلط پیئرنگ کوڈ' },
-                        'TOO_MANY_ATTEMPTS': { en: 'Too many attempts', ur: 'بہت زیادہ کوششیں' },
-                        'SERVER_OFFLINE': { en: 'System unreachable', ur: 'سسٹم سے رابطہ نہیں ہو رہا' }
-                    };
-
-                    const msg = messages[code] || { en: 'Pairing failed', ur: 'پیئرنگ ناکام ہو گئی' };
-                    document.getElementById('err-en').innerText = msg.en;
-                    document.getElementById('err-ur').innerText = msg.ur;
-                }
-
-                pair();
-            </script>
-        </body>
-        </html>
-    `;
-    res.send(html);
-});
-
-/**
- * POST /api/pairing/verify
- * Verify pairing code and register device
- * 
- * Auth: NOT required (device doesn't have token yet)
- * Rate limit: 10/min per IP
- * 
- * Body:
- * - restaurantId: UUID
- * - codeId: UUID (from generate response)
- * - code: String (6-char code user entered)
- * - deviceFingerprint: String (hash of userAgent + screen + timezone)
- * - deviceName: String (user-friendly name)
- * - userAgent: String
- * - platform: String (ios|android|linux|darwin|win32)
- */
-app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
-    const {
-        restaurantId,
-        codeId,
-        code,
-        deviceFingerprint,
-        deviceName,
-        userAgent,
-        platform
-    } = req.body;
-
-    // Input validation
-    if (!restaurantId || !codeId || !code || !deviceFingerprint || !deviceName || !platform) {
-        return res.status(400).json({ error: 'Missing required pairing fields' });
-    }
-
-    // Validate code format (should be 6 chars)
-    if (!/^[A-Z0-9]{6}$/.test(code)) {
-        return res.status(400).json({ error: 'Invalid code format' });
-    }
-
-    try {
-        // Verify code exists and belongs to this restaurant
-        const pairingCode = await prisma.pairing_codes.findFirst({
-            where: {
-                id: codeId,
-                restaurant_id: restaurantId
-            }
-        });
-
-        if (!pairingCode) {
-            return res.status(404).json({ error: 'Pairing code not found' });
-        }
-
-        // Get the staff member who created this code (for audit)
-        // In production: extract staffId from JWT. For now, we need it from somewhere.
-        // TEMPORARY: We'll use the code's used_by field after verification
-        // TODO: After JWT implementation, get staffId from token
-
-        // For now, we'll do verification first, then use the staff context
-        // This is a temporary workaround — proper auth will fix this in Phase 2b
-
-        const { authToken, deviceId } = await verifyPairingCode(
-            restaurantId,
-            pairingCode.used_by || 'system', // Placeholder, will be replaced by JWT staffId
-            codeId,
-            code,
-            deviceFingerprint,
-            deviceName,
-            userAgent,
-            platform
-        );
-
-        // Notify restaurant via Socket.IO: new device paired
-        io.to(`restaurant:${restaurantId}`).emit('device_change', {
-            type: 'device_registered',
-            device_id: deviceId,
-            device_name: deviceName,
-            platform: platform
-        });
-
-        res.json({
-            success: true,
-            device_id: deviceId,
-            auth_token: authToken, // Send once to client, never store in DB
-            message: 'Device paired successfully',
-            next_steps: 'Save the auth_token securely on your device'
-        });
-    } catch (error: any) {
-        const errorMap: Record<string, number> = {
-            'INVALID_CODE': 401,
-            'CODE_EXPIRED': 410,
-            'CODE_ALREADY_USED': 409,
-            'TOO_MANY_ATTEMPTS': 429
-        };
-
-        const statusCode = errorMap[error.message] || 500;
-        console.error('[ERROR] /api/pairing/verify:', error.message);
-        res.status(statusCode).json({ error: error.message || 'Pairing verification failed' });
-    }
-});
-
-/**
- * GET /api/pairing/devices
- * List all paired devices for the current staff member
- * 
- * Auth: Required (via JWT or x-staff-id header)
- * TODO: After JWT implementation, validate token
- */
-app.get('/api/pairing/devices', async (req, res) => {
-    const staffId = req.headers['x-staff-id'] as string;
-    const restaurantId = req.headers['x-restaurant-id'] as string;
-
-    if (!staffId || !restaurantId) {
-        return res.status(400).json({ error: 'Missing staffId or restaurantId' });
-    }
-
-    try {
-        const devices = await listPairedDevices(restaurantId, staffId);
-        res.json({ success: true, devices });
-    } catch (error: any) {
-        console.error('[ERROR] /api/pairing/devices:', error.message);
-        res.status(500).json({ error: 'Failed to fetch devices' });
-    }
-});
-
-/**
- * DELETE /api/pairing/devices/:deviceId
- * Disable a paired device (revoke without deleting)
- * 
- * Auth: Required
- */
-app.delete('/api/pairing/devices/:deviceId', async (req, res) => {
-    const { deviceId } = req.params;
-    const staffId = req.headers['x-staff-id'] as string;
-    const restaurantId = req.headers['x-restaurant-id'] as string;
-
-    if (!staffId || !restaurantId) {
-        return res.status(400).json({ error: 'Missing staffId or restaurantId' });
-    }
-
-    try {
-        await disableDevice(deviceId, staffId, restaurantId);
-
-        // Notify restaurant: device disabled
-        io.to(`restaurant:${restaurantId}`).emit('device_change', {
-            type: 'device_disabled',
-            device_id: deviceId
-        });
-
-        res.json({ success: true, message: 'Device disabled' });
-    } catch (error: any) {
-        console.error('[ERROR] /api/pairing/devices DELETE:', error.message);
-        res.status(error.message.includes('UNAUTHORIZED') ? 403 : 500).json({
-            error: error.message || 'Failed to disable device'
-        });
-    }
-});
-
-// Cleanup job: Delete expired pairing codes every 5 minutes
-setInterval(async () => {
-    try {
-        await cleanupExpiredCodes();
-    } catch (error) {
-        console.error('Pairing cleanup job failed:', error);
-    }
-}, 5 * 60 * 1000);
 
 // --- Audit Log Routes ---
 app.post('/api/audit-logs', async (req, res) => {
@@ -3801,7 +3757,7 @@ app.use((req, res) => {
     res.status(404).json({ error: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
-server.listen(PORT, '0.0.0.0', async () => {
+server.listen(Number(PORT), '0.0.0.0', async () => {
     console.log(`🚀 Server Engine Online: http://localhost:${PORT}`);
     updateService.startPolling();
 

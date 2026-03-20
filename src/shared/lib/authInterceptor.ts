@@ -99,6 +99,16 @@ export async function fetchWithAuth(
     }
   }
 
+  // Handle 410 Gone (Session Expired)
+  if (response.status === 410) {
+    console.error('[Auth] Session expired (410)');
+    sessionStorage.removeItem('accessToken');
+    sessionStorage.removeItem('refreshToken');
+    sessionStorage.removeItem('accessTokenExpiry');
+    window.dispatchEvent(new CustomEvent('session:expired'));
+    return response;
+  }
+
   return response;
 }
 

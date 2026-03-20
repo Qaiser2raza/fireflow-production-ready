@@ -6,36 +6,58 @@ import { Phone, MapPin, Navigation, CheckCircle2, Bike, LogOut, Package, ArrowLe
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 export const RiderView: React.FC = () => {
-   const { currentUser, orders, completeDelivery, failDelivery, logout, fetchInitialData } = useAppContext();
+   const { currentUser, orders, completeDelivery, failDelivery, logout, fetchInitialData, drivers } = useAppContext();
    const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
    const [activeShift, setActiveShift] = useState<any>(null);
    const [isLoading, setIsLoading] = useState(false);
+   const [viewingRiderId, setViewingRiderId] = useState<string | null>(null);
 
    const API = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
+   // Role Checks
+   const isRider = currentUser?.role === 'RIDER';
+   const isManagement = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '');
+   const canAccess = isRider || isManagement;
+
+   // Initialize viewingRiderId
+   useEffect(() => {
+      if (isRider && currentUser?.id) {
+         setViewingRiderId(currentUser.id);
+      } else if (isManagement && !viewingRiderId && drivers.length > 0) {
+         setViewingRiderId(drivers[0].id);
+      }
+   }, [currentUser?.id, isRider, isManagement, drivers]);
+
    const fetchShift = async () => {
-      if (!currentUser?.id) return;
+      if (!viewingRiderId) return;
       setIsLoading(true);
       try {
-         const res = await fetchWithAuth(`${API}/riders/${currentUser.id}/active-shift`);
+         const res = await fetchWithAuth(`${API}/riders/${viewingRiderId}/active-shift`);
          const d = await res.json();
          if (d.success) setActiveShift(d.shift);
+         else setActiveShift(null);
       } catch (e) {
          console.error("Failed to fetch shift", e);
+         setActiveShift(null);
       } finally {
          setIsLoading(false);
       }
    };
 
    useEffect(() => {
-      fetchShift();
+      if (viewingRiderId) {
+         fetchShift();
+      }
+   }, [viewingRiderId]);
+
+   useEffect(() => {
       const interval = setInterval(fetchShift, 30000);
       return () => clearInterval(interval);
-   }, [currentUser?.id]);
+   }, [viewingRiderId]);
 
    // Filter orders for this rider
    const myOrders = orders.filter(o =>
-      (o.assigned_driver_id === currentUser?.id || o.delivery_orders?.[0]?.driver_id === currentUser?.id) &&
+      (o.assigned_driver_id === viewingRiderId || o.delivery_orders?.[0]?.driver_id === viewingRiderId) &&
       (o.status === OrderStatus.READY || o.status === OrderStatus.DELIVERED || o.status === OrderStatus.CLOSED)
    ).sort((a, b) => new Date(b.created_at || b.timestamp || 0).getTime() - new Date(a.created_at || a.timestamp || 0).getTime());
 
@@ -70,7 +92,7 @@ export const RiderView: React.FC = () => {
    const totalLiability = float + collectedCash;
 
    // Detail View
-   if (selectedOrder) {
+   if (selectedOrder && (isRider || isManagement)) {
       return (
          <div className="h-full w-full bg-slate-950 flex flex-col relative overflow-hidden">
             {/* Top Bar */}
@@ -114,10 +136,10 @@ export const RiderView: React.FC = () => {
                      {(selectedOrder.order_items || []).map((item: any, idx: number) => (
                         <div key={idx} className="flex justify-between items-center border-b border-slate-800 pb-3 last:border-0 last:pb-0">
                            <div className="flex gap-3 items-center">
-                              <div className="bg-slate-800 text-white font-bold w-8 h-8 rounded flex items-center justify-center text-sm">
+                               <div className="bg-slate-800 text-white font-bold w-8 h-8 rounded flex items-center justify-center text-sm">
                                  {item.quantity}
-                              </div>
-                              <div className="text-slate-200">{item.item_name || 'Item'}</div>
+                               </div>
+                               <div className="text-slate-200">{item.item_name || 'Item'}</div>
                            </div>
                            <div className="text-slate-500 text-sm">Rs. {Number(item.total_price || 0).toLocaleString()}</div>
                         </div>
@@ -167,8 +189,27 @@ export const RiderView: React.FC = () => {
                   <Bike size={24} />
                </div>
                <div>
-                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.2em] mb-0.5">Active Rider</div>
-                  <div className="text-white font-bold text-xl tracking-tight leading-none">{currentUser?.name}</div>
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.2em] mb-0.5">
+                     {isRider ? 'Active Rider' : 'Rider Context'}
+                  </div>
+                  {isManagement ? (
+                     <div className="flex items-center gap-2">
+                        <select
+                           value={viewingRiderId || ''}
+                           onChange={(e) => setViewingRiderId(e.target.value)}
+                           className="bg-slate-800 text-white text-sm font-bold border-0 rounded-lg py-1 px-2 focus:ring-2 focus:ring-indigo-500"
+                        >
+                           {drivers.map(d => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                           ))}
+                        </select>
+                        <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-black">MANAGER VIEW</span>
+                     </div>
+                  ) : (
+                     <div className="text-white font-bold text-xl tracking-tight leading-none">
+                        {currentUser?.name || 'Unknown User'}
+                     </div>
+                  )}
                </div>
             </div>
             <div className="flex gap-2">
@@ -181,7 +222,27 @@ export const RiderView: React.FC = () => {
             </div>
          </div>
 
-         {/* Liability Dashboard */}
+         {!canAccess ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-950/50">
+               <div className="w-20 h-20 rounded-full bg-red-500/10 flex items-center justify-center text-red-500 mb-6 border border-red-500/20 animate-pulse">
+                  <AlertTriangle size={40} />
+               </div>
+               <h2 className="text-2xl font-bold text-white mb-2 font-serif">Access Restricted</h2>
+               <p className="text-slate-400 text-sm max-w-xs mb-8 leading-relaxed">
+                  You are currently logged in as <b>{currentUser?.name}</b> with the role of <b>{currentUser?.role}</b>.
+                  <br /><br />
+                  The Rider Portal is only accessible to staff with the <b>RIDER</b> or <b>MANAGER</b> roles.
+               </p>
+               <button
+                  onClick={logout}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl font-bold uppercase tracking-widest shadow-lg transition-transform active:scale-95 flex items-center gap-2"
+               >
+                  <RefreshCw size={18} /> Switch User
+               </button>
+            </div>
+         ) : (
+            <>
+               {/* Liability Dashboard */}
          <div className="p-6">
             <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
                <div className="absolute top-0 right-0 p-8 opacity-5">
@@ -279,8 +340,10 @@ export const RiderView: React.FC = () => {
                      ))}
                   </>
                )}
+               </div>
             </div>
-         </div>
-      </div>
-   );
+         </>
+      )}
+   </div>
+);
 };

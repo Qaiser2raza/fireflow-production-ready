@@ -592,7 +592,7 @@ export interface AppContextType {
     runDiagnostics: () => Promise<any>;
 
     // New Entities & Props
-    connectionStatus: 'connected' | 'disconnected';
+    connectionStatus: 'connected' | 'reconnecting' | 'disconnected';
     lastSyncAt?: Date;
     customers: Customer[];
     vendors: Vendor[];
