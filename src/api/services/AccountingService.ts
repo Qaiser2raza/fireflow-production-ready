@@ -196,6 +196,61 @@ export class AccountingService {
     }
 
     /**
+     * Records a customer payment (Khata Balance Reduction).
+     * Impacts: Debit Cash/Bank (Cash In), Credit Customer Account (Debt Out).
+     */
+    async recordCustomerPayment(data: {
+        restaurantId: string;
+        customerId: string;
+        amount: number | Decimal;
+        method: 'CASH' | 'BANK';
+        processedBy: string;
+        referenceId?: string;
+        notes?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // 1. DEBIT: Cash Drawer / Bank (Increase Assets)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'SETTLEMENT',
+            referenceId: data.referenceId,
+            description: data.notes || `Payment received from customer #${data.customerId.slice(-6)} via ${data.method}`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 2. CREDIT: Customer Account (Decrease Assets/Debt)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.customerId,
+            transactionType: 'CREDIT',
+            amount: amount,
+            referenceType: 'SETTLEMENT',
+            referenceId: data.referenceId,
+            description: `Customer account balance reduced`,
+            processedBy: data.processedBy
+        }, db);
+
+        // ── Double-Entry Journal ─────────────────────────────────────────
+        try {
+            await journalEntryService.recordCustomerPaymentJournal({
+                restaurantId: data.restaurantId,
+                customerId: data.customerId,
+                amount: data.amount,
+                method: data.method,
+                processedBy: data.processedBy,
+                referenceId: data.referenceId,
+                notes: data.notes
+            }, db);
+        } catch (jeErr) {
+            console.error('[JE] recordCustomerPaymentJournal failed (non-fatal):', jeErr);
+        }
+    }
+
+    /**
      * Records issuing a float to a rider.
      * Impacts: Credit Cash Drawer (Cash Out), Debit Rider (Debt Up).
      */
@@ -719,6 +774,52 @@ export class AccountingService {
             cancel_summary: cancelSummary,
             hourly_velocity: hourlyVelocity,
         };
+    }
+
+    /**
+     * Records a credit sale to a customer's ledger.
+     * DR: Customer Account (Khata)
+     * CR: Revenue (...)
+     */
+    async recordCreditSale(orderId: string, tx?: any) {
+        const db = tx || prisma;
+        
+        // 0. Idempotency Check
+        const existing = await db.ledger_entries.findFirst({
+            where: { reference_id: orderId, reference_type: 'ORDER', account_id: { not: null } }
+        });
+        if (existing) return;
+
+        const order = await db.orders.findUnique({ where: { id: orderId } });
+        if (!order || !order.customer_id) return;
+
+        const total = new Decimal(order.total.toString());
+
+        // 1. CREDIT: Revenue
+        await this.createLedgerEntry({
+            restaurantId: order.restaurant_id,
+            transactionType: 'CREDIT',
+            amount: total,
+            referenceType: 'ORDER',
+            referenceId: order.id,
+            description: `Sales Revenue (Credit) from Order #${order.order_number}`,
+            processedBy: order.last_action_by
+        }, db);
+
+        // 2. DEBIT: Customer Account (Asset of Restaurant)
+        await this.createLedgerEntry({
+            restaurantId: order.restaurant_id,
+            accountId: order.customer_id,
+            transactionType: 'DEBIT',
+            amount: total,
+            referenceType: 'ORDER',
+            referenceId: order.id,
+            description: `Credit Sale: Order #${order.order_number}`,
+            processedBy: order.last_action_by
+        }, db);
+
+        // 3. Double-Entry Journal
+        await journalEntryService.recordCreditSaleJournal(order.id, db);
     }
 }
 

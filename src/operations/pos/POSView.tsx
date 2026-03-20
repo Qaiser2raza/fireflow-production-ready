@@ -248,13 +248,13 @@ export const POSView: React.FC = () => {
       // Restore Bill Config (v3.1 Fix: maintain accurate discounts/taxes on recall)
       const savedBreakdown = orderToEdit.breakdown;
       setBillConfig({
-        discountType: orderToEdit.discount_type || (savedBreakdown?.discountPercent > 0 ? 'percent' : 'flat'),
-        discountValue: orderToEdit.discount_value || orderToEdit.discount || savedBreakdown?.discountValue || savedBreakdown?.discount || 0,
+        discountType: (orderToEdit as any).discount_type || (savedBreakdown?.discountPercent > 0 ? 'percent' : 'flat'),
+        discountValue: (orderToEdit as any).discount_value || orderToEdit.discount || savedBreakdown?.discountValue || savedBreakdown?.discount || 0,
         serviceChargeEnabled: orderToEdit.service_charge !== undefined ? orderToEdit.service_charge > 0 : (savedBreakdown?.serviceCharge > 0),
-        serviceChargeRate: orderToEdit.service_charge_rate || savedBreakdown?.serviceChargeRate || 5,
+        serviceChargeRate: (orderToEdit as any).service_charge_rate || savedBreakdown?.serviceChargeRate || 5,
         taxEnabled: orderToEdit.tax !== undefined ? orderToEdit.tax > 0 : (savedBreakdown?.tax > 0),
-        taxRate: orderToEdit.tax_rate || savedBreakdown?.taxRate || (operationsConfig?.taxRate ?? 16),
-        taxLabel: orderToEdit.tax_label || savedBreakdown?.taxLabel || (operationsConfig?.taxLabel ?? 'GST'),
+        taxRate: (orderToEdit as any).tax_rate || savedBreakdown?.taxRate || (operationsConfig?.taxRate ?? 16),
+        taxLabel: (orderToEdit as any).tax_label || savedBreakdown?.taxLabel || (operationsConfig?.taxLabel ?? 'GST'),
         taxInclusive: orderToEdit.tax_type === 'INCLUSIVE' || (savedBreakdown?.taxInclusive ?? false),
         deliveryFeeEnabled: orderToEdit.type === 'DELIVERY',
         deliveryFee: orderToEdit.delivery_fee || savedBreakdown?.deliveryFee || 0,
@@ -1326,7 +1326,7 @@ export const POSView: React.FC = () => {
           order={{ id: activeOrderId || 'NEW', total: breakdown.total, type: orderType } as any}
           breakdown={breakdown}
           onClose={() => setShowPaymentModal(false)}
-          onProcessPayment={async (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET', tendered?: number, discountReason?: string) => {
+          onProcessPayment={async (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET' | 'CUSTOMER_ACCOUNT', tendered?: number, discountReason?: string) => {
             const total = amount;
             const orderId = activeOrderId || `ORD-${Date.now()}`;
 
@@ -1357,7 +1357,7 @@ export const POSView: React.FC = () => {
           order={(activeOrderData || orderToEdit)!}
           breakdown={breakdown}
           onClose={() => setShowPaymentModal(false)}
-          onProcessPayment={async (total, method, tendered, discountReason) => {
+          onProcessPayment={async (total, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET' | 'CUSTOMER_ACCOUNT', tendered, discountReason) => {
             const orderId = (activeOrderData || orderToEdit)?.id;
             if (!orderId) return;
 

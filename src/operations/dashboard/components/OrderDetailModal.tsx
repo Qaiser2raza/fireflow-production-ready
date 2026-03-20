@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import { Order, Table } from '../../../shared/types';
 import { X, Clock, Users, Receipt, Edit2, CheckCircle2, FileText, Printer, Download } from 'lucide-react';
 import { useThermalPrinter } from '../../../hooks/useThermalPrinter';
@@ -25,7 +25,6 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     currentUser
 }) => {
     const { printReceipt } = useThermalPrinter();
-    const receiptRef = useRef<HTMLDivElement>(null);
 
     const elapsedMinutes = useMemo(() => {
         return Math.floor((Date.now() - new Date(order.created_at).getTime()) / 60000);

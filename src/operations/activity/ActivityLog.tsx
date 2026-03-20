@@ -7,7 +7,7 @@ import {
    Truck, Utensils, XCircle, CheckCircle2, History,
    FileText, Calendar, Wallet, HandCoins, Timer,
    LayoutGrid, List as ListIcon, MoreHorizontal, Unlock,
-   Printer, Trash2, Slash, PowerOff
+   Printer, Trash2, Slash
 } from 'lucide-react';
 import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
 

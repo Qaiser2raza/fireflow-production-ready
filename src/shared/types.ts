@@ -458,8 +458,8 @@ export interface Transaction {
     orderId?: string;
     order_id?: string;
     amount: number;
-    payment_method: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET';
-    method?: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET'; // Deprecated alias
+    payment_method: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET' | 'CUSTOMER_ACCOUNT';
+    method?: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET' | 'CUSTOMER_ACCOUNT'; // Deprecated alias
     status: 'PAID' | 'REFUNDED' | 'VOIDED';
     transaction_ref?: string;
     type?: 'PAYMENT' | 'REFUND';

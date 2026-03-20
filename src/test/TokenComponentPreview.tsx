@@ -145,6 +145,7 @@ export const TokenComponentPreview: React.FC = () => {
             {showBanner && (
                 <TokenDisplayBanner
                     token="T042"
+                    orderType={'TAKEAWAY'}
                     estimatedReadyTime={estimatedTime}
                     onPrintToken={() => {
                         alert('Print token functionality - connects to thermal printer');

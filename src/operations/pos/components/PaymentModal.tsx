@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, CreditCard, Wallet, Banknote, ChevronRight, CheckCircle2, Settings2 } from 'lucide-react';
+import { X, CreditCard, Wallet, Banknote, ChevronRight, CheckCircle2, Settings2, User } from 'lucide-react';
+import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { Order, PaymentBreakdown } from '../../../shared/types';
 
 interface PaymentModalProps {
     order: Order;
     breakdown: PaymentBreakdown; // We should pass the calculated breakdown
     onClose: () => void;
-    onProcessPayment: (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET', tenderedAmount?: number, discountReason?: string) => Promise<void>;
+    onProcessPayment: (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET' | 'CUSTOMER_ACCOUNT', tenderedAmount?: number, discountReason?: string) => Promise<void>;
     onPrintReceipt?: () => Promise<void>;
     onPaymentCompleteClose?: () => void;
 }
@@ -19,7 +20,20 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     onPrintReceipt,
     onPaymentCompleteClose
 }) => {
-    const [method, setMethod] = useState<'CASH' | 'CARD' | 'RAAST'>('CASH');
+    const [method, setMethod] = useState<'CASH' | 'CARD' | 'RAAST' | 'CUSTOMER_ACCOUNT'>('CASH');
+    const [customerBalance, setCustomerBalance] = useState<{ balance: number, status: string, message: string } | null>(null);
+
+    useEffect(() => {
+        if (order.customer_id) {
+            const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
+            fetchWithAuth(`${API_URL}/customers/${order.customer_id}/balance`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) setCustomerBalance(data.data);
+                })
+                .catch(err => console.error("Balance fetch failed", err));
+        }
+    }, [order.customer_id]);
     const [tenderedAmount, setTenderedAmount] = useState<string>('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [completed, setCompleted] = useState(false);
@@ -185,12 +199,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                             <span className="font-mono">Rs. {breakdown.subtotal.toLocaleString()}</span>
                         </div>
                         
-                        {breakdown.discount > 0 && (
-                            <div className="flex justify-between text-xs text-red-400/80 italic">
-                                <span>Discount ({breakdown.discountPercent > 0 ? `${breakdown.discountPercent}%` : 'Flat'})</span>
-                                <span className="font-mono">-Rs. {breakdown.discount.toLocaleString()}</span>
-                            </div>
-                        )}
+                        {breakdown?.discount > 0 && (
+          <div className="flex justify-between items-center text-rose-400 py-1 transition-all duration-300">
+            <span className="text-xs font-medium">Discount {breakdown?.discountPercent && breakdown.discountPercent > 0 ? `(${breakdown.discountPercent}%)` : ''}</span>
+            <span className="text-xs font-bold">-Rs. {Math.round(breakdown.discount).toLocaleString()}</span>
+          </div>
+        )}
 
                         {breakdown.serviceCharge > 0 && (
                             <div className="flex justify-between text-xs text-blue-400/80">
@@ -240,22 +254,38 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                     </button>
 
                     <div className="p-8 pb-0">
-                        <div className="grid grid-cols-3 gap-4">
-                            {['CASH', 'CARD', 'RAAST'].map((m) => (
-                                <button
-                                    key={m}
-                                    onClick={() => setMethod(m as any)}
-                                    className={`h-20 rounded-xl border flex flex-col items-center justify-center gap-1 transition-all ${method === m
-                                        ? 'border-gold-500/50 bg-gold-500/10 text-gold-400 shadow-lg shadow-gold-900/10'
-                                        : 'border-slate-800 bg-slate-900/50 text-slate-500 hover:bg-slate-900 hover:border-slate-700'
-                                        }`}
-                                >
-                                    {m === 'CASH' && <Banknote size={24} />}
-                                    {m === 'CARD' && <CreditCard size={24} />}
-                                    {m === 'RAAST' && <Wallet size={24} />}
-                                    <span className="font-bold text-xs tracking-widest">{m}</span>
-                                </button>
-                            ))}
+                        <div className="grid grid-cols-4 gap-4">
+                            {['CASH', 'CARD', 'RAAST', 'CUSTOMER_ACCOUNT'].map((m) => {
+                                const isCustomerAccount = m === 'CUSTOMER_ACCOUNT';
+                                const isDisabled = isCustomerAccount && !order.customer_id;
+                                
+                                return (
+                                    <button
+                                        key={m}
+                                        disabled={isDisabled}
+                                        onClick={() => setMethod(m as any)}
+                                        className={`h-20 rounded-xl border flex flex-col items-center justify-center gap-1 transition-all ${method === m
+                                            ? 'border-gold-500/50 bg-gold-500/10 text-gold-400 shadow-lg shadow-gold-900/10'
+                                            : isDisabled 
+                                                ? 'border-slate-900 bg-slate-900/20 text-slate-700 cursor-not-allowed opacity-50'
+                                                : 'border-slate-800 bg-slate-900/50 text-slate-500 hover:bg-slate-900 hover:border-slate-700'
+                                            }`}
+                                    >
+                                        {m === 'CASH' && <Banknote size={24} />}
+                                        {m === 'CARD' && <CreditCard size={24} />}
+                                        {m === 'RAAST' && <Wallet size={24} />}
+                                        {isCustomerAccount && <User size={24} />}
+                                        <span className="font-bold text-[10px] tracking-widest text-center truncate w-full px-1">
+                                            {isCustomerAccount ? 'KHATA' : m}
+                                        </span>
+                                        {isCustomerAccount && customerBalance && (
+                                            <span className={`text-[8px] font-black ${customerBalance.balance > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                                Rs. {Math.abs(customerBalance.balance).toLocaleString()}
+                                            </span>
+                                        )}
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
 
@@ -320,9 +350,16 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center text-center">
                                 <div className="w-32 h-32 rounded-full bg-slate-900 border-4 border-slate-800 flex items-center justify-center mb-8 animate-pulse">
-                                    {method === 'CARD' ? <CreditCard size={64} className="text-blue-500" /> : <Wallet size={64} className="text-teal-500" />}
+                                    {method === 'CARD' && <CreditCard size={64} className="text-blue-500" />}
+                                    {method === 'RAAST' && <Wallet size={64} className="text-teal-500" />}
+                                    {method === 'CUSTOMER_ACCOUNT' && <User size={64} className="text-gold-500" />}
                                 </div>
-                                <h3 className="text-2xl font-bold text-white mb-2">Process {method} Payment</h3>
+                                <h3 className="text-2xl font-bold text-white mb-2">Process {method === 'CUSTOMER_ACCOUNT' ? 'Credit Sale' : method}</h3>
+                                {method === 'CUSTOMER_ACCOUNT' && customerBalance && (
+                                    <div className="mb-4 text-gold-400 font-bold bg-gold-400/10 px-4 py-2 rounded-lg border border-gold-400/20">
+                                        Current Khata: {customerBalance.message}
+                                    </div>
+                                )}
                                 <div className="bg-slate-900 px-6 py-3 rounded-xl border border-slate-800">
                                     <span className="text-slate-500 mr-2">Amount to Charge:</span>
                                     <span className="text-white font-bold text-xl">Rs. {finalTotal.toLocaleString()}</span>

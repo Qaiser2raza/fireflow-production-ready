@@ -13,7 +13,12 @@ import {
     Plus,
     Trash2,
     History,
-    Zap
+    Zap,
+    Scale,
+    Receipt,
+    Settings,
+    X,
+    Minus
 } from 'lucide-react';
 import { useAppContext as useApp } from '../../client/contexts/AppContext';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
@@ -40,6 +45,8 @@ interface Customer {
     ltv?: number;
     loyalty_score?: number;
     segment?: 'VIP' | 'REGULAR' | 'CHURN_RISK' | 'NEW';
+    credit_limit?: number;
+    credit_enabled?: boolean;
 }
 
 export const CustomersView: React.FC = () => {
@@ -54,6 +61,25 @@ export const CustomersView: React.FC = () => {
     const [showAddressModal, setShowAddressModal] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
     const [fullHistory, setFullHistory] = useState<any[]>([]);
+    const [khataBalances, setKhataBalances] = useState<Record<string, { balance: number, status: string, message: string }>>({});
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [showCreditModal, setShowCreditModal] = useState(false);
+    const [statement, setStatement] = useState<any[]>([]);
+    const [isPostingPayment, setIsPostingPayment] = useState(false);
+    
+    // Payment Form
+    const [paymentForm, setPaymentForm] = useState({
+        amount: '',
+        method: 'CASH' as 'CASH' | 'BANK',
+        reference: '',
+        notes: ''
+    });
+    
+    // Credit Form
+    const [creditForm, setCreditForm] = useState({
+        credit_enabled: false,
+        credit_limit: 0
+    });
 
     // Form States
     const [customerForm, setCustomerForm] = useState({
@@ -86,11 +112,38 @@ export const CustomersView: React.FC = () => {
             const data = await response.json();
 
             setCustomers(data);
+            
+            // Sync balances in background
+            data.forEach((c: any) => fetchBalance(c.id));
         } catch (error) {
             console.error(error);
             addNotification?.('error', 'Error loading customers');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchBalance = async (id: string) => {
+        try {
+            const res = await fetchWithAuth(`${API_URL}/customers/${id}/balance`);
+            const data = await res.json();
+            if (data.success) {
+                setKhataBalances(prev => ({ ...prev, [id]: data.data }));
+            }
+        } catch (e) {
+            console.error("Balance fetch error", e);
+        }
+    };
+
+    const fetchStatement = async (id: string) => {
+        try {
+            const res = await fetchWithAuth(`${API_URL}/customers/${id}/statement`);
+            const data = await res.json();
+            if (data.success) {
+                setStatement(data.data);
+            }
+        } catch (e) {
+            console.error("Statement fetch error", e);
         }
     };
 
@@ -330,16 +383,31 @@ export const CustomersView: React.FC = () => {
                                     </div>
                                 </div>
 
-                                <div className="mt-4 flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <Clock size={12} className="text-slate-600" />
-                                        <span className="text-[10px] text-slate-500 uppercase font-black tracking-widest">
-                                            Last: {customer.last_order_at ? new Date(customer.last_order_at).toLocaleDateString() : 'NO HISTORY'}
-                                        </span>
+                                    <div className="mt-4 flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            {khataBalances[customer.id] ? (
+                                                <div className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-2 ${
+                                                    khataBalances[customer.id].balance > 0 
+                                                        ? 'bg-red-500/10 text-red-400 border border-red-500/20' 
+                                                        : khataBalances[customer.id].balance < 0
+                                                            ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                                                            : 'bg-slate-800 text-slate-500 border border-slate-700'
+                                                }`}>
+                                                    <Scale size={10} />
+                                                    {khataBalances[customer.id].message}
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <Clock size={12} className="text-slate-600" />
+                                                    <span className="text-[10px] text-slate-500 uppercase font-black tracking-widest">
+                                                        Last: {customer.last_order_at ? new Date(customer.last_order_at).toLocaleDateString() : 'NO HISTORY'}
+                                                    </span>
+                                                </>
+                                            )}
+                                        </div>
+                                        <ChevronRight className={`transition-all ${selectedCustomerId === customer.id ? 'translate-x-1 text-indigo-500' : 'text-slate-700 opacity-0 group-hover:opacity-100 group-hover:translate-x-1'}`} size={16} />
                                     </div>
-                                    <ChevronRight className={`transition-all ${selectedCustomerId === customer.id ? 'translate-x-1 text-indigo-500' : 'text-slate-700 opacity-0 group-hover:opacity-100 group-hover:translate-x-1'}`} size={16} />
-                                </div>
-                            </div>
+</div>
                         ))}
                     </div>
                 </div>
@@ -373,10 +441,29 @@ export const CustomersView: React.FC = () => {
                         </div>
 
                         <div className="grid grid-cols-2 gap-4 mb-10">
-                            <div className="bg-slate-900/50 border border-slate-800 p-6 rounded-[2rem]">
-                                <History size={20} className="text-indigo-400 mb-3" />
-                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Total Orders</p>
-                                <p className="text-2xl font-black text-white">{selectedCustomer.total_orders || 0}</p>
+                            <div className={`bg-slate-900/50 border p-6 rounded-[2rem] relative overflow-hidden group ${
+                                selectedCustomerId && khataBalances[selectedCustomerId]?.balance > 0 ? 'border-red-500/30' : 
+                                selectedCustomerId && khataBalances[selectedCustomerId]?.balance < 0 ? 'border-green-500/30' : 'border-slate-800'
+                            }`}>
+                                <Scale size={20} className={selectedCustomerId && khataBalances[selectedCustomerId]?.balance > 0 ? 'text-red-400 mb-3' : selectedCustomerId && khataBalances[selectedCustomerId]?.balance < 0 ? 'text-green-400 mb-3' : 'text-indigo-400 mb-3'} />
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Khata Balance</p>
+                                <p className={`text-2xl font-black ${selectedCustomerId && khataBalances[selectedCustomerId]?.balance > 0 ? 'text-red-400' : selectedCustomerId && khataBalances[selectedCustomerId]?.balance < 0 ? 'text-green-400' : 'text-white'}`}>
+                                    Rs. {Math.abs(selectedCustomerId ? khataBalances[selectedCustomerId]?.balance || 0 : 0).toLocaleString()}
+                                </p>
+                                <p className="text-[10px] font-bold text-slate-600 mt-1 uppercase tracking-tighter">
+                                    {(selectedCustomerId && khataBalances[selectedCustomerId]?.message) || 'Balance Clear'}
+                                </p>
+                                <button 
+                                    onClick={() => {
+                                        if (selectedCustomerId) {
+                                            fetchStatement(selectedCustomerId);
+                                            setShowPaymentModal(true);
+                                        }
+                                    }}
+                                    className="absolute top-4 right-4 p-2 bg-indigo-600/10 text-indigo-400 rounded-xl opacity-0 group-hover:opacity-100 transition-all hover:bg-indigo-600 hover:text-white"
+                                >
+                                    <Receipt size={14} />
+                                </button>
                             </div>
                             <div className="bg-slate-900/50 border border-slate-800 p-6 rounded-[2rem]">
                                 <CreditCard size={20} className="text-emerald-400 mb-3" />
@@ -424,10 +511,33 @@ export const CustomersView: React.FC = () => {
                         </div>
 
                         <div className="mt-auto pt-6 border-t border-slate-800/50">
-                            <button className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-[1.5rem] uppercase text-xs tracking-[0.2em] shadow-xl shadow-indigo-600/20 transition-all mb-4 flex items-center justify-center gap-2">
-                                <Zap size={16} />
-                                Send Loyalty Bonus
-                            </button>
+                            <div className="flex gap-4 mb-4">
+                                <button 
+                                    onClick={() => {
+                                        if (selectedCustomerId) {
+                                            fetchStatement(selectedCustomerId);
+                                            setShowPaymentModal(true);
+                                        }
+                                    }}
+                                    className="flex-1 py-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-[1.5rem] uppercase text-xs tracking-[0.2em] shadow-xl shadow-emerald-600/20 transition-all flex items-center justify-center gap-2"
+                                >
+                                    <Receipt size={16} />
+                                    Recieve Payment
+                                </button>
+                                <button 
+                                    onClick={() => {
+                                        setCreditForm({
+                                            credit_enabled: selectedCustomer.credit_enabled || false,
+                                            credit_limit: selectedCustomer.credit_limit || 0
+                                        });
+                                        setShowCreditModal(true);
+                                    }}
+                                    className="w-16 h-16 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 hover:text-white transition-colors"
+                                    title="Credit Settings"
+                                >
+                                    <Settings size={20} />
+                                </button>
+                            </div>
                             <div className="flex gap-4">
                                 <button
                                     onClick={() => {
@@ -447,7 +557,7 @@ export const CustomersView: React.FC = () => {
                                     onClick={fetchHistory}
                                     className="flex-1 py-4 bg-slate-900 hover:bg-slate-800 text-slate-400 font-black rounded-2xl border border-slate-800 uppercase text-[10px] tracking-widest transition-all"
                                 >
-                                    History
+                                    Order Log
                                 </button>
                                 <button
                                     onClick={handleDeletePatron}
@@ -649,6 +759,211 @@ export const CustomersView: React.FC = () => {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+            {/* Record Payment Modal */}
+            {showPaymentModal && (
+                <div className="fixed inset-0 z-[110] bg-slate-950/90 backdrop-blur-2xl flex items-center justify-center p-6">
+                    <div className="bg-[#0c111d] border border-slate-800 w-full max-w-4xl rounded-[3rem] shadow-3xl overflow-hidden flex flex-col max-h-[90vh]">
+                        <div className="p-10 border-b border-slate-800 bg-slate-900/20 flex justify-between items-center">
+                            <div>
+                                <h2 className="text-3xl font-black text-white uppercase tracking-tighter italic">Ledger Settlement</h2>
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">Recording financial inflow for {selectedCustomer?.name}</p>
+                            </div>
+                            <button onClick={() => setShowPaymentModal(false)} className="p-4 bg-slate-800 hover:bg-slate-700 rounded-2xl transition-all">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        
+                        <div className="flex-1 grid grid-cols-2 overflow-hidden">
+                            {/* Form Side */}
+                            <div className="p-10 border-r border-slate-800 space-y-8">
+                                <div className="space-y-4">
+                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] ml-1">Payment Amount (Rs.)</label>
+                                    <input 
+                                        type="number"
+                                        placeholder="0.00"
+                                        className="w-full bg-slate-950 border-2 border-slate-800 rounded-3xl p-6 text-4xl font-black text-emerald-400 outline-none focus:border-emerald-500/50 transition-all font-mono"
+                                        value={paymentForm.amount}
+                                        onChange={e => setPaymentForm({...paymentForm, amount: e.target.value})}
+                                    />
+                                </div>
+
+                                <div className="space-y-4">
+                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] ml-1">Method Selection</label>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {['CASH', 'BANK'].map(m => (
+                                            <button 
+                                                key={m}
+                                                onClick={() => setPaymentForm({...paymentForm, method: m as any})}
+                                                className={`py-6 rounded-2xl border-2 font-black uppercase text-xs tracking-widest transition-all ${
+                                                    paymentForm.method === m 
+                                                        ? 'bg-emerald-600/10 border-emerald-500 text-emerald-400 shadow-xl shadow-emerald-900/20' 
+                                                        : 'bg-slate-900 border-slate-800 text-slate-600 hover:border-slate-700'
+                                                }`}
+                                            >
+                                                {m}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] ml-1">Logic Details (Notes/Ref)</label>
+                                    <input 
+                                        type="text"
+                                        placeholder="Reference # (e.g. Bank Slip ID)"
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-sm font-bold text-white outline-none focus:border-indigo-500"
+                                        value={paymentForm.reference}
+                                        onChange={e => setPaymentForm({...paymentForm, reference: e.target.value})}
+                                    />
+                                    <textarea 
+                                        placeholder="Additional notes for accounting..."
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-sm font-bold text-white outline-none focus:border-indigo-500 h-24 resize-none"
+                                        value={paymentForm.notes}
+                                        onChange={e => setPaymentForm({...paymentForm, notes: e.target.value})}
+                                    />
+                                </div>
+
+                                <button 
+                                    disabled={!paymentForm.amount || isPostingPayment}
+                                    onClick={async () => {
+                                        setIsPostingPayment(true);
+                                        try {
+                                            const res = await fetchWithAuth(`${API_URL}/customers/${selectedCustomerId}/payment`, {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                    amount: Number(paymentForm.amount),
+                                                    method: paymentForm.method,
+                                                    referenceId: paymentForm.reference,
+                                                    notes: paymentForm.notes
+                                                })
+                                            });
+                                            const data = await res.json();
+                                            if (data.success) {
+                                                addNotification?.('success', 'Ledger updated successfully');
+                                                setPaymentForm({ amount: '', method: 'CASH', reference: '', notes: '' });
+                                                fetchBalance(selectedCustomerId!);
+                                                fetchStatement(selectedCustomerId!);
+                                            } else {
+                                                throw new Error(data.message);
+                                            }
+                                        } catch (e: any) {
+                                            addNotification?.('error', e.message || 'Payment recording failed');
+                                        } finally {
+                                            setIsPostingPayment(false);
+                                        }
+                                    }}
+                                    className="w-full py-6 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-white font-black rounded-3xl uppercase text-sm tracking-[0.3em] shadow-2xl shadow-emerald-600/30 transition-all active:scale-95"
+                                >
+                                    {isPostingPayment ? 'POSTING LEDGER...' : 'RECORD SETTLEMENT'}
+                                </button>
+                            </div>
+
+                            {/* Statement Side */}
+                            <div className="bg-slate-950/50 flex flex-col">
+                                <div className="p-8 border-b border-slate-800 flex justify-between items-center">
+                                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                        <History size={14} className="text-emerald-500" /> Recent Micro-Ledger
+                                    </h3>
+                                    <div className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                                        selectedCustomerId && khataBalances[selectedCustomerId]?.balance > 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-green-500/10 text-green-400 border-green-500/20'
+                                    }`}>
+                                        Rs. {Math.abs(selectedCustomerId ? khataBalances[selectedCustomerId]?.balance || 0 : 0).toLocaleString()}
+                                    </div>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-8 space-y-4 custom-scrollbar">
+                                    {statement.length === 0 ? (
+                                        <div className="py-20 text-center text-slate-800 font-black uppercase tracking-widest opacity-20">No recent transactions</div>
+                                    ) : (
+                                        statement.map((entry: any) => (
+                                            <div key={entry.id} className="p-5 bg-slate-900/40 border border-slate-800 rounded-3xl flex items-center justify-between group hover:border-emerald-500/30 transition-all">
+                                                <div className="flex items-center gap-4">
+                                                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                                                        entry.transaction_type === 'DEBIT' ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'
+                                                    }`}>
+                                                        {entry.transaction_type === 'DEBIT' ? <Minus size={16} /> : <Plus size={16} />}
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[8px] font-black text-slate-600 uppercase tracking-widest">{new Date(entry.created_at).toLocaleString()}</p>
+                                                        <p className="text-xs font-black text-white uppercase tracking-tight">{entry.description || 'Transaction'}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className={`text-sm font-black ${entry.transaction_type === 'DEBIT' ? 'text-white' : 'text-emerald-400'}`}>
+                                                        {entry.transaction_type === 'DEBIT' ? '-' : '+'} Rs. {entry.amount.toLocaleString()}
+                                                    </p>
+                                                    <p className="text-[8px] font-bold text-slate-700 uppercase">{entry.reference_type}</p>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Credit Settings Modal */}
+            {showCreditModal && (
+                <div className="fixed inset-0 z-[110] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-6">
+                    <div className="bg-[#0c111d] border border-slate-800 w-full max-w-md rounded-[3rem] shadow-3xl overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="p-10 border-b border-slate-800 bg-slate-900/20">
+                            <h2 className="text-2xl font-black text-white uppercase tracking-tighter italic">Credit Intelligence</h2>
+                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">{selectedCustomer?.name}</p>
+                        </div>
+                        <div className="p-10 space-y-8">
+                            <div className="flex items-center justify-between bg-slate-950 p-6 rounded-3xl border border-slate-800">
+                                <div>
+                                    <p className="text-xs font-black text-white uppercase tracking-widest">Enable Credit</p>
+                                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-tighter">Allow post-paid orders</p>
+                                </div>
+                                <button 
+                                    onClick={() => setCreditForm({...creditForm, credit_enabled: !creditForm.credit_enabled})}
+                                    className={`w-14 h-8 rounded-full transition-all relative ${creditForm.credit_enabled ? 'bg-indigo-600' : 'bg-slate-800'}`}
+                                >
+                                    <div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${creditForm.credit_enabled ? 'left-7' : 'left-1'}`}></div>
+                                </button>
+                            </div>
+
+                            <div className="space-y-4">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Credit Ceiling (Rs.)</label>
+                                <input 
+                                    type="number"
+                                    className="w-full bg-slate-950 border-2 border-slate-800 rounded-3xl p-5 text-2xl font-black text-indigo-400 outline-none focus:border-indigo-500 transition-all font-mono"
+                                    value={creditForm.credit_limit}
+                                    onChange={e => setCreditForm({...creditForm, credit_limit: Number(e.target.value)})}
+                                />
+                            </div>
+
+                            <div className="flex gap-4">
+                                <button onClick={() => setShowCreditModal(false)} className="flex-1 py-5 bg-slate-900 border border-slate-800 rounded-2xl text-slate-400 font-black uppercase text-xs tracking-widest transition-all">Cancel</button>
+                                <button 
+                                    onClick={async () => {
+                                        try {
+                                            const res = await fetchWithAuth(`${API_URL}/customers/${selectedCustomerId}/credit`, {
+                                                method: 'PATCH',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify(creditForm)
+                                            });
+                                            if (res.ok) {
+                                                addNotification?.('success', 'Credit limit updated');
+                                                setShowCreditModal(false);
+                                                loadCustomers();
+                                            }
+                                        } catch (e) {
+                                            addNotification?.('error', 'Update failed');
+                                        }
+                                    }}
+                                    className="flex-1 py-5 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-indigo-600/20 transition-all"
+                                >
+                                    Sync Rules
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

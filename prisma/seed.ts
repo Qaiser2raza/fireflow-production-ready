@@ -7,27 +7,25 @@ async function main() {
   // 1. Clear Existing Data (Order matters due to foreign keys)
   console.log('🗑️  Clearing existing data...')
 
-  // Detail/Transaction tables first
-  await prisma.order_items.deleteMany({})
-  await prisma.dine_in_orders.deleteMany({})
-  await prisma.takeaway_orders.deleteMany({})
-  await prisma.delivery_orders.deleteMany({})
-  await prisma.reservation_orders.deleteMany({})
-  await prisma.order_intelligence.deleteMany({})
-  await prisma.orders.deleteMany({})
-  await prisma.transactions.deleteMany({})
-  await prisma.audit_logs.deleteMany({})
-  await prisma.staff_wallet_logs.deleteMany({})
-  await prisma.rider_settlements.deleteMany({})
-  await prisma.rider_shifts.deleteMany({})
+  await prisma.journal_entry_lines.deleteMany({})
+  await prisma.journal_entries.deleteMany({})
+  await prisma.chart_of_accounts.deleteMany({})
   await prisma.ledger_entries.deleteMany({})
   await prisma.payouts.deleteMany({})
   await prisma.cash_sessions.deleteMany({})
   await prisma.expenses.deleteMany({})
+  await prisma.rider_settlements.deleteMany({})
+  await prisma.rider_shifts.deleteMany({})
   await prisma.reservations.deleteMany({})
   await prisma.registered_devices.deleteMany({})
   await prisma.pairing_codes.deleteMany({})
   await prisma.license_keys.deleteMany({})
+  await prisma.order_items.deleteMany({})
+  await prisma.dine_in_orders.deleteMany({})
+  await prisma.takeaway_orders.deleteMany({})
+  await prisma.delivery_orders.deleteMany({})
+  await prisma.transactions.deleteMany({})
+  await prisma.orders.deleteMany({})
   await prisma.security_events.deleteMany({})
   await prisma.installation_logs.deleteMany({})
   await prisma.customer_addresses.deleteMany({})
@@ -59,9 +57,35 @@ async function main() {
       tax_rate: 16,
       service_charge_enabled: true,
       service_charge_rate: 10,
-      logo_url: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', // A professional looking restaurant icon
+      logo_url: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png',
     },
   })
+
+  // 2.1 Seed Chart of Accounts
+  console.log('🏗️  Seeding Chart of Accounts...')
+  const coaData = [
+    { code: '1000', name: 'Cash on Hand', type: 'ASSET' as const },
+    { code: '1010', name: 'Bank Account', type: 'ASSET' as const },
+    { code: '1020', name: 'Accounts Receivable (General)', type: 'ASSET' as const },
+    { code: '1040', name: 'Customer Account (Khata)', type: 'ASSET' as const },
+    { code: '1050', name: 'Rider Wallets', type: 'ASSET' as const },
+    { code: '2000', name: 'Accounts Payable', type: 'LIABILITY' as const },
+    { code: '2100', name: 'Sales Tax Payable', type: 'LIABILITY' as const },
+    { code: '4000', name: 'Sales Revenue', type: 'REVENUE' as const },
+    { code: '4100', name: 'Service Charge Revenue', type: 'REVENUE' as const },
+    { code: '4200', name: 'Delivery Fee Revenue', type: 'REVENUE' as const },
+    { code: '5000', name: 'Cost of Goods Sold', type: 'EXPENSE' as const },
+    { code: '5100', name: 'Operating Expenses', type: 'EXPENSE' as const },
+  ]
+
+  for (const account of coaData) {
+    await prisma.chart_of_accounts.create({
+      data: {
+        ...account,
+        restaurant_id: restaurant.id,
+      }
+    })
+  }
 
   // 3. Create Stations
   console.log('🏗️  Seeding Stations...')
@@ -205,7 +229,7 @@ async function main() {
         restaurant_id: restaurant.id,
         name: s.name,
         role: s.role,
-        pin: s.pin, // In real app, this should be hashed if using hashed_pin field
+        pin: s.pin,
         status: 'active'
       }
     })
@@ -213,13 +237,13 @@ async function main() {
 
   // 8. Create Customers
   console.log('🏗️  Seeding Customers...')
-  const customers = [
-    { name: 'Qaiser Raza', phone: '03001234567', address: 'DHA Lahore' },
-    { name: 'Zaid Alvi', phone: '03007654321', address: 'Gulberg Lahore' },
-    { name: 'Umar Khalid', phone: '03211112222', address: 'Johar Town Lahore' },
+  const customersData = [
+    { name: 'Qaiser Raza', phone: '03001234567', address: 'DHA Lahore', credit_enabled: true, credit_limit: 50000 },
+    { name: 'Zaid Alvi', phone: '03007654321', address: 'Gulberg Lahore', credit_enabled: true, credit_limit: 25000 },
+    { name: 'Umar Khalid', phone: '03211112222', address: 'Johar Town Lahore', credit_enabled: false, credit_limit: 0 },
   ]
 
-  for (const c of customers) {
+  for (const c of customersData) {
     await prisma.customers.create({
       data: {
         restaurant_id: restaurant.id,
