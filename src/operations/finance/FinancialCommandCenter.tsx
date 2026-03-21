@@ -20,6 +20,7 @@ import {
     Banknote,
     Eye,
     Printer,
+    ExternalLink,
     Bike
 } from 'lucide-react';
 import { useAppContext as useApp } from '../../client/contexts/AppContext';

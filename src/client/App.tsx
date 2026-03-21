@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Vendor, Station } from '../shared/types';
-import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History, Package } from 'lucide-react';
+import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History, Truck, Package } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
 import { fetchWithAuth } from '../shared/lib/authInterceptor';
 import { calculateBill, getDefaultBillConfig } from '../lib/billEngine';
@@ -1105,7 +1105,7 @@ const AppContent = () => {
                 activeView === 'DASHBOARD' ? <DashboardView /> :
                   activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
                     activeView === 'KITCHEN' ? <KDSView /> :
-                      activeView === 'RIDER_VIEW' ? <RiderView /> :
+                      active_view === 'RIDER_VIEW' || activeView === 'RIDER_VIEW' ? <RiderView /> :
                         activeView === 'LOGISTICS' ? <LogisticsHub /> :
                         activeView === 'ACTIVITY' ? <ActivityLog /> :
                           activeView === 'REGISTER' ? <TransactionsView /> :

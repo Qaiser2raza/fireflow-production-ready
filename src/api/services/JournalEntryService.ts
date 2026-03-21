@@ -26,22 +26,13 @@ import { Decimal } from '@prisma/client/runtime/library';
 const GL = {
     CASH: '1000',
     CARD_RECEIVABLE: '1010',
-    BANK: '1010',
-    RIDER_RECEIVABLE: '1050',
-    RIDER_WALLET: '1050',
-    CUSTOMER_ACCOUNT: '1040',
-    TAX_PAYABLE: '2100',
-    SALES_TAX: '2100',
-    SC_PAYABLE: '4100',
-    SERVICE_CHARGE: '4100',
+    RIDER_RECEIVABLE: '1020',
+    TAX_PAYABLE: '2000',
+    SC_PAYABLE: '2010',
     FOOD_REVENUE: '4000',
-    REVENUE: '4000',
-    DELIVERY_REVENUE: '4200',
-    DELIVERY_FEE: '4200',
+    DELIVERY_REVENUE: '4010',
     RIDER_EXPENSE: '5000',
-    COGS: '5000',
-    GENERAL_EXPENSE: '5100',
-    EXPENSE: '5100'
+    GENERAL_EXPENSE: '5010',
 } as const;
 
 type GLCode = typeof GL[keyof typeof GL];
@@ -65,7 +56,7 @@ interface JELine {
 async function postJournal(params: {
     restaurantId: string;
     referenceType: string;
-    referenceId?: string;
+    referenceId: string;
     date: Date;
     description: string;
     processedBy?: string;
@@ -422,172 +413,6 @@ export class JournalEntryService {
         }
 
         return results;
-    }
-
-    /**
-     * Records a journal entry for a credit sale (Khata).
-     * IMPACT:
-     * DR 1040 Customer Account (Asset Increase)
-     * CR 4000 Revenue (Revenue Increase)
-     * CR 2100 Tax (Liability Increase)
-     */
-    async recordCreditSaleJournal(orderId: string, tx?: any) {
-        const db = tx || prisma;
-
-        // Idempotency check: Does a JE already exist for this order?
-        const existing = await db.journal_entries.findFirst({
-            where: { reference_id: orderId, reference_type: 'ORDER' }
-        });
-        if (existing) return;
-
-        const order = await db.orders.findUnique({
-            where: { id: orderId },
-            include: { order_items: true }
-        });
-
-        if (!order || !order.customer_id) return;
-
-        const restaurantId = order.restaurant_id;
-        const [customerAcc, revenueAcc, scAcc, taxAcc] = await Promise.all([
-            resolveAccount(restaurantId, GL.CUSTOMER_ACCOUNT, db),
-            resolveAccount(restaurantId, GL.REVENUE, db),
-            resolveAccount(restaurantId, GL.SERVICE_CHARGE, db),
-            resolveAccount(restaurantId, GL.SALES_TAX, db)
-        ]);
-
-        if (!customerAcc || !revenueAcc) return;
-
-        const total = new Decimal(order.total.toString());
-        const tax = new Decimal((order.tax || 0).toString());
-        const sc = new Decimal((order.service_charge || 0).toString());
-        const revenue = total.minus(tax).minus(sc);
-
-        const lines: JELine[] = [
-            // DEBIT: Customer Ledger
-            { accountId: customerAcc.id, debit: total, credit: new Decimal(0), description: `Credit sale to customer #${order.customer_id.slice(-6)}` },
-            
-            // CREDIT: Revenue
-            { accountId: revenueAcc.id, debit: new Decimal(0), credit: revenue, description: `Revenue from Order #${order.order_number}` },
-        ];
-
-        if (sc.gt(0) && scAcc) {
-            lines.push({ accountId: scAcc.id, debit: new Decimal(0), credit: sc, description: `SC from Order #${order.order_number}` });
-        }
-
-        if (tax.gt(0) && taxAcc) {
-            lines.push({ accountId: taxAcc.id, debit: new Decimal(0), credit: tax, description: `Tax from Order #${order.order_number}` });
-        }
-
-        await postJournal({
-            restaurantId: order.restaurant_id,
-            date: new Date(),
-            referenceType: 'ORDER',
-            referenceId: order.id,
-            description: `Credit Sale: Order #${order.order_number}`,
-            processedBy: order.last_action_by || 'SYSTEM',
-            lines
-        }, db);
-    }
-
-    /**
-     * Records a journal entry for a customer payment.
-     * IMPACT:
-     * DR 1000 Cash / 1010 Bank (Asset Increase)
-     * CR 1040 Customer Account (Asset Decrease)
-     */
-    async recordCustomerPaymentJournal(data: {
-        restaurantId: string;
-        customerId: string;
-        amount: number | Decimal;
-        method: 'CASH' | 'BANK';
-        processedBy: string;
-        referenceId?: string;
-        notes?: string;
-    }, tx?: any) {
-        const db = tx || prisma;
-        const amount = new Decimal(data.amount.toString());
-        const assetCode = data.method === 'CASH' ? GL.CASH : GL.BANK;
-
-        const [assetAcc, customerAcc] = await Promise.all([
-            resolveAccount(data.restaurantId, assetCode, db),
-            resolveAccount(data.restaurantId, GL.CUSTOMER_ACCOUNT, db)
-        ]);
-
-        if (!assetAcc || !customerAcc) return;
-
-        const lines: JELine[] = [
-            // DEBIT: Asset (Cash/Bank)
-            { accountId: assetAcc.id, debit: amount, credit: new Decimal(0), description: `Payment from customer #${data.customerId.slice(-6)}` },
-            
-            // CREDIT: Customer Ledger
-            { accountId: customerAcc.id, debit: new Decimal(0), credit: amount, description: `Balance reduction for customer #${data.customerId.slice(-6)}` }
-        ];
-
-        await postJournal({
-            restaurantId: data.restaurantId,
-            date: new Date(),
-            referenceType: 'PAYMENT',
-            referenceId: data.referenceId,
-            description: data.notes || `Customer Payment received via ${data.method}`,
-            processedBy: data.processedBy,
-            lines
-        }, db);
-    }
-
-    /**
-     * Calculates the current net balance for a customer from the Journal.
-     * Logic: Sum(Debits) - Sum(Credits) on account 1040 for specific customer.
-     * Note: Since JEs don't naturally store customer_id in lines, we rely on 
-     * ledger_entries for historical filtering or unique description parsing.
-     * HOWEVER, for a robust system, we query ledger_entries which tracks account_id correctly.
-     */
-    async getCustomerBalance(restaurantId: string, customerId: string) {
-        const entries = await prisma.ledger_entries.findMany({
-            where: {
-                restaurant_id: restaurantId,
-                account_id: customerId
-            }
-        });
-
-        // Debit increases customer debt, Credit decreases it
-        return entries.reduce((acc: Decimal, entry: any) => {
-            const amt = new Decimal(entry.amount);
-            return entry.transaction_type === 'DEBIT'
-                ? acc.plus(amt)
-                : acc.minus(amt);
-        }, new Decimal(0));
-    }
-
-    /**
-     * Interprets balance for bilingual UI.
-     */
-    interpretCustomerBalance(balance: Decimal) {
-        const val = balance.toNumber();
-        if (val > 0) {
-            return {
-                amount: val,
-                status: 'OWED',
-                labelEn: `Customer owes Rs. ${val.toLocaleString()}`,
-                labelUr: `کسٹمر کے ذمہ بقایا: ${val.toLocaleString()} روپے`,
-                color: 'text-red-500'
-            };
-        } else if (val < 0) {
-            const absVal = Math.abs(val);
-            return {
-                amount: absVal,
-                status: 'ADVANCE',
-                labelEn: `Advance Balance: Rs. ${absVal.toLocaleString()}`,
-                labelUr: `ایڈوانس رقم: ${absVal.toLocaleString()} روپے`,
-                color: 'text-emerald-500'
-            };
-        }
-        return {
-            amount: 0,
-            status: 'CLEAR',
-            labelEn: 'Balance Clear',
-            labelUr: 'حساب برابر ہے',
-            color: 'text-slate-400'
-        };
     }
 }
 

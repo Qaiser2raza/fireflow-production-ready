@@ -1,16 +1,12 @@
-import { Decimal } from '@prisma/client/runtime/library';
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 
 import { authMiddleware } from '../middleware/authMiddleware';
-import { AccountingService } from '../services/AccountingService';
-import { journalEntryService } from '../services/JournalEntryService';
 
 const router = Router();
 router.use(authMiddleware);
 const prisma = new PrismaClient();
-const accounting = new AccountingService();
 
 // Schema validation
 const customerSchema = z.object({
@@ -233,85 +229,6 @@ router.delete('/customers/:id', async (req, res) => {
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * GET /api/customers/:id/balance
- * Returns net Khata balance + bilingual interpretation
- */
-router.get('/customers/:id/balance', async (req, res) => {
-    try {
-        const balance = await journalEntryService.getCustomerBalance(req.restaurantId!, req.params.id);
-        const interpretation = journalEntryService.interpretCustomerBalance(balance);
-        res.json({ success: true, balance: Number(balance), ...interpretation });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-/**
- * POST /api/customers/:id/payment
- * Processes a Khata payment (Cash/Bank)
- */
-router.post('/customers/:id/payment', async (req, res) => {
-    try {
-        const { amount, method, notes } = req.body;
-        if (!amount || amount <= 0) throw new Error('Invalid amount');
-
-        await accounting.recordCustomerPayment({
-            restaurantId: req.restaurantId!,
-            customerId: req.params.id,
-            amount: new Decimal(amount),
-            method: method || 'CASH',
-            processedBy: req.staffId || 'SYSTEM',
-            referenceId: req.params.id, // Using customer ID as ref if no transaction provided
-            notes: notes
-        });
-
-        res.json({ success: true, message: 'Payment recorded successfully' });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-/**
- * PATCH /api/customers/:id/credit
- * Updates credit limit and status
- */
-router.patch('/customers/:id/credit', async (req, res) => {
-    try {
-        const { credit_limit, credit_enabled } = req.body;
-        const customer = await prisma.customers.update({
-            where: { id: req.params.id },
-            data: {
-                credit_limit: credit_limit !== undefined ? new Decimal(credit_limit) : undefined,
-                credit_enabled: credit_enabled !== undefined ? credit_enabled : undefined
-            }
-        });
-        res.json({ success: true, customer });
-    } catch (e: any) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-/**
- * GET /api/customers/:id/statement
- * Returns last 50 ledger entries for this customer
- */
-router.get('/customers/:id/statement', async (req, res) => {
-    try {
-        const entries = await prisma.ledger_entries.findMany({
-            where: {
-                restaurant_id: req.restaurantId!,
-                account_id: req.params.id
-            },
-            orderBy: { created_at: 'desc' },
-            take: 50
-        });
-        res.json({ success: true, entries });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
     }
 });
 

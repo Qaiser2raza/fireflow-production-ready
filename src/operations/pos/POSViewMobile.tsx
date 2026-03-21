@@ -16,7 +16,7 @@ export const POSViewMobile: React.FC = () => {
     addOrder, updateOrder, calculateOrderTotal, orders,
     currentUser, menuItems, menuCategories,
     tables, addNotification, orderToEdit, setOrderToEdit,
-    customers, addCustomer
+    customers, addCustomer, processPayment, operationsConfig
   } = useAppContext();
 
   // UI State
@@ -176,7 +176,7 @@ export const POSViewMobile: React.FC = () => {
   const breakdown = useMemo(() => {
     const defaultBreakdown = { subtotal: 0, serviceCharge: 0, tax: 0, deliveryFee: 0, discount: 0, total: 0 };
     if (typeof calculateOrderTotal !== 'function') return defaultBreakdown;
-    return calculateOrderTotal(currentOrderItems, orderType, guestCount, 0) || defaultBreakdown;
+    return calculateOrderTotal(currentOrderItems, orderType, guestCount) || defaultBreakdown;
   }, [currentOrderItems, orderType, guestCount, calculateOrderTotal]);
 
   const cartBadgeCount = useMemo(() => {

@@ -2059,9 +2059,6 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                     processedBy: staffId || order.last_action_by || 'SYSTEM',
                     settlementId: order.id
                 }, tx);
-            } else if (method === 'CUSTOMER_ACCOUNT') {
-                // For Credit Sales (Khata)
-                await accounting.recordCreditSale(order.id, tx);
             } else {
                 // For normal sales (Dine-In/Takeaway/Direct Delivery Settle)
                 await accounting.recordOrderSale(order.id, tx);
@@ -2755,7 +2752,7 @@ app.get('/api/sections', async (req, res) => {
     }
 });
 
-app.get('/api/staff', authMiddleware, async (req, res) => {
+app.get('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN', 'CASHIER', 'SERVER'), async (req, res) => {
     const { restaurant_id } = req.query;
     try {
         const staff = await prisma.staff.findMany({

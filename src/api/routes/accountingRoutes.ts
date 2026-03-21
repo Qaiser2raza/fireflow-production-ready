@@ -167,48 +167,4 @@ router.get('/z-reports', async (req, res) => {
     }
 });
 
-/**
- * GET /api/accounting/trial-balance
- * Retrieves the net balance of all active accounts in the COA.
- */
-router.get('/trial-balance', async (req, res) => {
-    try {
-        const { prisma } = await import('../../shared/lib/prisma');
-        const restaurantId = req.restaurantId!;
-
-        // 1. Get all accounts
-        const accounts = await prisma.chart_of_accounts.findMany({
-            where: { restaurant_id: restaurantId, is_active: true }
-        });
-
-        // 2. Sum up Debits and Credits for each account from journal lines
-        const trialBalance = await Promise.all(accounts.map(async (acc) => {
-            const totals = await prisma.journal_entry_lines.aggregate({
-                where: {
-                    account_id: acc.id,
-                    journal_entries: { restaurant_id: restaurantId }
-                },
-                _sum: { debit: true, credit: true }
-            });
-
-            const dr = Number(totals._sum.debit || 0);
-            const cr = Number(totals._sum.credit || 0);
-            const net = dr - cr;
-
-            return {
-                code: acc.code,
-                name: acc.name,
-                type: acc.type,
-                debit: dr,
-                credit: cr,
-                balance: net
-            };
-        }));
-
-        res.json({ success: true, trialBalance });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
 export default router;
