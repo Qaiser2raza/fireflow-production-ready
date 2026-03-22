@@ -35,6 +35,8 @@ model customers {
   delivery_orders delivery_orders[]
   orders          orders[]
   takeaway_orders takeaway_orders[]
+  credit_limit    Decimal              @default(0) @db.Decimal(10,2)
+  credit_enabled  Boolean              @default(false)
 
   @@unique([restaurant_id, phone])
 }

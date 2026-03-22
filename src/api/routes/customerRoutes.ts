@@ -1,13 +1,15 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../../shared/lib/prisma';
 import { z } from 'zod';
+import { journalEntryService, interpretCustomerBalance } from '../services/JournalEntryService';
+import { AccountingService } from '../services/AccountingService';
+import { Decimal } from '@prisma/client/runtime/library';
 
 import { authMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
 router.use(authMiddleware);
-const prisma = new PrismaClient();
-
+const accounting = new AccountingService();
 // Schema validation
 const customerSchema = z.object({
     name: z.string().optional(),
@@ -230,6 +232,169 @@ router.delete('/customers/:id', async (req, res) => {
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
+});
+
+/**
+ * GET /api/customers/:id/balance
+ * Returns current account balance with bilingual interpretation
+ */
+router.get('/customers/:id/balance', async (req, res) => {
+  try {
+    const customer = await prisma.customers.findFirst({
+      where: { id: req.params.id, restaurant_id: req.restaurantId }
+    });
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const balance = await journalEntryService.getCustomerBalance(
+      req.restaurantId!,
+      req.params.id
+    );
+    const interpretation = interpretCustomerBalance(balance);
+
+    res.json({
+      success: true,
+      customer_id: req.params.id,
+      balance: balance.toString(),
+      credit_limit: customer.credit_limit?.toString() || '0',
+      credit_enabled: customer.credit_enabled,
+      interpretation,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/customers/:id/payment
+ * Record a payment against customer account
+ * Works for clearing debt AND creating advance deposit
+ */
+router.post('/customers/:id/payment', async (req, res) => {
+  try {
+    const { amount, paymentMethod, orderId } = req.body;
+
+    if (!amount || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'Valid amount required' });
+    }
+
+    const customer = await prisma.customers.findFirst({
+      where: { id: req.params.id, restaurant_id: req.restaurantId }
+    });
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const method = (paymentMethod || 'CASH') as 'CASH' | 'CARD';
+    const referenceId = orderId
+      ? `cust-pay-${orderId}`
+      : `cust-${req.params.id}-${Date.now()}`;
+
+    // Record in ledger_entries (simple ledger)
+    await accounting.recordCustomerPayment({
+      restaurantId: req.restaurantId!,
+      customerId: req.params.id,
+      amount: Number(amount),
+      paymentMethod: method,
+      processedBy: req.staffId!,
+      orderId,
+    });
+
+    // Record in journal_entries (double-entry)
+    await journalEntryService.recordCustomerPaymentJournal({
+      restaurantId: req.restaurantId!,
+      customerId: req.params.id,
+      amount: Number(amount),
+      paymentMethod: method,
+      referenceId,
+      processedBy: req.staffId,
+    });
+
+    // Return updated balance
+    const newBalance = await journalEntryService.getCustomerBalance(
+      req.restaurantId!,
+      req.params.id
+    );
+
+    res.json({
+      success: true,
+      new_balance: newBalance.toString(),
+      interpretation: interpretCustomerBalance(newBalance),
+    });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/**
+ * PATCH /api/customers/:id/credit
+ * Enable/disable credit or update credit limit for a customer
+ */
+router.patch('/customers/:id/credit', async (req, res) => {
+  try {
+    const { credit_enabled, credit_limit } = req.body;
+
+    const updated = await prisma.customers.update({
+      where: {
+        id: req.params.id,
+        restaurant_id: req.restaurantId!
+      },
+      data: {
+        ...(credit_enabled !== undefined && { credit_enabled }),
+        ...(credit_limit !== undefined && {
+          credit_limit: new Decimal(String(credit_limit))
+        }),
+      }
+    });
+
+    res.json({ success: true, customer: updated });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/customers/:id/statement
+ * Full account statement with all orders and ledger entries
+ */
+router.get('/customers/:id/statement', async (req, res) => {
+  try {
+    const customer = await prisma.customers.findFirst({
+      where: { id: req.params.id, restaurant_id: req.restaurantId }
+    });
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const [orders, ledgerEntries, balance] = await Promise.all([
+      prisma.orders.findMany({
+        where: {
+          customer_id: req.params.id,
+          restaurant_id: req.restaurantId!,
+        },
+        select: {
+          id: true, order_number: true, total: true,
+          payment_status: true, status: true,
+          created_at: true, type: true,
+        },
+        orderBy: { created_at: 'desc' },
+      }),
+      prisma.ledger_entries.findMany({
+        where: {
+          restaurant_id: req.restaurantId!,
+          account_id: req.params.id,
+        },
+        orderBy: { created_at: 'desc' },
+      }),
+      journalEntryService.getCustomerBalance(req.restaurantId!, req.params.id),
+    ]);
+
+    res.json({
+      success: true,
+      customer,
+      orders,
+      ledger_entries: ledgerEntries,
+      current_balance: balance.toString(),
+      interpretation: interpretCustomerBalance(balance),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;

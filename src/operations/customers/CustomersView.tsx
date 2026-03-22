@@ -40,6 +40,17 @@ interface Customer {
     ltv?: number;
     loyalty_score?: number;
     segment?: 'VIP' | 'REGULAR' | 'CHURN_RISK' | 'NEW';
+    // KHATA / CREDIT extension
+    credit_limit?: number;
+    credit_enabled?: boolean;
+    account_balance?: string;
+    balance_interpretation?: {
+        type: 'outstanding' | 'advance' | 'clear';
+        label: string;
+        labelUrdu: string;
+        color: 'red' | 'green' | 'gray';
+        displayAmount: string;
+    };
 }
 
 export const CustomersView: React.FC = () => {
@@ -54,6 +65,12 @@ export const CustomersView: React.FC = () => {
     const [showAddressModal, setShowAddressModal] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
     const [fullHistory, setFullHistory] = useState<any[]>([]);
+
+    // Payment Modal State
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [paymentAmount, setPaymentAmount] = useState('');
+    const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'CARD'>('CASH');
+    const [paymentLoading, setPaymentLoading] = useState(false);
 
     // Form States
     const [customerForm, setCustomerForm] = useState({
@@ -85,7 +102,26 @@ export const CustomersView: React.FC = () => {
             if (!response.ok) throw new Error('Failed to load customers');
             const data = await response.json();
 
-            setCustomers(data);
+            // Enrich credit-enabled customers with live balance
+            const enriched = await Promise.all(
+                data.map(async (c: Customer) => {
+                    if (!c.credit_enabled) return c;
+                    try {
+                        const r = await fetchWithAuth(`${API_URL}/customers/${c.id}/balance`);
+                        if (!r.ok) return c;
+                        const b = await r.json();
+                        return {
+                            ...c,
+                            account_balance: b.balance,
+                            balance_interpretation: b.interpretation
+                        };
+                    } catch {
+                        return c;
+                    }
+                })
+            );
+
+            setCustomers(enriched);
         } catch (error) {
             console.error(error);
             addNotification?.('error', 'Error loading customers');
@@ -201,6 +237,36 @@ export const CustomersView: React.FC = () => {
         }
     };
 
+    const handleRecordPayment = async () => {
+        if (!selectedCustomerId || !paymentAmount || Number(paymentAmount) <= 0) return;
+        setPaymentLoading(true);
+        try {
+            const res = await fetchWithAuth(
+                `${API_URL}/customers/${selectedCustomerId}/payment`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        amount: Number(paymentAmount),
+                        paymentMethod,
+                    }),
+                }
+            );
+            if (!res.ok) throw new Error('Payment failed');
+            const data = await res.json();
+            addNotification?.('success',
+                `Payment recorded. ${data.interpretation.label} / ${data.interpretation.labelUrdu}`
+            );
+            setShowPaymentModal(false);
+            setPaymentAmount('');
+            loadCustomers(); // refresh balances
+        } catch (e: any) {
+            addNotification?.('error', e.message);
+        } finally {
+            setPaymentLoading(false);
+        }
+    };
+
     if (loading && customers.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center bg-[#070b14]">
@@ -298,11 +364,23 @@ export const CustomersView: React.FC = () => {
                                     <div className="w-16 h-16 rounded-[1.25rem] bg-indigo-600/20 flex items-center justify-center text-indigo-400 text-2xl font-black border border-indigo-500/20 group-hover:scale-105 transition-transform">
                                         {(customer.name?.[0] || 'P').toUpperCase()}
                                     </div>
-                                    <div className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${customer.segment === 'VIP' ? 'bg-amber-500/20 text-amber-500 border border-amber-500/20' :
-                                        customer.segment === 'REGULAR' ? 'bg-indigo-500/20 text-indigo-500 border border-indigo-500/20' :
-                                            'bg-slate-800/50 text-slate-500 border border-slate-700'
-                                        }`}>
-                                        {customer.segment}
+                                    <div className="flex flex-col items-end gap-1">
+                                        <div className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${customer.segment === 'VIP' ? 'bg-amber-500/20 text-amber-500 border border-amber-500/20' :
+                                            customer.segment === 'REGULAR' ? 'bg-indigo-500/20 text-indigo-500 border border-indigo-500/20' :
+                                                'bg-slate-800/50 text-slate-500 border border-slate-700'
+                                            }`}>
+                                            {customer.segment}
+                                        </div>
+                                        {customer.credit_enabled && customer.balance_interpretation && (
+                                            <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${customer.balance_interpretation.color === 'red'
+                                                    ? 'bg-red-500/20 text-red-400'
+                                                    : customer.balance_interpretation.color === 'green'
+                                                        ? 'bg-green-500/20 text-green-400'
+                                                        : 'bg-slate-700 text-slate-400'
+                                                }`}>
+                                                {customer.balance_interpretation.label}
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
 
@@ -384,6 +462,42 @@ export const CustomersView: React.FC = () => {
                                 <p className="text-2xl font-black text-white">Rs. {selectedCustomer.ltv?.toLocaleString()}</p>
                             </div>
                         </div>
+
+                        {/* Customer Account / Khata Section */}
+                        {selectedCustomer?.credit_enabled && (
+                            <div className="mt-4 p-4 bg-slate-900/60 rounded-xl border border-slate-700 mb-10">
+                                <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">
+                                    Customer Account / کسٹمر اکاؤنٹ
+                                </h4>
+
+                                {/* Balance display */}
+                                <div className={`text-2xl font-black mb-1 ${selectedCustomer.balance_interpretation?.color === 'red' ? 'text-red-400'
+                                    : selectedCustomer.balance_interpretation?.color === 'green' ? 'text-green-400'
+                                        : 'text-slate-400'
+                                    }`}>
+                                    {selectedCustomer.balance_interpretation?.displayAmount || 'Rs. 0'}
+                                </div>
+                                <div className="text-xs text-slate-500 mb-0.5">
+                                    {selectedCustomer.balance_interpretation?.label || 'Account clear'}
+                                </div>
+                                <div className="text-xs text-slate-600 mb-3">
+                                    {selectedCustomer.balance_interpretation?.labelUrdu || 'حساب صاف'}
+                                </div>
+
+                                {/* Credit limit */}
+                                <div className="text-xs text-slate-600 mb-4">
+                                    Credit limit: Rs. {Number(selectedCustomer.credit_limit || 0).toLocaleString()}
+                                </div>
+
+                                {/* Payment button */}
+                                <button
+                                    onClick={() => setShowPaymentModal(true)}
+                                    className="w-full px-3 py-2 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 rounded-lg text-xs font-bold uppercase tracking-wider transition-all"
+                                >
+                                    Record Payment / ادائیگی درج کریں
+                                </button>
+                            </div>
+                        )}
 
                         {/* Address Book Section */}
                         <div className="mb-10">
@@ -649,6 +763,70 @@ export const CustomersView: React.FC = () => {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {showPaymentModal && selectedCustomer && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                    <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm">
+                        <h3 className="text-white font-black text-lg mb-1">Record Payment</h3>
+                        <p className="text-slate-500 text-xs mb-4">
+                            {selectedCustomer.name} · {selectedCustomer.balance_interpretation?.label || 'Account clear'}
+                        </p>
+
+                        {/* Amount */}
+                        <div className="mb-4">
+                            <label className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1 block">
+                                Amount (Rs.)
+                            </label>
+                            <input
+                                type="number"
+                                value={paymentAmount}
+                                onChange={e => setPaymentAmount(e.target.value)}
+                                placeholder="0"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-lg font-bold focus:outline-none focus:border-indigo-500"
+                                autoFocus
+                            />
+                        </div>
+
+                        {/* Payment method */}
+                        <div className="mb-6">
+                            <label className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-2 block">
+                                Payment Method
+                            </label>
+                            <div className="flex gap-2">
+                                {(['CASH', 'CARD'] as const).map(m => (
+                                    <button
+                                        key={m}
+                                        onClick={() => setPaymentMethod(m)}
+                                        className={`flex-1 py-2 rounded-xl text-xs font-bold uppercase transition-all ${paymentMethod === m
+                                                ? 'bg-indigo-500 text-white'
+                                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            }`}
+                                    >
+                                        {m}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => { setShowPaymentModal(false); setPaymentAmount(''); }}
+                                className="flex-1 py-3 rounded-xl bg-slate-800 text-slate-400 text-xs font-bold uppercase"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleRecordPayment}
+                                disabled={paymentLoading || !paymentAmount}
+                                className="flex-1 py-3 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold uppercase disabled:opacity-50 transition-all"
+                            >
+                                {paymentLoading ? 'Recording...' : 'Confirm'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
