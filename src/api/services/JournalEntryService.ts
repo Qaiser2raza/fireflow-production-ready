@@ -33,6 +33,7 @@ const GL = {
     DELIVERY_REVENUE: '4010',
     RIDER_EXPENSE: '5000',
     GENERAL_EXPENSE: '5010',
+    CUSTOMER_ACCOUNT: '1040',
 } as const;
 
 type GLCode = typeof GL[keyof typeof GL];
@@ -414,6 +415,259 @@ export class JournalEntryService {
 
         return results;
     }
+
+    /**
+     * POST CREDIT SALE JOURNAL
+     * Customer buys on credit — added to their khata.
+     *
+     * DR  1040  Customer Account     total  (customer now owes us)
+     * CR  4000  Food Revenue          net   (revenue earned)
+     * CR  2000  Tax Payable           tax   (if applicable)
+     * CR  2010  Service Charge        sc    (if applicable)
+     */
+    async recordCreditSaleJournal(orderId: string, customerId: string, tx?: any) {
+        const db = tx || prisma;
+
+        // Idempotency
+        const existing = await db.journal_entries.findFirst({
+            where: { reference_type: 'CREDIT_SALE', reference_id: orderId }
+        });
+        if (existing) return;
+
+        const order = await db.orders.findUnique({ where: { id: orderId } });
+        if (!order) return;
+
+        const restaurantId = order.restaurant_id;
+
+        const [customerAcc, foodRevAcc, taxAcc, scAcc] = await Promise.all([
+            resolveAccount(restaurantId, GL.CUSTOMER_ACCOUNT, db),
+            resolveAccount(restaurantId, GL.FOOD_REVENUE, db),
+            resolveAccount(restaurantId, GL.TAX_PAYABLE, db),
+            resolveAccount(restaurantId, GL.SC_PAYABLE, db),
+        ]);
+
+        // If COA not seeded yet, skip silently
+        if (!customerAcc || !foodRevAcc) return;
+
+        const total = new Decimal(order.total || 0);
+        const tax   = new Decimal(order.tax || 0);
+        const sc    = new Decimal(order.service_charge || 0);
+        const net   = total.minus(tax).minus(sc);
+
+        const lines: JELine[] = [
+            {
+                accountId: customerAcc.id,
+                description: `Credit sale – Order #${order.order_number}`,
+                debit: total,
+            },
+            {
+                accountId: foodRevAcc.id,
+                description: `F&B Revenue – Order #${order.order_number}`,
+                credit: net,
+            },
+        ];
+
+        if (tax.greaterThan(0) && taxAcc) {
+            lines.push({
+                accountId: taxAcc.id,
+                description: `Sales Tax – Order #${order.order_number}`,
+                credit: tax,
+            });
+        }
+
+        if (sc.greaterThan(0) && scAcc) {
+            lines.push({
+                accountId: scAcc.id,
+                description: `Service Charge – Order #${order.order_number}`,
+                credit: sc,
+            });
+        }
+
+        await postJournal({
+            restaurantId,
+            referenceType: 'CREDIT_SALE',
+            referenceId: orderId,
+            date: new Date(),
+            description: `Credit Sale – Order #${order.order_number}`,
+            processedBy: order.last_action_by || undefined,
+            lines,
+        }, db);
+    }
+
+    /**
+     * POST CUSTOMER PAYMENT JOURNAL
+     * Customer pays cash/card against their account.
+     *
+     * DR  1000  Cash (or 1010 Card)   amount  (money arrives)
+     * CR  1040  Customer Account      amount  (reduces debt or creates advance)
+     */
+    async recordCustomerPaymentJournal(params: {
+        restaurantId: string;
+        customerId: string;
+        amount: number | Decimal;
+        paymentMethod: 'CASH' | 'CARD';
+        referenceId: string;
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+
+        // Idempotency
+        const existing = await db.journal_entries.findFirst({
+            where: { reference_type: 'CUSTOMER_PAYMENT', reference_id: params.referenceId }
+        });
+        if (existing) return;
+
+        const assetCode = params.paymentMethod === 'CARD'
+            ? GL.CARD_RECEIVABLE
+            : GL.CASH;
+
+        const [assetAcc, customerAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, assetCode, db),
+            resolveAccount(params.restaurantId, GL.CUSTOMER_ACCOUNT, db),
+        ]);
+
+        if (!assetAcc || !customerAcc) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'CUSTOMER_PAYMENT',
+            referenceId: params.referenceId,
+            date: new Date(),
+            description: `Customer payment received`,
+            processedBy: params.processedBy,
+            lines: [
+                {
+                    accountId: assetAcc.id,
+                    description: `Payment received from customer`,
+                    debit: amount,
+                },
+                {
+                    accountId: customerAcc.id,
+                    description: `Customer account credited`,
+                    credit: amount,
+                },
+            ],
+        }, db);
+    }
+
+    /**
+     * GET CUSTOMER ACCOUNT BALANCE
+     * Calculates net balance from journal_entry_lines for account 1040.
+     *
+     * Positive = customer owes restaurant (outstanding debt)
+     * Negative = restaurant holds customer advance
+     * Zero     = account is clear
+     */
+    async getCustomerBalance(
+        restaurantId: string,
+        customerId: string,
+        tx?: any
+    ): Promise<Decimal> {
+        const db = tx || prisma;
+
+        const customerAcc = await resolveAccount(
+            restaurantId,
+            GL.CUSTOMER_ACCOUNT,
+            db
+        );
+        if (!customerAcc) return new Decimal(0);
+
+        // Get all orders for this customer
+        const customerOrders = await db.orders.findMany({
+            where: { customer_id: customerId, restaurant_id: restaurantId },
+            select: { id: true },
+        });
+        const orderIds = new Set(customerOrders.map((o: any) => o.id));
+
+        // Get all journal entries relevant to this customer
+        const journalEntries = await db.journal_entries.findMany({
+            where: {
+                restaurant_id: restaurantId,
+                reference_type: { in: ['CREDIT_SALE', 'CUSTOMER_PAYMENT'] },
+            },
+            include: {
+                lines: {
+                    where: { account_id: customerAcc.id },
+                },
+            },
+        });
+
+        let balance = new Decimal(0);
+
+        for (const je of journalEntries) {
+            // For CREDIT_SALE entries: match by order ID
+            if (je.reference_type === 'CREDIT_SALE' && !orderIds.has(je.reference_id)) {
+                continue;
+            }
+            // For CUSTOMER_PAYMENT entries: match by customerId in reference
+            if (
+                je.reference_type === 'CUSTOMER_PAYMENT' &&
+                !je.reference_id.includes(customerId)
+            ) {
+                continue;
+            }
+
+            for (const line of je.lines) {
+                balance = balance
+                    .plus(new Decimal(line.debit.toString()))
+                    .minus(new Decimal(line.credit.toString()));
+            }
+        }
+
+        return balance;
+    }
 }
 
 export const journalEntryService = new JournalEntryService();
+
+/**
+ * Interprets a customer account balance into human-readable bilingual form.
+ *
+ * Positive balance = customer owes restaurant → show in red
+ * Negative balance = restaurant holds advance → show in green
+ * Zero             = account clear            → show in gray
+ */
+export function interpretCustomerBalance(balance: Decimal): {
+    type: 'outstanding' | 'advance' | 'clear';
+    amount: Decimal;
+    label: string;
+    labelUrdu: string;
+    color: 'red' | 'green' | 'gray';
+    displayAmount: string;
+} {
+    const absAmount = balance.abs();
+    const formatted = `Rs. ${Number(absAmount).toLocaleString('en-PK')}`;
+
+    if (balance.greaterThan(0)) {
+        return {
+            type: 'outstanding',
+            amount: balance,
+            label: `Owes ${formatted}`,
+            labelUrdu: `ذمہ داری: ${formatted}`,
+            color: 'red',
+            displayAmount: formatted,
+        };
+    }
+
+    if (balance.lessThan(0)) {
+        return {
+            type: 'advance',
+            amount: absAmount,
+            label: `Advance: ${formatted}`,
+            labelUrdu: `پیشگی: ${formatted}`,
+            color: 'green',
+            displayAmount: formatted,
+        };
+    }
+
+    return {
+        type: 'clear',
+        amount: new Decimal(0),
+        label: 'Account clear',
+        labelUrdu: 'حساب صاف',
+        color: 'gray',
+        displayAmount: 'Rs. 0',
+    };
+}

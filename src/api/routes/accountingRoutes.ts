@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { AccountingService } from '../services/AccountingService';
+import { journalEntryService } from '../services/JournalEntryService';
 import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/authMiddleware';
 
@@ -162,6 +163,25 @@ router.get('/z-reports', async (req, res) => {
             take: 30
         });
         res.json({ success: true, sessions });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * GET /api/accounting/trial-balance
+ * Returns aggregated debit/credit totals per account
+ * Optional query params: from=YYYY-MM-DD&to=YYYY-MM-DD
+ */
+router.get('/trial-balance', async (req, res) => {
+    try {
+        const { from, to } = req.query;
+        const trialBalance = await journalEntryService.getTrialBalance(
+            req.restaurantId!,
+            from ? new Date(from as string) : undefined,
+            to   ? new Date(to   as string) : undefined,
+        );
+        res.json({ success: true, trial_balance: trialBalance });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
