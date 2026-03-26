@@ -49,55 +49,85 @@ async function resolveAccount(restaurantId: string, code: GLCode, tx?: any) {
 }
 
 interface JELine {
-    accountId: string;
-    description?: string;
-    debit?: Decimal;
-    credit?: Decimal;
+  accountId: string;
+  description?: string;
+  debit?: Decimal;
+  credit?: Decimal;
+  referenceType: string;   // REQUIRED — no optional
+  referenceId: string;     // REQUIRED — no optional
+  meta?: Record<string, any>;
 }
 
 async function postJournal(params: {
-    restaurantId: string;
-    referenceType: string;
-    referenceId: string;
-    date: Date;
-    description: string;
-    processedBy?: string;
-    lines: JELine[];
-}, tx?: any) {
-    const db = tx || prisma;
+  restaurantId: string;
+  referenceType: string;
+  referenceId: string;
+  date: Date;
+  description: string;
+  processedBy?: string;
+  lines: JELine[];
+}, tx: any): Promise<any> {  // tx is now REQUIRED — no default to prisma
 
-    // Guard: every journal must balance (sum debits === sum credits)
-    const totalDebit = params.lines.reduce((s, l) => s.plus(l.debit || 0), new Decimal(0));
-    const totalCredit = params.lines.reduce((s, l) => s.plus(l.credit || 0), new Decimal(0));
+  // Guard 1: Transaction client is mandatory
+  if (!tx) {
+    throw new Error('[JE] postJournal() MUST be called inside a DB transaction. tx is required.');
+  }
 
-    if (!totalDebit.equals(totalCredit)) {
-        console.error(
-            `[JE] Imbalanced journal rejected for ${params.referenceType}/${params.referenceId}: ` +
-            `DR ${totalDebit} ≠ CR ${totalCredit}`
-        );
-        return null;
+  // Guard 2: Minimum 2 lines
+  if (!params.lines || params.lines.length < 2) {
+    throw new Error(`[JE] Journal for ${params.referenceType}/${params.referenceId} requires at least 2 lines.`);
+  }
+
+  // Guard 3: Every line must have referenceType and referenceId
+  for (const line of params.lines) {
+    if (!line.referenceType || !line.referenceId) {
+      throw new Error(
+        `[JE] Every journal line must have referenceType and referenceId. ` +
+        `Missing on line for account ${line.accountId}`
+      );
     }
+  }
 
-    const je = await db.journal_entries.create({
-        data: {
-            restaurant_id: params.restaurantId,
-            reference_type: params.referenceType,
-            reference_id: params.referenceId,
-            date: params.date,
-            description: params.description,
-            processed_by: params.processedBy,
-            lines: {
-                create: params.lines.map(l => ({
-                    account_id: l.accountId,
-                    description: l.description,
-                    debit: l.debit || new Decimal(0),
-                    credit: l.credit || new Decimal(0),
-                }))
-            }
-        }
-    });
+  // Guard 4: Journal must balance (DR === CR) — use Decimal for precision
+  const totalDebit = params.lines.reduce((s, l) => s.plus(l.debit || 0), new Decimal(0));
+  const totalCredit = params.lines.reduce((s, l) => s.plus(l.credit || 0), new Decimal(0));
 
-    return je;
+  if (!totalDebit.equals(totalCredit)) {
+    throw new Error(
+      `[JE] IMBALANCED JOURNAL REJECTED for ${params.referenceType}/${params.referenceId}: ` +
+      `DR ${totalDebit} ≠ CR ${totalCredit}. Transaction will be rolled back.`
+    );
+  }
+
+  // Guard 5: Non-zero journal
+  if (totalDebit.isZero()) {
+    throw new Error(`[JE] Zero-value journal rejected for ${params.referenceType}/${params.referenceId}`);
+  }
+
+  // Post the journal — INSIDE the provided transaction
+  const je = await tx.journal_entries.create({
+    data: {
+      restaurant_id: params.restaurantId,
+      reference_type: params.referenceType,
+      reference_id: params.referenceId,
+      date: params.date,
+      description: params.description,
+      processed_by: params.processedBy,
+      lines: {
+        create: params.lines.map((l: any) => ({
+          account_id: l.accountId,
+          description: l.description,
+          debit: l.debit || new Decimal(0),
+          credit: l.credit || new Decimal(0),
+          reference_type: l.referenceType,
+          reference_id: l.referenceId,
+          meta: l.meta || undefined,
+        }))
+      }
+    }
+  });
+
+  return je;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────
@@ -124,8 +154,8 @@ export class JournalEntryService {
      *   CR  …     (same revenue / liability lines)
      *   DR  4010  Delivery Fee Revenue included in net (already part of total)
      */
-    async recordOrderSaleJournal(orderId: string, tx?: any) {
-        const db = tx || prisma;
+    async recordOrderSaleJournal(orderId: string, tx: any) {
+        const db = tx;
 
         // Idempotency: skip if already journalised
         const existing = await db.journal_entries.findFirst({
@@ -174,6 +204,9 @@ export class JournalEntryService {
                 accountId: riderAcc.id,
                 description: `Rider receivable – Order #${order.order_number}`,
                 debit: total,
+                referenceType: 'ORDER',
+                referenceId: orderId,
+                meta: { orderType: order.type, paymentMethod: 'CASH' }
             });
         } else {
             // Support Split Payments: Iterate through all paid transactions
@@ -198,6 +231,9 @@ export class JournalEntryService {
                         accountId: assetAcc.id,
                         description: `Payment [${t.payment_method}] – Order #${order.order_number}`,
                         debit: amount,
+                        referenceType: 'ORDER',
+                        referenceId: orderId,
+                        meta: { paymentMethod: t.payment_method }
                     });
                 }
             }
@@ -208,6 +244,9 @@ export class JournalEntryService {
                     accountId: cashAcc.id,
                     description: `Payment received (CASH) – Order #${order.order_number}`,
                     debit: total,
+                    referenceType: 'ORDER',
+                    referenceId: orderId,
+                    meta: { paymentMethod: 'CASH' }
                 });
             }
         }
@@ -222,6 +261,8 @@ export class JournalEntryService {
             accountId: foodRevAcc.id,
             description: `F&B Revenue – Order #${order.order_number}`,
             credit: foodRev,
+            referenceType: 'ORDER',
+            referenceId: orderId,
         });
 
         // Delivery Fee Revenue (if applicable)
@@ -230,6 +271,8 @@ export class JournalEntryService {
                 accountId: delivRevAcc.id,
                 description: `Delivery Fee – Order #${order.order_number}`,
                 credit: deliveryFee,
+                referenceType: 'ORDER',
+                referenceId: orderId,
             });
         }
 
@@ -239,6 +282,8 @@ export class JournalEntryService {
                 accountId: taxAcc.id,
                 description: `Sales Tax – Order #${order.order_number}`,
                 credit: tax,
+                referenceType: 'ORDER',
+                referenceId: orderId,
             });
         }
 
@@ -248,6 +293,8 @@ export class JournalEntryService {
                 accountId: scAcc.id,
                 description: `Service Charge – Order #${order.order_number}`,
                 credit: sc,
+                referenceType: 'ORDER',
+                referenceId: orderId,
             });
         }
 
@@ -276,8 +323,8 @@ export class JournalEntryService {
         amount: number | Decimal;
         settlementId: string;
         processedBy?: string;
-    }, tx?: any) {
-        const db = tx || prisma;
+    }, tx: any) {
+        const db = tx;
 
         const existing = await db.journal_entries.findFirst({
             where: { reference_type: 'RIDER_SETTLEMENT', reference_id: params.settlementId }
@@ -301,8 +348,8 @@ export class JournalEntryService {
             description: `Rider Cash Settlement`,
             processedBy: params.processedBy,
             lines: [
-                { accountId: cashAcc.id, description: 'Cash received from rider', debit: amount },
-                { accountId: riderAcc.id, description: 'Rider receivable cleared', credit: amount },
+                { accountId: cashAcc.id, description: 'Cash received from rider', debit: amount, referenceType: 'RIDER', referenceId: params.riderId, meta: { settlementId: params.settlementId } },
+                { accountId: riderAcc.id, description: 'Rider receivable cleared', credit: amount, referenceType: 'RIDER', referenceId: params.riderId, meta: { settlementId: params.settlementId } },
             ],
         }, db);
     }
@@ -320,8 +367,8 @@ export class JournalEntryService {
         category: string;
         notes: string;
         processedBy?: string;
-    }, tx?: any) {
-        const db = tx || prisma;
+    }, tx: any) {
+        const db = tx;
 
         const existing = await db.journal_entries.findFirst({
             where: { reference_type: 'PAYOUT', reference_id: params.payoutId }
@@ -347,8 +394,8 @@ export class JournalEntryService {
             description: `Payout [${params.category}]: ${params.notes}`,
             processedBy: params.processedBy,
             lines: [
-                { accountId: expenseAcc.id, description: `${params.category} expense`, debit: amount },
-                { accountId: cashAcc.id, description: 'Cash paid out', credit: amount },
+                { accountId: expenseAcc.id, description: `${params.category} expense`, debit: amount, referenceType: 'PAYOUT', referenceId: params.payoutId, meta: { category: params.category } },
+                { accountId: cashAcc.id, description: 'Cash paid out', credit: amount, referenceType: 'PAYOUT', referenceId: params.payoutId, meta: { category: params.category } },
             ],
         }, db);
     }
@@ -448,8 +495,8 @@ export class JournalEntryService {
      * CR  2000  Tax Payable           tax   (if applicable)
      * CR  2010  Service Charge        sc    (if applicable)
      */
-    async recordCreditSaleJournal(orderId: string, _customerId: string, tx?: any) {
-        const db = tx || prisma;
+    async recordCreditSaleJournal(orderId: string, customerId: string, tx: any) {
+        const db = tx;
 
         // Idempotency
         const existing = await db.journal_entries.findFirst({
@@ -482,11 +529,17 @@ export class JournalEntryService {
                 accountId: customerAcc.id,
                 description: `Credit sale – Order #${order.order_number}`,
                 debit: total,
+                referenceType: 'CUSTOMER',
+                referenceId: customerId,
+                meta: { orderId, orderNumber: order.order_number }
             },
             {
                 accountId: foodRevAcc.id,
                 description: `F&B Revenue – Order #${order.order_number}`,
                 credit: net,
+                referenceType: 'CUSTOMER',
+                referenceId: customerId,
+                meta: { orderId, orderNumber: order.order_number }
             },
         ];
 
@@ -495,6 +548,9 @@ export class JournalEntryService {
                 accountId: taxAcc.id,
                 description: `Sales Tax – Order #${order.order_number}`,
                 credit: tax,
+                referenceType: 'CUSTOMER',
+                referenceId: customerId,
+                meta: { orderId, orderNumber: order.order_number }
             });
         }
 
@@ -503,6 +559,9 @@ export class JournalEntryService {
                 accountId: scAcc.id,
                 description: `Service Charge – Order #${order.order_number}`,
                 credit: sc,
+                referenceType: 'CUSTOMER',
+                referenceId: customerId,
+                meta: { orderId, orderNumber: order.order_number }
             });
         }
 
@@ -531,8 +590,8 @@ export class JournalEntryService {
         paymentMethod: 'CASH' | 'CARD';
         referenceId: string;
         processedBy?: string;
-    }, tx?: any) {
-        const db = tx || prisma;
+    }, tx: any) {
+        const db = tx;
 
         // Idempotency
         const existing = await db.journal_entries.findFirst({
@@ -565,11 +624,17 @@ export class JournalEntryService {
                     accountId: assetAcc.id,
                     description: `Payment received from customer`,
                     debit: amount,
+                    referenceType: 'CUSTOMER',
+                    referenceId: params.customerId,
+                    meta: { paymentMethod: params.paymentMethod }
                 },
                 {
                     accountId: customerAcc.id,
                     description: `Customer account credited`,
                     credit: amount,
+                    referenceType: 'CUSTOMER',
+                    referenceId: params.customerId,
+                    meta: { paymentMethod: params.paymentMethod }
                 },
             ],
         }, db);
@@ -656,8 +721,8 @@ export class JournalEntryService {
         referenceId: string; // PO ID
         description: string;
         processedBy?: string;
-    }, tx?: any) {
-        const db = tx || prisma;
+    }, tx: any) {
+        const db = tx;
         const [expenseAcc, supplierAcc] = await Promise.all([
             resolveAccount(params.restaurantId, GL.GENERAL_EXPENSE, db),
             resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
@@ -675,8 +740,8 @@ export class JournalEntryService {
             description: params.description,
             processedBy: params.processedBy,
             lines: [
-                { accountId: expenseAcc.id, description: 'Supplier bill expense', debit: amount },
-                { accountId: supplierAcc.id, description: 'Supplier payable created', credit: amount },
+                { accountId: expenseAcc.id, description: 'Supplier bill expense', debit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
+                { accountId: supplierAcc.id, description: 'Supplier payable created', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
             ],
         }, db);
     }
@@ -695,8 +760,8 @@ export class JournalEntryService {
         payoutId: string;
         paymentMethod: 'CASH' | 'CARD';
         processedBy?: string;
-    }, tx?: any) {
-        const db = tx || prisma;
+    }, tx: any) {
+        const db = tx;
         const assetCode = params.paymentMethod === 'CARD' ? GL.CARD_RECEIVABLE : GL.CASH;
         const [supplierAcc, assetAcc] = await Promise.all([
             resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
@@ -715,8 +780,8 @@ export class JournalEntryService {
             description: `Payment to supplier`,
             processedBy: params.processedBy,
             lines: [
-                { accountId: supplierAcc.id, description: 'Supplier payable cleared', debit: amount },
-                { accountId: assetAcc.id, description: 'Cash paid to vendor', credit: amount },
+                { accountId: supplierAcc.id, description: 'Supplier payable cleared', debit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId, meta: { paymentMethod: params.paymentMethod } },
+                { accountId: assetAcc.id, description: 'Cash paid to vendor', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId, meta: { paymentMethod: params.paymentMethod } },
             ],
         }, db);
     }

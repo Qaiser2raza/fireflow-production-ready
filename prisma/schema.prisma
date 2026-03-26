@@ -749,6 +749,9 @@ model journal_entry_lines {
   description       String?
   debit             Decimal           @default(0) @db.Decimal(15, 4)
   credit            Decimal           @default(0) @db.Decimal(15, 4)
+  reference_type    String            @db.VarChar(50)
+  reference_id      String            @db.VarChar(100)
+  meta              Json?
   chart_of_accounts chart_of_accounts @relation(fields: [account_id], references: [id])
   journal_entries   journal_entries   @relation(fields: [journal_entry_id], references: [id], onDelete: Cascade)
 }

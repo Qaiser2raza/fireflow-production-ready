@@ -290,15 +290,34 @@ export abstract class BaseOrderService implements IOrderService {
             serviceCharge = overrideBreakdown.serviceCharge ?? 0;
             deliveryFee = overrideBreakdown.deliveryFee ?? 0;
         } else {
-            // Fallback: derive from restaurant config (e.g. when firing from KDS)
-            if (config.tax_enabled) {
-                tax = (subtotal * Number(config.tax_rate)) / 100;
+            // Fallback: derive from restaurant_features config
+            // Then fall back to restaurants table config
+            const features = await tx.restaurant_features.findUnique({
+              where: { restaurant_id: order.restaurant_id }
+            });
+
+            const orderTypeCharges = (features?.features as any)
+              ?.order_type_charges?.[order.type] || {};
+
+            // Tax
+            const taxEnabled = orderTypeCharges.tax_enabled ?? config.tax_enabled;
+            if (taxEnabled) {
+              tax = (subtotal * Number(config.tax_rate)) / 100;
             }
-            if (order.type === 'DINE_IN' && config.service_charge_enabled) {
-                serviceCharge = (subtotal * Number(config.service_charge_rate)) / 100;
+
+            // Service Charge (DINE_IN only by default)
+            const scEnabled = orderTypeCharges.service_charge_enabled ?? 
+              (order.type === 'DINE_IN' && config.service_charge_enabled);
+            if (scEnabled) {
+              serviceCharge = (subtotal * Number(config.service_charge_rate)) / 100;
             }
+
+            // Delivery Fee (DELIVERY only)
             if (order.type === 'DELIVERY') {
-                deliveryFee = Number((config as any).default_delivery_fee || 0);
+              const dfEnabled = orderTypeCharges.delivery_fee_enabled ?? true;
+              if (dfEnabled) {
+                deliveryFee = Number(orderTypeCharges.delivery_fee_amount || 0);
+              }
             }
         }
 

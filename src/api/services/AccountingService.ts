@@ -167,12 +167,7 @@ export class AccountingService {
         }
 
         // ── Double-Entry: Post to Chart of Accounts journal ──────────────
-        try {
-            await journalEntryService.recordOrderSaleJournal(orderId, db);
-        } catch (jeErr) {
-            // Journal posting is non-blocking — legacy ledger entry already recorded above
-            console.error('[JE] recordOrderSaleJournal failed (non-fatal):', jeErr);
-        }
+        await journalEntryService.recordOrderSaleJournal(orderId, db);
     }
 
     /**
@@ -214,17 +209,13 @@ export class AccountingService {
         }, db);
 
         // ── Double-Entry Journal ─────────────────────────────────────────
-        try {
-            await journalEntryService.recordRiderSettlementJournal({
-                restaurantId: data.restaurantId,
-                riderId: data.riderId,
-                amount: data.amountReceived,
-                settlementId: data.settlementId || `settle-${Date.now()}`,
-                processedBy: data.processedBy
-            }, db);
-        } catch (jeErr) {
-            console.error('[JE] recordRiderSettlementJournal failed (non-fatal):', jeErr);
-        }
+        await journalEntryService.recordRiderSettlementJournal({
+            restaurantId: data.restaurantId,
+            riderId: data.riderId,
+            amount: data.amountReceived,
+            settlementId: data.settlementId || `settle-${Date.now()}`,
+            processedBy: data.processedBy
+        }, db);
     }
 
     /**
@@ -237,11 +228,11 @@ export class AccountingService {
         notes: string;
         processedBy: string;
         referenceId?: string;
-    }, tx?: any) {
-        const db = tx || prisma;
+    }, tx: any): Promise<void> {
+        const db = tx;
         const amount = new Decimal(data.amount.toString());
 
-        // 1. CREDIT: Cash Drawer (Decrease Physical Cash)
+        // 1. CREDIT: Cash Drawer (cash leaves)
         await this.createLedgerEntry({
             restaurantId: data.restaurantId,
             transactionType: 'CREDIT',
@@ -252,8 +243,16 @@ export class AccountingService {
             processedBy: data.processedBy
         }, db);
 
-        // 2. DEBIT: Expense/Liability (Increase Cost)
-        // ... (This side depends on the specific chart of accounts, but for now we track the cash exit)
+        // 2. DEBIT: Expense (cost recorded)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'PAYOUT',
+            referenceId: data.referenceId,
+            description: `Expense [${data.category}]: ${data.notes}`,
+            processedBy: data.processedBy
+        }, db);
     }
 
     /**
@@ -650,18 +649,14 @@ export class AccountingService {
             }, tx);
 
             // ── Double-Entry Journal ─────────────────────────────────────
-            try {
-                await journalEntryService.recordPayoutJournal({
-                    restaurantId: data.restaurantId,
-                    amount: data.amount,
-                    payoutId: payout.id,
-                    category: data.category,
-                    notes: data.notes,
-                    processedBy: data.staffId
-                }, tx);
-            } catch (jeErr) {
-                console.error('[JE] recordPayoutJournal failed (non-fatal):', jeErr);
-            }
+            await journalEntryService.recordPayoutJournal({
+                restaurantId: data.restaurantId,
+                amount: data.amount,
+                payoutId: payout.id,
+                category: data.category,
+                notes: data.notes,
+                processedBy: data.staffId
+            }, tx);
 
             // ── Supplier Ledger Bridge ───────────────────────────────────
             if (data.category === 'SUPPLIER' && data.referenceId) {
@@ -677,18 +672,14 @@ export class AccountingService {
                 }, tx);
 
                 // 2. Specialized Journal (Liability clearing)
-                try {
-                    await journalEntryService.recordSupplierPaymentJournal({
-                        restaurantId: data.restaurantId,
-                        supplierId: data.referenceId,
-                        amount: data.amount,
-                        payoutId: payout.id,
-                        paymentMethod: 'CASH', // Defaults to cash for payouts
-                        processedBy: data.staffId
-                    }, tx);
-                } catch (jeErr) {
-                    console.error('[JE] recordSupplierPaymentJournal failed:', jeErr);
-                }
+                await journalEntryService.recordSupplierPaymentJournal({
+                    restaurantId: data.restaurantId,
+                    supplierId: data.referenceId,
+                    amount: data.amount,
+                    payoutId: payout.id,
+                    paymentMethod: 'CASH', // Defaults to cash for payouts
+                    processedBy: data.staffId
+                }, tx);
             }
 
             return payout;

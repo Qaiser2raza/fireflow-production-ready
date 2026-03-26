@@ -1,6 +1,7 @@
 // scripts/seed-coa.ts
 // Safe COA seeder — uses upsert, never overwrites existing accounts
-import { prisma } from '../src/shared/lib/prisma';
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
 
 const COA_ACCOUNTS = [
   // ASSETS
@@ -27,6 +28,36 @@ const COA_ACCOUNTS = [
   { code: '5010', name: 'General Expenses',           type: 'EXPENSE',   description: 'Miscellaneous operational expenses' },
   { code: '5020', name: 'Cost of Goods Sold',         type: 'EXPENSE',   description: 'Direct food and ingredient costs' },
   { code: '5030', name: 'Salaries & Wages',           type: 'EXPENSE',   description: 'Staff compensation' },
+
+  // Phase 1 Expansion
+  {
+    code: '1030',
+    name: 'Advance Deposits (Customer)',
+    type: 'LIABILITY',
+    description: 'Customer prepaid deposits — restaurant owes goods/service',
+    is_system: true as any
+  },
+  {
+    code: '1050',
+    name: 'Inventory Asset',
+    type: 'ASSET',
+    description: 'Value of stock on hand',
+    is_system: true as any
+  },
+  {
+    code: '3000',
+    name: "Owner's Equity",
+    type: 'EQUITY',
+    description: 'Opening capital and retained earnings',
+    is_system: true as any
+  },
+  {
+    code: '5020',
+    name: 'Cost of Goods Sold',
+    type: 'EXPENSE',
+    description: 'Direct cost of menu items sold',
+    is_system: true as any
+  },
 ];
 
 async function main() {
@@ -61,6 +92,7 @@ async function main() {
         type: account.type as any,
         description: account.description,
         is_active: true,
+        is_system: (account as any).is_system || false,
       },
       update: {}, // never overwrite existing accounts
     });

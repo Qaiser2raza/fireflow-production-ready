@@ -311,7 +311,7 @@ router.post('/customers/:id/payment', async (req, res) => {
       paymentMethod: method,
       referenceId,
       processedBy: req.staffId,
-    });
+    }, prisma);
 
     // Return updated balance
     const newBalance = await journalEntryService.getCustomerBalance(

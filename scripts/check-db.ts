@@ -1,14 +1,15 @@
 import { PrismaClient } from '@prisma/client';
-const prisma = new PrismaClient();
+const p = new PrismaClient();
 
-async function checkResources() {
-    const restaurants = await prisma.restaurants.findMany();
-    console.log('RESTAURANTS:', restaurants);
+async function main() {
+  console.log('--- COA Accounts ---');
+  const accounts = await p.chart_of_accounts.findMany({ select: { code: true, name: true } });
+  accounts.forEach(a => console.log(a.code, a.name));
 
-    const superAdmins = await prisma.staff.findMany({ where: { role: 'SUPER_ADMIN' } });
-    console.log('SUPER_ADMINS:', superAdmins);
+  console.log('\n--- Restaurant Features ---');
+  const feature = await p.restaurant_features.findFirst();
+  console.log(JSON.stringify(feature?.features, null, 2));
 
-    await prisma.$disconnect();
+  await p.$disconnect();
 }
-
-checkResources();
+main();

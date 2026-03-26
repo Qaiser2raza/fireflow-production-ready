@@ -283,11 +283,12 @@ router.post('/manual-journal', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, 
             return res.status(400).json({ error: 'One or more invalid account IDs' });
         }
 
+        const actualRefId = referenceId || `MJ-${Date.now()}`;
         const journal = await prisma.journal_entries.create({
             data: {
                 restaurant_id: restaurantId,
                 reference_type: 'MANUAL_JOURNAL',
-                reference_id: referenceId || `MJ-${Date.now()}`,
+                reference_id: actualRefId,
                 date: date ? new Date(date) : new Date(),
                 description: description || 'Manual Journal Entry',
                 processed_by: req.staffId!,
@@ -296,7 +297,9 @@ router.post('/manual-journal', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, 
                         account_id: l.accountId,
                         description: l.description || description || 'Manual line',
                         debit: new Decimal(Number(l.debit) || 0),
-                        credit: new Decimal(Number(l.credit) || 0)
+                        credit: new Decimal(Number(l.credit) || 0),
+                        reference_type: 'MANUAL_JOURNAL',
+                        reference_id: actualRefId
                     }))
                 }
             },
