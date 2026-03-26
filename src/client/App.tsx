@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Vendor, Station } from '../shared/types';
-import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History, Truck, Package } from 'lucide-react';
+import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Supplier, Station } from '../shared/types';
+import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History, Package, Users, Truck } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
-import { fetchWithAuth } from '../shared/lib/authInterceptor';
+import { fetchWithAuth, setTargetRestaurant } from '../shared/lib/authInterceptor';
 import { calculateBill, getDefaultBillConfig } from '../lib/billEngine';
 
 declare global {
@@ -24,6 +24,7 @@ import { KDSView } from '../operations/kds/KDSView';
 import { LogisticsHub } from '../operations/logistics/LogisticsHub';
 import { SuperAdminView } from '../features/saas-hq/SuperAdminView';
 import { CustomersView } from '../operations/customers/CustomersView';
+import { SuppliersView } from '../operations/suppliers/SuppliersView';
 import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
 import { TransactionsView } from '../operations/transactions/TransactionsView';
@@ -62,7 +63,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [expenses, setExpenses] = useState<any[]>([]);
   const [reservations, setReservations] = useState<any[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [drivers, setDrivers] = useState<Staff[]>([]);
 
   const [stations, setStations] = useState<Station[]>([]);
@@ -100,14 +101,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  const fetchInitialData = async (userOverride?: any) => {
+  const fetchInitialData = async (userOverride?: any, restaurantIdOverride?: string) => {
     const user = userOverride || currentUser;
     if (!user) return;
     
     setLoading(true);
     try {
-      // Get restaurant_id from multiple sources for redundancy
-      const restaurantId = user.restaurant_id || 
+      // Get restaurant_id: override (for SUPER_ADMIN mode) > user > localStorage
+      const restaurantId = restaurantIdOverride ||
+                          user.restaurant_id || 
                           currentUser?.restaurant_id ||
                           localStorage.getItem('restaurant_id');
       
@@ -128,14 +130,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchWithAuth(`${API_URL}/staff?restaurant_id=${restaurantId}`, { headers }),
         fetchWithAuth(`${API_URL}/transactions?restaurant_id=${restaurantId}`, { headers }),
         fetchWithAuth(`${API_URL}/customers?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/vendors?restaurant_id=${restaurantId}`, { headers }),
+        fetchWithAuth(`${API_URL}/suppliers?restaurant_id=${restaurantId}`, { headers }),
         fetchWithAuth(`${API_URL}/stations?restaurant_id=${restaurantId}`, { headers }),
         fetchWithAuth(`${API_URL}/operations/config/${restaurantId}`, { headers })
       ];
       
-      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, vendDataRes, stationRes, configRes] = await Promise.all(fetches);
+      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, supplierRes, stationRes, configRes] = await Promise.all(fetches);
 
-      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, vendData, stationData, configData] = await Promise.all([
+      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, supplierData, stationData, configData] = await Promise.all([
         ordersRes.ok ? ordersRes.json() : [],
         tablesRes.ok ? tablesRes.json() : [],
         sectionsRes.ok ? sectionsRes.json() : [],
@@ -144,7 +146,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         staffRes.ok ? staffRes.json() : [],
         trxRes.ok ? trxRes.json() : [],
         custDataRes.ok ? custDataRes.json() : [],
-        vendDataRes.ok ? vendDataRes.json() : [],
+        supplierRes.ok ? supplierRes.json() : [],
         stationRes.ok ? stationRes.json() : [],
         configRes.ok ? configRes.json() : null
       ]);
@@ -157,23 +159,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Find the table object
         const tableObj = Array.isArray(tables) ? tables.find((t: any) => t.id === (dineIn?.table_id || o.table_id)) : null;
 
+        const orderItems = (o.order_items || []).map((item: any) => ({
+          ...item,
+          unit_price: Number(item.unit_price || 0),
+          total_price: Number(item.total_price || (Number(item.unit_price || 0) * (item.quantity || 0))),
+          item_name: item.item_name || item.menu_item?.name || item.item_name || "Unknown Item"
+        }));
+
+        const total = Number(o.total || 0);
+        const tax = Number(o.tax || 0);
+        const service_charge = Number(o.service_charge || 0);
+        const discount = Number(o.discount || 0);
+        const delivery_fee = Number(o.delivery_fee || 0);
+
+        // Ensure breakdown has a valid subtotal
+        const breakdown = o.breakdown && typeof o.breakdown === 'object' ? o.breakdown : {
+          subtotal: total - tax - service_charge - delivery_fee + discount,
+          tax,
+          serviceCharge: service_charge,
+          discount,
+          deliveryFee: delivery_fee,
+          grandTotal: total
+        };
+
         return {
           ...o,
-          total: Number(o.total || 0) > 0 ? Number(o.total) : (o.order_items || []).reduce((acc: number, item: any) => acc + (Number(item.unit_price || 0) * (item.quantity || 0)), 0),
-          tax: Number(o.tax || 0),
-          service_charge: Number(o.service_charge || 0),
-          delivery_fee: Number(o.delivery_fee || 0),
+          total,
+          tax,
+          service_charge,
+          delivery_fee,
+          discount,
+          breakdown,
           tableId: dineIn?.table_id || o.table_id || null,
           table: tableObj,
           guestCount: dineIn?.guest_count || o.guest_count || 1,
           customerName: takeaway?.customer_name || delivery?.customer_name || o.customer_name || "Guest",
           customerPhone: takeaway?.customer_phone || delivery?.customer_phone || o.customer_phone || "",
           timestamp: new Date(o.created_at || o.timestamp || Date.now()),
-          order_items: (o.order_items || []).map((item: any) => ({
-            ...item,
-            unit_price: Number(item.unit_price || 0),
-            total_price: Number(item.total_price || 0)
-          }))
+          order_items: orderItems
         };
       };
 
@@ -197,7 +220,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setTransactions(Array.isArray(trxData) ? trxData.map((t: any) => ({ ...t, amount: Number(t.amount) })) : []);
       setDrivers(Array.isArray(staffData) ? staffData.filter((s: any) => s.role === 'RIDER' || s.role === 'DRIVER') : []);
       setCustomers(Array.isArray(custData) ? custData : []);
-      setVendors(Array.isArray(vendData) ? vendData : []);
+      setSuppliers(Array.isArray(supplierData) ? supplierData : []);
       setStations(Array.isArray(stationData) ? stationData : []);
       if (configData && configData.success) {
         setOperationsConfig(configData.config);
@@ -626,7 +649,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{
-      currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, vendors,
+      currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, suppliers,
       connectionStatus, lastSyncAt, notifications, activeView, loading, isRestaurantLoading, orderToEdit,
       socket: socketIO,
       activeSession, setActiveSession,
@@ -714,7 +737,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
       updateTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
       deleteTable: async (id: string) => { await fetchWithAuth(`${API_URL}/tables?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
-      addVendor: async (v: any) => { await fetchWithAuth(`${API_URL}/vendors`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      addSupplier: async (s: any) => { await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      updateSupplier: async (s: any) => { await fetchWithAuth(`${API_URL}/suppliers/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      deleteSupplier: async (id: string) => { await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
+      addVendor: async (v: any) => { /* Bridge to supplier */ await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      updateVendor: async (v: any) => { await fetchWithAuth(`${API_URL}/suppliers/${v.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
+      deleteVendor: async (id: string) => { await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
       addCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
       updateCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
       deleteCustomer: async (id: string) => { await fetchWithAuth(`${API_URL}/customers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
@@ -862,6 +890,10 @@ const AppContent = () => {
   const { theme, toggleTheme } = useTheme();
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
+  // SUPER_ADMIN restaurant mode: stores the restaurant being managed locally in the UI
+  const [superAdminRestaurantId, setSuperAdminRestaurantId] = useState<string | null>(null);
+  const [superAdminRestaurantName, setSuperAdminRestaurantName] = useState<string | null>(null);
+
   // Live clock update
   useEffect(() => {
     const timer = setInterval(() => {
@@ -890,9 +922,39 @@ const AppContent = () => {
 
   if (!currentUser) return <LoginView onLogin={login} />;
 
+  // SUPER_ADMIN handlers
+  const handleEnterRestaurant = (restaurantId: string, restaurantName: string) => {
+    setSuperAdminRestaurantId(restaurantId);
+    setSuperAdminRestaurantName(restaurantName);
+    setTargetRestaurant(restaurantId); // Make fetchWithAuth include x-target-restaurant
+    setTimeout(() => {
+      fetchInitialData(currentUser, restaurantId);
+    }, 50);
+    setActiveView('DASHBOARD');
+  };
+
+  const handleExitToHQ = () => {
+    setSuperAdminRestaurantId(null);
+    setSuperAdminRestaurantName(null);
+    setTargetRestaurant(null); // Clear header
+    setActiveView('SUPER_ADMIN');
+  };
+
   const getMenuItems = () => {
-    if (currentUser.role === 'SUPER_ADMIN') {
+    if (currentUser.role === 'SUPER_ADMIN' && !superAdminRestaurantId) {
       return [{ id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' }];
+    }
+    if (currentUser.role === 'SUPER_ADMIN' && superAdminRestaurantId) {
+      // In restaurant mode: show full menu + HQ exit button
+      return [
+        { id: 'SUPER_ADMIN', icon: Shield, label: '← Back to HQ' },
+        { id: 'DASHBOARD', icon: Layout, label: 'Dashboard' },
+        { id: 'POS', icon: Grid, label: 'POS Control' },
+        { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Hub' },
+        { id: 'ACTIVITY', icon: History, label: 'Command Hub' },
+        { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
+        { id: 'SETTINGS', icon: Settings, label: 'Settings' },
+      ];
     }
 
     const allItems = [
@@ -905,6 +967,8 @@ const AppContent = () => {
       { id: 'ACTIVITY', icon: History, label: 'Command Hub', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
       { id: 'FINANCE', icon: CreditCard, label: 'Finance', roles: ['ADMIN', 'MANAGER'] },
       { id: 'REGISTER', icon: CreditCard, label: 'Register', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
+      { id: 'CUSTOMERS', icon: Users, label: 'Patrons', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
+      { id: 'SUPPLIERS', icon: Truck, label: 'Suppliers', roles: ['ADMIN', 'MANAGER'] },
       { id: 'SETTINGS', icon: Settings, label: 'System', roles: ['ADMIN', 'MANAGER'] },
     ];
 
@@ -951,7 +1015,14 @@ const AppContent = () => {
           {menuItems.map((item) => (
             <button
               key={item.id}
-              onClick={() => setActiveView(item.id)}
+              onClick={() => {
+                // SUPER_ADMIN: '← Back to HQ' exits restaurant mode
+                if (currentUser?.role === 'SUPER_ADMIN' && item.id === 'SUPER_ADMIN' && superAdminRestaurantId) {
+                  handleExitToHQ();
+                } else {
+                  setActiveView(item.id);
+                }
+              }}
               className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${activeView === item.id ? 'bg-gold-500 text-black font-bold' : 'text-slate-400 hover:bg-slate-800'}`}
             >
               <item.icon size={18} className="shrink-0" />
@@ -1038,11 +1109,19 @@ const AppContent = () => {
               </div>
             </div>
 
-            {/* CENTER: Connection Status */}
-            <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-700/50">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
-              <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Live</span>
-            </div>
+            {/* CENTER: Restaurant Mode Banner or Connection Status */}
+            {currentUser?.role === 'SUPER_ADMIN' && superAdminRestaurantId ? (
+              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-gold-500/10 rounded-lg border border-gold-500/30 cursor-pointer hover:bg-gold-500/20 transition-all" onClick={handleExitToHQ}>
+                <Shield size={12} className="text-gold-500" />
+                <span className="text-[10px] text-gold-500 font-black uppercase tracking-widest">Managing: {superAdminRestaurantName}</span>
+                <span className="text-[9px] text-gold-500/60 font-bold">← Exit</span>
+              </div>
+            ) : (
+              <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
+                <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Live</span>
+              </div>
+            )}
 
             {/* RIGHT: Notifications + Theme */}
             <div className="flex items-center gap-2">
@@ -1099,13 +1178,13 @@ const AppContent = () => {
 
         {/* Main Content */}
         <div className="flex-1 overflow-auto">
-          {activeView === 'SUPER_ADMIN' ? <SuperAdminView /> :
+          {activeView === 'SUPER_ADMIN' ? <SuperAdminView onEnterRestaurant={handleEnterRestaurant} /> :
             activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
               activeView === 'MENU' ? <MenuView /> :
                 activeView === 'DASHBOARD' ? <DashboardView /> :
                   activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
                     activeView === 'KITCHEN' ? <KDSView /> :
-                      active_view === 'RIDER_VIEW' || activeView === 'RIDER_VIEW' ? <RiderView /> :
+                      activeView === 'RIDER_VIEW' ? <RiderView /> :
                         activeView === 'LOGISTICS' ? <LogisticsHub /> :
                         activeView === 'ACTIVITY' ? <ActivityLog /> :
                           activeView === 'REGISTER' ? <TransactionsView /> :
@@ -1113,7 +1192,8 @@ const AppContent = () => {
                               activeView === 'FINANCE' ? <FinancialCommandCenter /> :
                                 activeView === 'STAFF' ? <StaffView /> :
                                   activeView === 'CUSTOMERS' ? <CustomersView /> :
-                                    activeView === 'SETTINGS' ? <SettingsView /> :
+                                    activeView === 'SUPPLIERS' ? <SuppliersView /> :
+                                      activeView === 'SETTINGS' ? <SettingsView /> :
                                       <div className="p-20 text-slate-700 font-black uppercase tracking-[0.3em]">SECURE SECTOR NOT SELECTED</div>}
         </div>
 

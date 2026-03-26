@@ -197,8 +197,20 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
 
             {/* Payment Info */}
             {isPaid && (
-                <div className="mt-4 p-2 border border-black bg-slate-50 text-center uppercase font-black text-[10px] tracking-widest">
-                    PAID VIA {order.payment_method || 'CASH'}
+                <div className="mt-4 p-2 border border-black bg-slate-50 text-center uppercase font-black text-[10px] tracking-widest leading-relaxed">
+                    {order.payment_method === 'SPLIT' && breakdown.paymentBreakdown ? (
+                        <div>
+                            <p className="border-b border-black/20 pb-1 mb-1 italic">Split Payment Breakdown</p>
+                            {breakdown.paymentBreakdown.map((p: any, i: number) => (
+                                <div key={i} className="flex justify-between px-2">
+                                    <span>{p.method === 'CREDIT' ? 'KHATA' : p.method}:</span>
+                                    <span>{formatCurrency(p.amount)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        `PAID VIA ${order.payment_method || 'CASH'}`
+                    )}
                 </div>
             )}
 

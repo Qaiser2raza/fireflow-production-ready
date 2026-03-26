@@ -75,7 +75,7 @@ export abstract class BaseOrderService implements IOrderService {
                     reservation_orders: true
                 }
             }) as orders;
-        });
+        }, { timeout: 20000, maxWait: 20000 });
     }
 
     // Inside BaseOrderService.ts
@@ -209,7 +209,7 @@ export abstract class BaseOrderService implements IOrderService {
                     reservation_orders: true
                 }
             }) as orders;
-        });
+        }, { timeout: 20000, maxWait: 20000 });
     }
 
     protected mapStatusToPrisma(status: string | undefined): any {

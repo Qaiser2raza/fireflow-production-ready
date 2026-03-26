@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App'; // Path verified for src/operations/transactions/
 import { Search, CreditCard, Banknote, Calendar, Download, Utensils, ShoppingBag, Truck, ClipboardList } from 'lucide-react';
 import { OrderType } from '../../shared/types';
+import { getCompositeStatus } from '../../shared/lib/orderStatus';
 
 export const TransactionsView: React.FC = () => {
   const { transactions, orders, setActiveView } = useAppContext();
@@ -115,6 +116,7 @@ export const TransactionsView: React.FC = () => {
               <th className="py-5">Order Origin</th>
               <th className="py-5">Method</th>
               <th className="py-5">Processed By</th>
+              <th className="py-5 text-center">Order Status</th>
               <th className="py-5 text-right pr-4">Amount</th>
             </tr>
           </thead>
@@ -173,6 +175,15 @@ export const TransactionsView: React.FC = () => {
                     </td>
                     <td className="py-5">
                       <span className="text-slate-400 text-xs font-medium italic opacity-70">{tx.processedBy || tx.staff?.name || 'System Terminal'}</span>
+                    </td>
+                    <td className="py-5 text-center">
+                      {order ? (
+                        <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest ${getCompositeStatus(order.status, order.payment_status).bg} ${getCompositeStatus(order.status, order.payment_status).color} border border-current/20`}>
+                          {getCompositeStatus(order.status, order.payment_status).label}
+                        </div>
+                      ) : (
+                        <span className="text-[9px] text-slate-600 font-black uppercase">Legacy</span>
+                      )}
                     </td>
                     <td className="py-5 text-right pr-4">
                       <div className="flex flex-col items-end">

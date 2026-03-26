@@ -10,7 +10,6 @@ import {
     Clock,
     ChevronLeft,
     ChevronRight,
-    Edit2,
     Ban,
     Loader2,
     TrendingUp,
@@ -40,20 +39,27 @@ const FBRSyncView: React.FC = () => {
     });
     const [searchTerm, setSearchTerm] = useState('');
     const [filterStatus, setFilterStatus] = useState<string>('');
+    const [page, setPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const [totalServerCount, setTotalServerCount] = useState(0);
 
     const fetchData = async () => {
         try {
             setLoading(true);
             const [statsResRaw, invoicesResRaw] = await Promise.all([
                 fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/fbr/stats`),
-                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/fbr/invoices?status=${filterStatus}&search=${searchTerm}`)
+                fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/fbr/invoices?status=${filterStatus}&search=${searchTerm}&page=${page}`)
             ]);
 
             const statsRes = await statsResRaw.json() as any;
             const invoicesRes = await invoicesResRaw.json() as any;
 
             if (statsRes.success) setStats(statsRes.stats);
-            if (invoicesRes.success) setInvoices(invoicesRes.invoices);
+            if (invoicesRes.success) {
+                setInvoices(invoicesRes.invoices);
+                setTotalPages(invoicesRes.totalPages || 1);
+                setTotalServerCount(invoicesRes.totalCount || invoicesRes.invoices.length);
+            }
         } catch (err) {
             console.error('Error fetching FBR data:', err);
         } finally {
@@ -63,10 +69,11 @@ const FBRSyncView: React.FC = () => {
 
     useEffect(() => {
         fetchData();
-    }, [filterStatus]);
+    }, [filterStatus, page]);
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
+        setPage(1); // Reset to first page on search
         fetchData();
     };
 
@@ -100,6 +107,22 @@ const FBRSyncView: React.FC = () => {
             addNotification('error', 'Error during batch sync');
         } finally {
             setSyncingAll(false);
+        }
+    };
+
+    const handleVoid = async (orderId: string) => {
+        if (!window.confirm("Are you sure you want to void this invoice? It will no longer be considered for FBR sync.")) return;
+        try {
+            const raw = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/fbr/void/${orderId}`, { method: 'POST' });
+            const res = await raw.json() as any;
+            if (res.success) {
+                addNotification('success', 'Invoice Voided');
+                fetchData();
+            } else {
+                addNotification('error', `Failed to void: ${res.error}`);
+            }
+        } catch (err) {
+            addNotification('error', 'Network error');
         }
     };
 
@@ -282,8 +305,9 @@ const FBRSyncView: React.FC = () => {
                                                                 <RefreshCw size={16} />
                                                             </button>
                                                         )}
-                                                        <button className="p-1.5 hover:bg-slate-700 text-slate-400 rounded-lg transition-colors" title="Edit"><Edit2 size={16} /></button>
-                                                        <button className="p-1.5 hover:bg-amber-900/30 text-amber-500 rounded-lg transition-colors" title="Void"><Ban size={16} /></button>
+                                                        {inv.fbr_sync_status !== 'SYNCED' && inv.fbr_sync_status !== 'VOIDED' && (
+                                                            <button onClick={() => handleVoid(inv.id)} className="p-1.5 hover:bg-amber-900/30 text-amber-500 rounded-lg transition-colors" title="Void"><Ban size={16} /></button>
+                                                        )}
                                                     </div>
                                                 </td>
                                             </tr>
@@ -293,12 +317,20 @@ const FBRSyncView: React.FC = () => {
                             </table>
                         </div>
                         <div className="px-6 py-4 bg-slate-800/30 border-t border-slate-800 flex items-center justify-between shrink-0">
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Showing {invoices.length} of {stats.totalInvoices} results</p>
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Showing {invoices.length} of {totalServerCount} results (Page {page} of {totalPages})</p>
                             <div className="flex gap-2">
-                                <button className="p-2 bg-[#111827] border border-slate-800 rounded hover:bg-slate-800 disabled:opacity-50 text-slate-300 transition-colors">
+                                <button 
+                                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                                    disabled={page === 1}
+                                    className="p-2 bg-[#111827] border border-slate-800 rounded hover:bg-slate-800 disabled:opacity-50 text-slate-300 transition-colors"
+                                >
                                     <ChevronLeft size={16} />
                                 </button>
-                                <button className="p-2 bg-[#111827] border border-slate-800 rounded hover:bg-slate-800 disabled:opacity-50 text-slate-300 transition-colors">
+                                <button 
+                                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                                    disabled={page >= totalPages}
+                                    className="p-2 bg-[#111827] border border-slate-800 rounded hover:bg-slate-800 disabled:opacity-50 text-slate-300 transition-colors"
+                                >
                                     <ChevronRight size={16} />
                                 </button>
                             </div>

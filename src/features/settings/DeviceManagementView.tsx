@@ -13,12 +13,11 @@ interface Device {
 }
 
 export const DeviceManagementView: React.FC = () => {
-    const { addNotification, currentUser } = useAppContext();
+    const { addNotification } = useAppContext();
     const [devices, setDevices] = useState<Device[]>([]);
     const [loading, setLoading] = useState(true);
     const [revoking, setRevoking] = useState<string | null>(null);
 
-    const currentFingerprint = localStorage.getItem('fireflow_device_fingerprint');
 
     const fetchDevices = async () => {
         setLoading(true);

@@ -119,7 +119,15 @@ export async function authMiddleware(
       name: decoded.payload.name
     };
 
-    // 5. Continue to next handler
+    // 5. SUPER_ADMIN: Allow targeting any restaurant via x-target-restaurant header
+    if (req.role === 'SUPER_ADMIN') {
+      const targetRestaurant = req.headers['x-target-restaurant'] as string | undefined;
+      if (targetRestaurant && targetRestaurant.length > 0) {
+        req.restaurantId = targetRestaurant;
+      }
+    }
+
+    // 6. Continue to next handler
     next();
 
   } catch (error: any) {

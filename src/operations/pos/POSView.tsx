@@ -33,6 +33,8 @@ import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal
 import { ReceiptView } from './ReceiptView';
 import { Order } from '../../shared/types';
 import { calculateBill, getDefaultBillConfig, BillConfig } from '../../lib/billEngine';
+import { generateInvoiceHtml } from '../../shared/lib/invoiceTemplates';
+
 
 export const POSView: React.FC = () => {
   const {
@@ -46,7 +48,7 @@ export const POSView: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<string>('trending');
   const [searchQuery, setSearchQuery] = useState('');
   const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [editingField, setEditingField] = useState<'discount' | 'delivery' | null>(null);
+  const [editingField, setEditingField] = useState<'discount' | 'delivery' | 'tax' | 'service' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTokenBanner, setShowTokenBanner] = useState(false);
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
@@ -68,19 +70,34 @@ export const POSView: React.FC = () => {
   const [customerName, setCustomerName] = useState<string>('');
   const [deliveryAddress, setDeliveryAddress] = useState<string>('');
   const [isCustomerLoading, setIsCustomerLoading] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
   const debouncedPhone = useDebounce(customerPhone, 400);
 
   // Bill Config — per-session billing overrides (discount, service, tax, delivery)
+  // Helper: returns the best available config (context > localStorage > {})
+  // Needed because operationsConfig may still be null on first render (async load)
+  const getEffectiveConfig = () => {
+    if (operationsConfig) return operationsConfig;
+    try {
+      const restaurantId = currentUser?.restaurant_id;
+      if (restaurantId) {
+        const stored = localStorage.getItem(`fireflow_operations_config_${restaurantId}`);
+        if (stored) return JSON.parse(stored);
+      }
+    } catch { /* ignore parse errors */ }
+    return {};
+  };
+
   const [billConfig, setBillConfig] = useState<BillConfig>(() =>
-    getDefaultBillConfig('DINE_IN', operationsConfig || {})
+    getDefaultBillConfig('DINE_IN', getEffectiveConfig())
   );
 
   // Reset bill config to order-type defaults when order type changes
   // v3.1: Skip reset if we are currently loading an order to edit (recall)
   useEffect(() => {
-    if (orderToEdit) return; 
-    setBillConfig(getDefaultBillConfig(orderType, operationsConfig || {}));
+    if (orderToEdit) return;
+    setBillConfig(getDefaultBillConfig(orderType, getEffectiveConfig()));
   }, [orderType, operationsConfig, orderToEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track mobile breakpoint
@@ -276,12 +293,16 @@ export const POSView: React.FC = () => {
       if (match) {
         setCustomerName(match.name || '');
         setDeliveryAddress(match.address || '');
+        setSelectedCustomer(match);
         addNotification('success', `✓ Customer Found: ${match.name}`);
+      } else {
+        setSelectedCustomer(null);
       }
       setIsCustomerLoading(false);
     } else if (cleanPhone.length === 0) {
       setCustomerName('');
       setDeliveryAddress('');
+      setSelectedCustomer(null);
     }
   }, [debouncedPhone, orderType]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -627,113 +648,27 @@ export const POSView: React.FC = () => {
   };
 
   const handlePrint = async () => {
-    // ⚠️ DO NOT clone DOM or inject app stylesheets — that pulls in dark-mode Tailwind CSS which makes the thermal output solid black.
-    // Instead, generate a fully isolated receipt HTML from live state data.
     const invoiceSettings = operationsConfig || JSON.parse(localStorage.getItem(`fireflow_operations_config_${currentUser?.restaurant_id}`) || '{}');
+    const selectedTemplate = invoiceSettings.invoice_templates || 'classic';
+    
     const isPaid = activeOrderData?.payment_status === 'PAID' || activeOrderData?.status === 'CLOSED';
     const orderItems = currentOrderItems.length > 0 ? currentOrderItems : (activeOrderData?.order_items || []);
-    const orderNum = activeOrderData?.order_number || activeOrderId?.slice(-8).toUpperCase() || 'N/A';
-    const tableObj = tables.find(t => t.id === selectedTableId) || activeOrderData?.table;
+    const paymentMethod = (activeOrderData as any)?.transactions?.[0]?.payment_method || (activeOrderData as any)?.payment_method || 'CASH';
 
-    const fmtCur = (n: number) => `Rs. ${Math.round(n).toLocaleString()}`;
-    const fmtDate = (d: any) => new Date(d || Date.now()).toLocaleString('en-PK', {
-      day: '2-digit', month: 'short', year: 'numeric',
-      hour: '2-digit', minute: '2-digit', hour12: true
+    // Prepare data for the template engine
+    const content = generateInvoiceHtml(selectedTemplate, {
+      config: invoiceSettings,
+      order: activeOrderId ? { ...activeOrderData, type: orderType, table: tables.find(t => t.id === selectedTableId) || activeOrderData?.table } : { id: 'DRAFT', type: orderType, created_at: new Date() },
+      items: orderItems,
+      breakdown: breakdown,
+      isPaid: isPaid,
+      paymentMethod: paymentMethod,
+      customer: selectedCustomer || customers?.find(c => c.id === activeOrderData?.customer_id)
     });
-
-    const itemRows = orderItems.map(item => `
-      <tr>
-        <td style="width:8%;padding:2px 0;vertical-align:top;">${item.quantity}</td>
-        <td style="width:62%;padding:2px 0;vertical-align:top;text-transform:uppercase;">${item.item_name || item.menu_item?.name || 'Item'}</td>
-        <td style="width:30%;padding:2px 0;vertical-align:top;text-align:right;">${fmtCur((item.unit_price || 0) * item.quantity)}</td>
-      </tr>
-    `).join('');
-
-    const content = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Receipt</title>
-  <style>
-    /* ===== COMPLETELY ISOLATED STYLES — NO APP CSS ===== */
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      background: #ffffff !important;
-      color: #000000 !important;
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 11px;
-      line-height: 1.4;
-    }
-    .receipt {
-      width: 72mm;
-      padding: 2mm 3mm;
-      background: #ffffff;
-      color: #000000;
-    }
-    h1 { font-size: 14px; font-weight: 900; text-align: center; text-transform: uppercase; margin-bottom: 2px; }
-    .sub { font-size: 9px; text-align: center; margin-bottom: 4px; }
-    .dashed { border-top: 1px dashed #000; margin: 5px 0; }
-    .badge { font-size: 10px; font-weight: 900; text-align: center; border: 2px solid #000; padding: 2px 10px; display: inline-block; text-transform: uppercase; letter-spacing: 2px; }
-    .badge-wrap { text-align: center; margin: 4px 0; }
-    .meta { font-size: 9px; margin-bottom: 6px; }
-    .meta-row { display: flex; justify-content: space-between; margin: 1px 0; }
-    table { width: 100%; border-collapse: collapse; font-size: 10px; }
-    thead th { font-size: 9px; text-transform: uppercase; border-bottom: 1px solid #000; padding-bottom: 2px; text-align: left; }
-    thead th:last-child { text-align: right; }
-    .totals { font-size: 10px; margin-top: 4px; }
-    .total-row { display: flex; justify-content: space-between; margin: 1px 0; }
-    .grand { font-size: 13px; font-weight: 900; display: flex; justify-content: space-between; border-top: 2px solid #000; padding-top: 4px; margin-top: 4px; }
-    .paid-stamp { text-align: center; font-size: 11px; font-weight: 900; border: 2px solid #000; padding: 4px; margin-top: 8px; text-transform: uppercase; letter-spacing: 1px; }
-    .footer { font-size: 8px; text-align: center; margin-top: 12px; }
-    @page { size: 80mm auto; margin: 0; }
-  </style>
-</head>
-<body>
-<div class="receipt">
-  <h1>${invoiceSettings.businessName || invoiceSettings.business_name || activeOrderData?.restaurants?.name || 'FIREFLOW POS'}</h1>
-  ${(invoiceSettings.businessAddress || invoiceSettings.business_address || activeOrderData?.restaurants?.address) ? `<div class="sub">${invoiceSettings.businessAddress || invoiceSettings.business_address || activeOrderData?.restaurants?.address}</div>` : ''}
-  ${(invoiceSettings.businessPhone || invoiceSettings.business_phone || activeOrderData?.restaurants?.phone) ? `<div class="sub">Tel: ${invoiceSettings.businessPhone || invoiceSettings.business_phone || activeOrderData?.restaurants?.phone}</div>` : ''}
-  ${(invoiceSettings.ntnNumber || activeOrderData?.restaurants?.ntn) ? `<div class="sub">NTN: ${invoiceSettings.ntnNumber || activeOrderData?.restaurants?.ntn}</div>` : ''}
-  <div class="dashed"></div>
-  <div class="badge-wrap"><span class="badge">${
-    isPaid && (invoiceSettings.ntnNumber || invoiceSettings.tax_id || activeOrderData?.restaurants?.ntn)
-      ? 'TAX INVOICE'
-      : isPaid
-        ? 'CUSTOMER BILL'
-        : 'BILL'
-  }</span></div>
-  <div class="dashed"></div>
-  <div class="meta">
-    <div class="meta-row"><span>Date:</span><span>${fmtDate(activeOrderData?.created_at)}</span></div>
-    <div class="meta-row"><span>Order #:</span><span>${orderNum}</span></div>
-    <div class="meta-row"><span>Type:</span><span>${orderType}</span></div>
-    ${tableObj ? `<div class="meta-row"><span>Table:</span><span>${tableObj.name}</span></div>` : ''}
-    ${customerName ? `<div class="meta-row"><span>Customer:</span><span>${customerName}</span></div>` : ''}
-  </div>
-  <div class="dashed"></div>
-  <table>
-    <thead><tr><th>Qty</th><th>Description</th><th style="text-align:right;">Price</th></tr></thead>
-    <tbody>${itemRows}</tbody>
-  </table>
-  <div class="dashed"></div>
-  <div class="totals">
-    <div class="total-row"><span>Subtotal</span><span>${fmtCur(breakdown.subtotal)}</span></div>
-    ${breakdown.discount > 0 ? `<div class="total-row"><span>Discount</span><span>-${fmtCur(breakdown.discount)}</span></div>` : ''}
-    ${breakdown.serviceCharge > 0 ? `<div class="total-row"><span>Service Charge</span><span>${fmtCur(breakdown.serviceCharge)}</span></div>` : ''}
-    ${breakdown.tax > 0 ? `<div class="total-row"><span>Tax</span><span>${fmtCur(breakdown.tax)}</span></div>` : ''}
-    ${breakdown.deliveryFee > 0 ? `<div class="total-row"><span>Delivery Fee</span><span>${fmtCur(breakdown.deliveryFee)}</span></div>` : ''}
-  </div>
-  <div class="grand"><span>TOTAL PAYABLE</span><span>${fmtCur(breakdown.total)}</span></div>
-  ${isPaid ? `<div class="paid-stamp">✓ PAID — ${activeOrderData?.payment_method || 'CASH'}</div>` : ''}
-  <div class="dashed"></div>
-  ${invoiceSettings.receiptFooterText || invoiceSettings.receipt_footer ? `<div class="footer">${invoiceSettings.receiptFooterText || invoiceSettings.receipt_footer}</div>` : ''}
-  <div class="footer">Powered by Fireflow POS</div>
-</div>
-</body>
-</html>`;
 
     await printReceipt(content);
   };
+
 
 
   return (
@@ -971,12 +906,27 @@ export const POSView: React.FC = () => {
               <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
                 <div className="flex items-center gap-1">
                   <span className="opacity-60 text-gold-500/80 text-[8px]">TAX</span>
-                  <button 
-                    onClick={() => setBillConfig(p => ({ ...p, taxEnabled: !p.taxEnabled }))}
-                    className={`px-1 py-0 rounded text-[7px] ${billConfig.taxEnabled ? 'bg-gold-500 text-black' : 'bg-slate-800 text-slate-500'}`}
-                  >
-                    {billConfig.taxEnabled ? 'ON' : 'OFF'}
-                  </button>
+                  {editingField === 'tax' ? (
+                    <input
+                      type="number"
+                      className="bg-slate-900 border border-white/10 w-12 text-[8px] text-white px-1 rounded outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      value={billConfig.taxRate || ''}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setBillConfig(p => ({ ...p, taxRate: e.target.value === '' ? 0 : Number(e.target.value), taxEnabled: true }))}
+                      autoFocus
+                      onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
+                      onBlur={() => setEditingField(null)}
+                    />
+                  ) : (
+                    <button 
+                      onClick={() => setBillConfig(p => ({ ...p, taxEnabled: !p.taxEnabled }))}
+                      onDoubleClick={() => setEditingField('tax')}
+                      className={`px-1 py-0 rounded text-[7px] ${billConfig.taxEnabled ? 'bg-gold-500 text-black' : 'bg-slate-800 text-slate-500'}`}
+                      title="Toggle Tax (Double click to edit rate)"
+                    >
+                      {billConfig.taxEnabled ? `${billConfig.taxRate}%` : 'OFF'}
+                    </button>
+                  )}
                 </div>
                 <span className="text-white font-mono tracking-normal">{breakdown.tax.toLocaleString()}</span>
               </div>
@@ -985,12 +935,27 @@ export const POSView: React.FC = () => {
                 <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
                   <div className="flex items-center gap-1">
                     <span className="opacity-60 text-blue-400 text-[8px]">SRV</span>
-                    <button 
-                      onClick={() => setBillConfig(p => ({ ...p, serviceChargeEnabled: !p.serviceChargeEnabled }))}
-                      className={`px-1 py-0 rounded text-[7px] ${billConfig.serviceChargeEnabled ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-500'}`}
-                    >
-                      {billConfig.serviceChargeEnabled ? 'ON' : 'OFF'}
-                    </button>
+                    {editingField === 'service' ? (
+                      <input
+                        type="number"
+                        className="bg-slate-900 border border-white/10 w-12 text-[8px] text-white px-1 rounded outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        value={billConfig.serviceChargeRate || ''}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setBillConfig(p => ({ ...p, serviceChargeRate: e.target.value === '' ? 0 : Number(e.target.value), serviceChargeEnabled: true }))}
+                        autoFocus
+                        onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
+                        onBlur={() => setEditingField(null)}
+                      />
+                    ) : (
+                      <button 
+                        onClick={() => setBillConfig(p => ({ ...p, serviceChargeEnabled: !p.serviceChargeEnabled }))}
+                        onDoubleClick={() => setEditingField('service')}
+                        className={`px-1 py-0 rounded text-[7px] ${billConfig.serviceChargeEnabled ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-500'}`}
+                        title="Toggle SC (Double click to edit rate)"
+                      >
+                        {billConfig.serviceChargeEnabled ? `${billConfig.serviceChargeRate}%` : 'OFF'}
+                      </button>
+                    )}
                   </div>
                   <span className="text-white font-mono tracking-normal">{breakdown.serviceCharge.toLocaleString()}</span>
                 </div>
@@ -1325,9 +1290,9 @@ export const POSView: React.FC = () => {
         <PaymentModal
           order={{ id: activeOrderId || 'NEW', total: breakdown.total, type: orderType } as any}
           breakdown={breakdown}
+          customer={selectedCustomer}
           onClose={() => setShowPaymentModal(false)}
-          onProcessPayment={async (amount: number, method: 'CASH' | 'CARD' | 'RAAST' | 'RIDER_WALLET', tendered?: number, discountReason?: string) => {
-            const total = amount;
+          onProcessPayment={async (total: number, method: string, tendered?: number, discountReason?: string, payments?: any[]) => {
             const orderId = activeOrderId || `ORD-${Date.now()}`;
 
             await processPayment(orderId, {
@@ -1335,12 +1300,14 @@ export const POSView: React.FC = () => {
               orderId,
               amount: total,
               payment_method: method,
+              payments: payments, // Full split breakdown
               status: 'PAID',
               timestamp: new Date(),
               processedBy: 'POS',
               tenderedAmount: tendered,
-              changeGiven: tendered ? tendered - total : 0,
-              breakdown: { ...breakdown, discountReason }
+              changeGiven: (tendered && tendered > total) ? tendered - total : 0,
+              breakdown: { ...breakdown, discountReason },
+              customer_id: selectedCustomer?.id 
             } as any);
           }}
           onPrintReceipt={async () => {
@@ -1356,8 +1323,9 @@ export const POSView: React.FC = () => {
         <PaymentModal
           order={(activeOrderData || orderToEdit)!}
           breakdown={breakdown}
+          customer={selectedCustomer}
           onClose={() => setShowPaymentModal(false)}
-          onProcessPayment={async (total, method, tendered, discountReason) => {
+          onProcessPayment={async (total, method, tendered, discountReason, payments) => {
             const orderId = (activeOrderData || orderToEdit)?.id;
             if (!orderId) return;
 
@@ -1366,12 +1334,14 @@ export const POSView: React.FC = () => {
               orderId,
               amount: total,
               payment_method: method,
+              payments: payments, // Full split breakdown
               status: 'PAID',
               timestamp: new Date(),
               processedBy: 'POS',
               tenderedAmount: tendered,
-              changeGiven: tendered ? tendered - total : 0,
-              breakdown: { ...breakdown, discountReason }
+              changeGiven: (tendered && tendered > total) ? tendered - total : 0,
+              breakdown: { ...breakdown, discountReason },
+              customer_id: selectedCustomer?.id
             } as any);
           }}
           onPrintReceipt={async () => {
@@ -1448,6 +1418,8 @@ export const POSView: React.FC = () => {
           currentUser={currentUser}
           customers={customers}
           activeOrderId={activeOrderId}
+          operationsConfig={operationsConfig}
+          addNotification={addNotification}
         />
       )}
     </div>
@@ -1475,6 +1447,8 @@ interface DetailsModalProps {
   currentUser: any;
   customers: any[];
   activeOrderId: string | null;
+  operationsConfig: any;
+  addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string, action?: { label: string, onClick: () => void }) => void;
 }
 
 const DetailsModal: React.FC<DetailsModalProps> = ({
@@ -1482,8 +1456,22 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
   customerName, setCustomerName, deliveryAddress, setDeliveryAddress,
   selectedTableId, setSelectedTableId, guestCount, setGuestCount,
   tables, isCustomerLoading, setShowDetailsModal, currentUser, customers,
-  activeOrderId
+  activeOrderId, operationsConfig, addNotification
 }) => {
+  const forceAvailableEnabled = operationsConfig?.force_table_available === true;
+
+  const handleTableClick = (table: any) => {
+    if (table.status === 'OCCUPIED' && table.id !== selectedTableId) {
+      if (!forceAvailableEnabled) {
+        addNotification('info', `Table ${table.name} is occupied. Select it from Order Hub to edit.`);
+        return;
+      }
+      
+      const confirmOverride = window.confirm(`Table ${table.name} is occupied. Force it to be available for this new order?`);
+      if (!confirmOverride) return;
+    }
+    setSelectedTableId(table.id);
+  };
   const isWaiter = ['SERVER', 'WAITER'].includes(currentUser?.role || '');
   const allowedTypes = isWaiter ? ['DINE_IN'] : ['DINE_IN', 'TAKEAWAY', 'DELIVERY'];
   return (
@@ -1527,14 +1515,19 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
                   {tables.map(table => (
                     <button
                       key={table.id}
-                      onClick={() => setSelectedTableId(table.id)}
-                      className={`h-11 rounded-xl text-[10px] font-black transition-all border ${
+                      onClick={() => handleTableClick(table)}
+                      className={`h-11 rounded-xl text-[10px] font-black transition-all border relative overflow-hidden ${
                         selectedTableId === table.id 
                         ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20' 
-                        : 'bg-slate-950 border-white/5 text-slate-500 hover:border-white/10'
+                        : table.status === 'OCCUPIED'
+                          ? 'bg-red-500/10 border-red-500/5 text-red-500 hover:bg-red-500/20'
+                          : 'bg-slate-950 border-white/5 text-slate-500 hover:border-white/10'
                       }`}
                     >
                       {table.name}
+                      {table.status === 'OCCUPIED' && (
+                          <div className="absolute top-0 right-0 w-1.5 h-1.5 bg-red-500 rounded-bl-sm" title="Occupied" />
+                      )}
                     </button>
                   ))}
                 </div>

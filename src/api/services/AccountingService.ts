@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { journalEntryService } from './JournalEntryService';
-
-const prisma = new PrismaClient();
+import { prisma } from '../../shared/lib/prisma';
 
 export type TransactionType = 'DEBIT' | 'CREDIT';
 export type ReferenceType = 'ORDER' | 'SETTLEMENT' | 'PAYOUT' | 'STOCK_IN' | 'OPENING_BALANCE' | 'ADJUSTMENT' | 'RIDER_SHIFT';
@@ -79,9 +77,72 @@ export class AccountingService {
             processedBy: order.last_action_by
         }, db);
 
-        // 2. DEBIT: Asset Account
-        if (order.type === 'DELIVERY' && order.assigned_driver_id) {
-            // Debit the Rider (They now owe the business the food value)
+        // 2. DEBIT: Asset Account(s)
+        // Fetch all PAID transactions for this order to handle split payments
+        const transactions = await db.transactions.findMany({
+            where: { 
+                order_id: orderId,
+                status: 'PAID'
+            }
+        });
+
+        if (transactions.length > 0) {
+            // Process each transaction to record appropriate debits
+            for (const t of transactions) {
+                const amount = new Decimal(t.amount);
+                const method = t.payment_method;
+
+                if (method === 'CREDIT' && order.customer_id) {
+                    // Debit the Customer (Khata)
+                    await this.createLedgerEntry({
+                        restaurantId: order.restaurant_id,
+                        accountId: order.customer_id,
+                        transactionType: 'DEBIT',
+                        amount: amount,
+                        referenceType: 'ORDER',
+                        referenceId: order.id,
+                        description: `Credit Sale (Khata) – Order #${order.order_number || order.id.slice(-6)}`,
+                        processedBy: order.last_action_by
+                    }, db);
+
+                    // Post to specialized Customer Ledger
+                    await this.postCustomerLedger({
+                        restaurantId: order.restaurant_id,
+                        customerId: order.customer_id,
+                        orderId: order.id,
+                        amount: amount,
+                        entryType: 'CHARGE',
+                        description: `Order #${order.order_number || order.id.slice(-6)} charged to account`,
+                        processedBy: order.last_action_by
+                    }, db);
+                } else if (order.type === 'DELIVERY' && order.assigned_driver_id && method !== 'CREDIT') {
+                    // For deliveries paid via Cash/Card at door, the rider is responsible for the payout
+                    // until they settle their shift.
+                    await this.createLedgerEntry({
+                        restaurantId: order.restaurant_id,
+                        accountId: order.assigned_driver_id,
+                        transactionType: 'DEBIT',
+                        amount: amount,
+                        referenceType: 'ORDER',
+                        referenceId: order.id,
+                        description: `${method} payment collected by rider for delivery #${order.order_number}`,
+                        processedBy: order.last_action_by
+                    }, db);
+                } else {
+                    // Standard Sale (Direct Cash/Card to business Asset account)
+                    await this.createLedgerEntry({
+                        restaurantId: order.restaurant_id,
+                        transactionType: 'DEBIT',
+                        amount: amount,
+                        referenceType: 'ORDER',
+                        referenceId: order.id,
+                        description: `${method} received for ${order.type} order #${order.order_number}`,
+                        processedBy: order.last_action_by
+                    }, db);
+                }
+            }
+        } else if (order.type === 'DELIVERY' && order.assigned_driver_id) {
+            // Unpaid Delivery: Debit the Rider (Full amount)
             await this.createLedgerEntry({
                 restaurantId: order.restaurant_id,
                 accountId: order.assigned_driver_id,
@@ -89,18 +150,18 @@ export class AccountingService {
                 amount: totalAmount,
                 referenceType: 'ORDER',
                 referenceId: order.id,
-                description: `Debt assigned to rider for delivery #${order.order_number}`,
+                description: `Unpaid delivery debt assigned to rider #${order.order_number}`,
                 processedBy: order.last_action_by
             }, db);
         } else {
-            // Debit the Cash Drawer (Standard Sale)
+            // Default Fallback: Debit Cash Drawer (Full amount)
             await this.createLedgerEntry({
                 restaurantId: order.restaurant_id,
                 transactionType: 'DEBIT',
                 amount: totalAmount,
                 referenceType: 'ORDER',
                 referenceId: order.id,
-                description: `Cash received from ${order.type} order #${order.order_number}`,
+                description: `Payment received for ${order.type} order #${order.order_number}`,
                 processedBy: order.last_action_by
             }, db);
         }
@@ -233,6 +294,220 @@ export class AccountingService {
             description: `Float received by rider`,
             processedBy: data.processedBy
         }, db);
+    }
+
+    /**
+     * Records a customer payment (Double-Entry).
+     * Impacts: Debit Cash Drawer (Cash In), Credit Customer Ledger (Debt Out).
+     */
+    async recordCustomerPayment(data: {
+        restaurantId: string;
+        customerId: string;
+        amount: number | Decimal;
+        paymentMethod: 'CASH' | 'CARD';
+        processedBy: string;
+        orderId?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // 1. DEBIT: Cash Drawer (Increase Physical Cash)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'SETTLEMENT',
+            referenceId: data.orderId || `cust-${data.customerId}`,
+            description: `Cash received from customer via ${data.paymentMethod}`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 2. CREDIT: Customer Ledger (Clear/Reduce Customer Debt)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.customerId,
+            transactionType: 'CREDIT',
+            amount: amount,
+            referenceType: 'SETTLEMENT',
+            referenceId: data.orderId || `cust-${data.customerId}`,
+            description: `Customer debt reduced/advance received`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 2.1 Post to specialized Customer Ledger
+        await this.postCustomerLedger({
+            restaurantId: data.restaurantId,
+            customerId: data.customerId,
+            orderId: data.orderId,
+            amount: amount,
+            entryType: 'PAYMENT',
+            description: `Payment received via ${data.paymentMethod}`,
+            processedBy: data.processedBy
+        }, db);
+    }
+
+    /**
+     * Records a top-up/prepaid deposit for a customer.
+     */
+    async topUpAccount(data: {
+        restaurantId: string;
+        customerId: string;
+        amount: number | Decimal;
+        paymentMethod: 'CASH' | 'CARD';
+        processedBy: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // 1. DEBIT: Cash Drawer
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'SETTLEMENT',
+            description: `Top-up/Deposit from customer via ${data.paymentMethod}`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 2. CREDIT: Customer (Legacy)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.customerId,
+            transactionType: 'CREDIT',
+            amount: amount,
+            referenceType: 'SETTLEMENT',
+            description: `Account top-up received`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 3. Post to Customer Ledger
+        await this.postCustomerLedger({
+            restaurantId: data.restaurantId,
+            customerId: data.customerId,
+            amount: amount,
+            entryType: 'TOP_UP',
+            description: `Prepaid Top-up via ${data.paymentMethod}`,
+            processedBy: data.processedBy
+        }, db);
+    }
+
+    /**
+     * Internal helper to post to the specialized customer_ledgers table.
+     * Manages running balance for the customer.
+     */
+    private async postCustomerLedger(data: {
+        restaurantId: string;
+        customerId: string;
+        orderId?: string;
+        amount: Decimal | number;
+        entryType: string; // keyof typeof CustomerLedgerEntryType
+        description?: string;
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // Calculate new balance
+        // CHARGE increases balance (debt), PAYMENT/TOP_UP decreases balance (clear debt/advance)
+        const currentBalance = await this.getCustomerBalance(data.restaurantId, data.customerId, db);
+        
+        let newBalance = currentBalance;
+        if (data.entryType === 'CHARGE') {
+            newBalance = currentBalance.plus(amount);
+        } else if (['PAYMENT', 'TOP_UP', 'REFUND'].includes(data.entryType)) {
+            // PAYMENT/TOP_UP usually CR (Credit Account), decreasing the DEBIT (AR) balance
+            // If balance represents DEBT, then PAYMENT reduces it.
+            newBalance = currentBalance.minus(amount);
+        } else if (data.entryType === 'ADJUSTMENT') {
+            // For adjustments, amount is usually the DELTA. 
+            // Positve = Increase Debt, Negative = Decrease Debt.
+            newBalance = currentBalance.plus(amount);
+        }
+
+        return await db.customer_ledgers.create({
+            data: {
+                restaurant_id: data.restaurantId,
+                customer_id: data.customerId,
+                order_id: data.orderId,
+                entry_type: data.entryType as any,
+                amount: amount,
+                balance_after: newBalance,
+                description: data.description,
+                processed_by: data.processedBy
+            }
+        });
+    }
+
+    /**
+     * Internal helper to post to the specialized supplier_ledgers table.
+     * Manages running balance for the supplier.
+     */
+    private async postSupplierLedger(data: {
+        restaurantId: string;
+        supplierId: string;
+        payoutId?: string;
+        amount: Decimal | number;
+        entryType: string; // keyof typeof SupplierLedgerEntryType
+        description?: string;
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // Calculate new balance
+        // BILL increases balance (liability), PAYMENT reduces it.
+        const currentBalance = await this.getSupplierBalance(data.restaurantId, data.supplierId, db);
+        
+        let newBalance = currentBalance;
+        if (data.entryType === 'BILL') {
+            newBalance = currentBalance.plus(amount);
+        } else if (['PAYMENT', 'REFUND'].includes(data.entryType)) {
+            newBalance = currentBalance.minus(amount);
+        } else if (data.entryType === 'ADJUSTMENT') {
+            newBalance = currentBalance.plus(amount);
+        }
+
+        return await db.supplier_ledgers.create({
+            data: {
+                restaurant_id: data.restaurantId,
+                supplier_id: data.supplierId,
+                payout_id: data.payoutId,
+                entry_type: data.entryType as any,
+                amount: amount,
+                balance_after: newBalance,
+                description: data.description,
+                processed_by: data.processedBy
+            }
+        });
+    }
+
+    /**
+     * Retrieves the latest balance from the customer_ledgers table.
+     */
+    async getCustomerBalance(restaurantId: string, customerId: string, tx?: any): Promise<Decimal> {
+        const db = tx || prisma;
+        const latestEntry = await db.customer_ledgers.findFirst({
+            where: {
+                restaurant_id: restaurantId,
+                customer_id: customerId
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        return latestEntry ? new Decimal(latestEntry.balance_after) : new Decimal(0);
+    }
+
+    async getSupplierBalance(restaurantId: string, supplierId: string, tx?: any): Promise<Decimal> {
+        const db = tx || prisma;
+        const latestEntry = await db.supplier_ledgers.findFirst({
+            where: {
+                restaurant_id: restaurantId,
+                supplier_id: supplierId
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        return latestEntry ? new Decimal(latestEntry.balance_after) : new Decimal(0);
     }
 
     /**
@@ -388,6 +663,34 @@ export class AccountingService {
                 console.error('[JE] recordPayoutJournal failed (non-fatal):', jeErr);
             }
 
+            // ── Supplier Ledger Bridge ───────────────────────────────────
+            if (data.category === 'SUPPLIER' && data.referenceId) {
+                // 1. Post to specialized Supplier Ledger
+                await this.postSupplierLedger({
+                    restaurantId: data.restaurantId,
+                    supplierId: data.referenceId,
+                    payoutId: payout.id,
+                    amount: data.amount,
+                    entryType: 'PAYMENT',
+                    description: data.notes,
+                    processedBy: data.staffId
+                }, tx);
+
+                // 2. Specialized Journal (Liability clearing)
+                try {
+                    await journalEntryService.recordSupplierPaymentJournal({
+                        restaurantId: data.restaurantId,
+                        supplierId: data.referenceId,
+                        amount: data.amount,
+                        payoutId: payout.id,
+                        paymentMethod: 'CASH', // Defaults to cash for payouts
+                        processedBy: data.staffId
+                    }, tx);
+                } catch (jeErr) {
+                    console.error('[JE] recordSupplierPaymentJournal failed:', jeErr);
+                }
+            }
+
             return payout;
         });
     }
@@ -471,6 +774,78 @@ export class AccountingService {
                 orderCount
             }
         };
+    }
+
+    /**
+     * Retrieves an array of all sessions and their metrics for a given date.
+     */
+    async getSessionsForDate(restaurantId: string, businessDate: string) {
+        const startOfDay = new Date(new Date(businessDate).setHours(0, 0, 0, 0));
+        const endOfDay = new Date(new Date(businessDate).setHours(23, 59, 59, 999));
+        
+        const sessions = await prisma.cash_sessions.findMany({
+            where: {
+                restaurant_id: restaurantId,
+                opened_at: { gte: startOfDay, lte: endOfDay }
+            },
+            orderBy: { opened_at: 'asc' }
+        });
+
+        const results = [];
+        // We reuse getSessionMetrics for each session ID by just directly querying the entries for it
+        for (const session of sessions) {
+            const entries = await prisma.ledger_entries.findMany({
+                where: {
+                    restaurant_id: restaurantId,
+                    created_at: { gte: session.opened_at, lte: session.closed_at || new Date() }
+                }
+            });
+
+            let cashSales = new Decimal(0);
+            let payouts = new Decimal(0);
+            let settlements = new Decimal(0);
+            let totalRevenue = new Decimal(0);
+
+            entries.forEach((e: any) => {
+                const amt = new Decimal(e.amount);
+
+                if (e.transaction_type === 'CREDIT' && e.reference_type === 'ORDER') {
+                    totalRevenue = totalRevenue.plus(amt);
+                }
+
+                if (!e.account_id) {
+                    if (e.transaction_type === 'DEBIT') {
+                        if (e.reference_type === 'ORDER') cashSales = cashSales.plus(amt);
+                        if (e.reference_type === 'SETTLEMENT') settlements = settlements.plus(amt);
+                    } else {
+                        if (e.reference_type === 'PAYOUT') payouts = payouts.plus(amt);
+                        if (e.reference_type === 'SETTLEMENT') settlements = settlements.minus(amt);
+                    }
+                }
+            });
+
+            const expectedCash = new Decimal(session.opening_balance)
+                .plus(cashSales)
+                .plus(settlements)
+                .minus(payouts);
+
+            const orderCount = entries.filter(e => e.reference_type === 'ORDER' && e.transaction_type === 'CREDIT' && !e.account_id).length;
+
+            results.push({
+                ...session,
+                metrics: {
+                    openingBalance: session.opening_balance,
+                    cashSales,
+                    payouts,
+                    settlements,
+                    expectedCash,
+                    totalRevenue,
+                    orderCount
+                }
+            });
+        }
+
+        return results;
     }
 
     /**
@@ -719,6 +1094,113 @@ export class AccountingService {
             cancel_summary: cancelSummary,
             hourly_velocity: hourlyVelocity,
         };
+    }
+
+    /**
+     * Records a manual charge to a customer's account (not necessarily linked to an order).
+     */
+    async recordManualCharge(data: {
+        restaurantId: string;
+        customerId: string;
+        amount: number | Decimal;
+        description?: string;
+        processedBy: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // 1. CREDIT: Sales/Other Revenue (or whatever the offset should be for a manual charge)
+        // Usually manual charges are for "Other Sales"
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'CREDIT',
+            amount: amount,
+            referenceType: 'ADJUSTMENT',
+            description: data.description || `Manual account charge`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 2. DEBIT: Customer Asset (Khata)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.customerId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'ADJUSTMENT',
+            description: data.description || `Manual charge posted to account`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 3. Post to Customer Ledger
+        await this.postCustomerLedger({
+            restaurantId: data.restaurantId,
+            customerId: data.customerId,
+            amount: amount,
+            entryType: 'CHARGE',
+            description: data.description || `Manual account charge`,
+            processedBy: data.processedBy
+        }, db);
+    }
+
+    /**
+     * Records a supplier bill (not necessarily linked to a PO).
+     * Increases liability.
+     */
+    async recordSupplierBill(data: {
+        restaurantId: string;
+        supplierId: string;
+        amount: number | Decimal;
+        description?: string;
+        processedBy: string;
+        referenceId?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // 1. DEBIT: Expense (Increase Cost)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'ADJUSTMENT',
+            description: data.description || `Supplier bill received`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 2. CREDIT: Supplier Liability (Liability Up)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.supplierId,
+            transactionType: 'CREDIT',
+            amount: amount,
+            referenceType: 'ADJUSTMENT',
+            description: data.description || `Outstanding bill posted to ledger`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 3. Post to Supplier Ledger
+        await this.postSupplierLedger({
+            restaurantId: data.restaurantId,
+            supplierId: data.supplierId,
+            amount: amount,
+            entryType: 'BILL',
+            description: data.description || `Supplier bill received`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 4. Double-Entry Journal
+        try {
+            await journalEntryService.recordSupplierBillJournal({
+                restaurantId: data.restaurantId,
+                supplierId: data.supplierId,
+                amount: amount,
+                referenceId: data.referenceId || `bill-${Date.now()}`,
+                description: data.description || 'Supplier bill',
+                processedBy: data.processedBy
+            }, db);
+        } catch (jeErr) {
+            console.error('[JE] recordSupplierBillJournal failed:', jeErr);
+        }
     }
 }
 

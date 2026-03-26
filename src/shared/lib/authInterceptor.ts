@@ -56,6 +56,22 @@ function getAccessToken(): string | null {
 }
 
 /**
+ * SUPER_ADMIN: Set the target restaurant for subsequent API calls.
+ * When set, all fetchWithAuth calls will include the x-target-restaurant header,
+ * allowing SUPER_ADMIN to act on behalf of any restaurant.
+ * Set to null to clear (revert to HQ mode).
+ */
+let targetRestaurantId: string | null = null;
+
+export function setTargetRestaurant(id: string | null): void {
+  targetRestaurantId = id;
+}
+
+export function getTargetRestaurant(): string | null {
+  return targetRestaurantId;
+}
+
+/**
  * Main fetch interceptor with auth and retry support
  */
 export async function fetchWithAuth(
@@ -78,8 +94,10 @@ export async function fetchWithAuth(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-
-
+  // SUPER_ADMIN: attach target restaurant header if set
+  if (targetRestaurantId) {
+    headers['x-target-restaurant'] = targetRestaurantId;
+  }
   let response = await fetch(url, { ...options, headers });
 
   // If we get 401, try to refresh token and retry once

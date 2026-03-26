@@ -5,9 +5,37 @@ import { Save, Loader2, CheckCircle2, Eye } from 'lucide-react';
 import { cacheSet, cacheGet, isOnline, getOperationsConfigKey, initializeCache } from '../../../lib/offlineCache';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 
+import { generateInvoiceHtml } from '../../../shared/lib/invoiceTemplates';
+
 const API_BASE_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
+// Mock Data for Preview
+const MOCK_DATA = {
+    order: {
+        order_number: 'INV-2026-001',
+        type: 'DINE_IN',
+        created_at: new Date('2026-03-14T09:24:00'),
+        table: { name: 'Table 12' }
+    },
+    items: [
+        { quantity: 2, item_name: 'Chicken Burger', unit_price: 600, total_price: 1200 },
+        { quantity: 1, item_name: 'Club Sandwich', unit_price: 550, total_price: 550 },
+        { quantity: 3, item_name: 'Fresh Lime', unit_price: 120, total_price: 360 }
+    ],
+    breakdown: {
+        subtotal: 2110,
+        tax: 337.6,
+        total: 2447.6,
+        discount: 0,
+        serviceCharge: 0,
+        deliveryFee: 0
+    },
+    isPaid: true,
+    paymentMethod: 'CASH'
+};
+
 const TEMPLATES = [
+// ... existing templates ...
     { id: 'minimal', name: 'Minimalist', description: 'Clean, no borders, focus on text' },
     { id: 'modern', name: 'Modern Sans', description: 'Bold headers, Inter font, compact' },
     { id: 'classic', name: 'Classic Dot Matrix', description: 'Standard receipt look with dashed dividers' },
@@ -78,6 +106,11 @@ export const InvoiceTemplatesPanel: React.FC = () => {
         }
     };
 
+    const previewHtml = generateInvoiceHtml(selectedId, {
+        config: { ...config, ...operationsConfig },
+        ...MOCK_DATA
+    });
+
     if (isLoading) return <div className="p-8 text-slate-500 flex items-center gap-2"><Loader2 className="animate-spin" /> Loading templates...</div>;
 
     return (
@@ -128,65 +161,13 @@ export const InvoiceTemplatesPanel: React.FC = () => {
                         <Eye size={14} /> LIVE PREVIEW (80mm Thermal)
                     </div>
                     
-                    {/* Receipt Mock */}
-                    <div className="w-[300px] bg-white text-black p-6 shadow-2xl font-mono text-[11px] leading-tight">
-                        <div className="text-center mb-4">
-                            <h4 className="font-bold text-sm uppercase">{config.receipt_header_1 || config.business_name || operationsConfig?.business_name || 'FIREFLOW POS'}</h4>
-                            <p className="text-[9px]">{config.receipt_header_2 || '123 Street Name, City'}</p>
-                            <div className="my-2 border-b border-black border-dashed" />
-                        </div>
-                        
-                        <div className="flex justify-between mb-1">
-                            <span>INV-2026-001</span>
-                            <span>14/03/2026 09:24</span>
-                        </div>
-                        <div className="flex justify-between mb-4">
-                            <span>Table: 12</span>
-                            <span>Server: Admin</span>
-                        </div>
-                        
-                        <div className="border-b border-black border-dashed mb-2" />
-                        
-                        <div className="space-y-1 mb-4">
-                            <div className="flex justify-between">
-                                <span>2x Chicken Burger</span>
-                                <span>1,200.00</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span>1x Club Sandwich</span>
-                                <span>550.00</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span>3x Fresh Lime</span>
-                                <span>360.00</span>
-                            </div>
-                        </div>
-                        
-                        <div className="border-b border-black border-dashed mb-2" />
-                        
-                        <div className="space-y-1">
-                            <div className="flex justify-between font-bold">
-                                <span className="uppercase">Subtotal</span>
-                                <span>2,110.00</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="uppercase">{config.tax_label || 'GST'} (16%)</span>
-                                <span>337.60</span>
-                            </div>
-                            <div className="flex justify-between text-base font-black mt-2 pt-2 border-t border-black">
-                                <span className="uppercase">Total Amount</span>
-                                <span>2,447.60</span>
-                            </div>
-                        </div>
-                        
-                        <div className="text-center mt-8 space-y-2">
-                            <div className="border-b border-black border-dashed" />
-                            <p className="text-[9px] uppercase font-bold">*** CUSTOMER COPY ***</p>
-                            <p className="text-[10px] italic">{config.receipt_footer || 'Thank you!'}</p>
-                            {config.receipt_wifi_password && (
-                                <p className="text-[9px]">WiFi: {config.receipt_wifi_password}</p>
-                            )}
-                        </div>
+                    {/* Receipt Mock Rendered via Utility */}
+                    <div className="w-[340px] h-[500px] bg-white rounded-lg overflow-hidden shadow-2xl">
+                        <iframe 
+                            title="Receipt Preview"
+                            srcDoc={previewHtml}
+                            className="w-full h-full border-none"
+                        />
                     </div>
                     
                     <p className="mt-8 text-slate-500 text-[10px] font-bold uppercase tracking-widest text-center max-w-xs">
@@ -197,3 +178,4 @@ export const InvoiceTemplatesPanel: React.FC = () => {
         </div>
     );
 };
+

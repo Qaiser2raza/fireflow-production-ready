@@ -7,8 +7,9 @@ import {
    Truck, Utensils, XCircle, CheckCircle2, History,
    FileText, Calendar, Wallet, HandCoins, Timer,
    LayoutGrid, List as ListIcon, MoreHorizontal, Unlock,
-   Printer, Trash2, Slash, PowerOff
+   Printer, Trash2, Slash
 } from 'lucide-react';
+import { getCompositeStatus } from '../../shared/lib/orderStatus';
 import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
 
 export const ActivityLog: React.FC = () => {
@@ -32,8 +33,8 @@ export const ActivityLog: React.FC = () => {
       return orders.filter(order => {
          // 1. Status Filter
          let matchesStatus = true;
-         if (filterStatus === 'ACTIVE') matchesStatus = activeStatuses.includes(order.status);
-         if (filterStatus === 'COMPLETED') matchesStatus = completedStatuses.includes(order.status) || order.payment_status === 'PAID';
+         if (filterStatus === 'ACTIVE') matchesStatus = activeStatuses.includes(order.status) && order.payment_status !== 'PAID';
+         if (filterStatus === 'COMPLETED') matchesStatus = (completedStatuses.includes(order.status) || order.payment_status === 'PAID') && !cancelledStatuses.includes(order.status);
          if (filterStatus === 'CANCELLED') matchesStatus = cancelledStatuses.includes(order.status);
 
          // 2. Type Filter
@@ -47,7 +48,7 @@ export const ActivityLog: React.FC = () => {
             (order.order_number || '').toLowerCase().includes(query) ||
             (order.takeaway_orders?.[0]?.token_number || '').toLowerCase().includes(query) ||
             (order.customerName || order.customer_name || '').toLowerCase().includes(query) ||
-            (order.table_id ? tables.find(t => t.id === order.table_id)?.name.toLowerCase().includes(query) : false);
+            (order.table_id ? tables?.find(t => t.id === order.table_id)?.name.toLowerCase().includes(query) : false);
 
          return matchesStatus && matchesType && matchesSearch;
       }).sort((a, b) => {
@@ -57,34 +58,15 @@ export const ActivityLog: React.FC = () => {
       });
    }, [orders, filterStatus, filterType, searchQuery, tables]);
 
-   const getLogicalStatus = (order: Order) => {
-      if (order.status === 'CANCELLED' || order.status === 'VOIDED') return order.status;
-      if (order.payment_status === 'PAID' || order.status === 'CLOSED') return 'PAID';
-      if (order.status === 'DELIVERED') return 'DELIVERED';   // Cash with rider, pending counter settlement
-
-      const items = order.order_items || (order as any).items || [];
-      const hasCooking = items.some((item: any) => item.item_status === 'PREPARING');
-      if (hasCooking) return 'COOKING';
-
-      const allDone = items.length > 0 && items.every((item: any) => ['DONE', 'SERVED'].includes(item.item_status));
-      if (allDone || order.status === 'READY') return 'READY';
-
-      return order.status || 'ACTIVE';
-   };
-
    const getProgress = (order: Order) => {
-      const logicalStatus = getLogicalStatus(order);
-      if (logicalStatus === 'PAID' || order.status === 'CLOSED') return 100;
-      if (logicalStatus === 'CANCELLED' || logicalStatus === 'VOIDED') return 100;
+      if (order.payment_status === 'PAID' || order.status === 'CLOSED') return 100;
+      if (order.status === 'CANCELLED' || order.status === 'VOIDED') return 100;
 
-      // Ensure logicalStatus is compared as a string to avoid type issues with hypothetical OrderStatus enum
-      const statusStr = logicalStatus as string;
-      switch (statusStr) {
+      switch (order.status) {
          case 'PENDING': return 25;
-         case 'ACTIVE': return 40;
-         case 'COOKING': return 65;
+         case 'PREPARING': return 65;
          case 'READY': return 90;
-         default: return 0;
+         default: return 40;
       }
    };
 
@@ -96,29 +78,6 @@ export const ActivityLog: React.FC = () => {
          case 'DELIVERY': return <Truck size={14} />;
          case 'RESERVATION': return <Calendar size={14} />;
          default: return <Utensils size={14} />;
-      }
-   };
-
-   // UI Helper: Status Badge Color
-   const getStatusColor = (status: string) => {
-      switch (status) {
-         case 'PAID':
-         case 'CLOSED':
-            return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50';
-         case 'DELIVERED':
-            return 'bg-purple-500/20 text-purple-400 border-purple-500/50';
-         case 'CANCELLED':
-         case 'VOIDED':
-            return 'bg-rose-500/20 text-rose-400 border-rose-500/50';
-         case 'READY':
-            return 'bg-amber-500/20 text-amber-400 border-amber-500/50';
-         case 'COOKING':
-            return 'bg-orange-500/20 text-orange-400 border-orange-500/50';
-         case 'ACTIVE':
-         case 'PENDING':
-            return 'bg-blue-500/20 text-blue-400 border-blue-500/50';
-         default:
-            return 'bg-slate-500/20 text-slate-400 border-slate-500/50';
       }
    };
 
@@ -278,7 +237,7 @@ export const ActivityLog: React.FC = () => {
                         const table = tables.find(t => t.id === order.table_id);
                         const token = order.takeaway_orders?.[0]?.token_number || (order as any).token_number;
                         const progress = getProgress(order);
-                        const logicalStatus = getLogicalStatus(order);
+                        const statusStyle = getCompositeStatus(order.status, order.payment_status);
 
                         const typeColors = {
                            DINE_IN: 'border-blue-500/30 text-blue-400',
@@ -323,8 +282,8 @@ export const ActivityLog: React.FC = () => {
                                     <div className="flex justify-between items-end">
                                        <div className="flex flex-col">
                                           <span className="text-[8px] text-slate-600 uppercase font-black tracking-tighter">Live Status</span>
-                                          <span className={`text-[10px] font-black uppercase ${getStatusColor(logicalStatus).split(' ')[1]}`}>
-                                             {logicalStatus}
+                                          <span className={`text-[10px] font-black uppercase ${statusStyle.color}`}>
+                                             {statusStyle.label}
                                           </span>
                                        </div>
                                        <div className="text-right">
@@ -340,7 +299,7 @@ export const ActivityLog: React.FC = () => {
                                           return (
                                              <div
                                                 key={step}
-                                                className={`flex-1 h-full rounded-sm transition-all duration-500 ${isActive ? (order.status === 'CANCELLED' ? 'bg-rose-500' : 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)]') : 'bg-slate-700/30'}`}
+                                                className={`flex-1 h-full rounded-sm transition-all duration-500 ${isActive ? (cancelledStatuses.includes(order.status) ? 'bg-rose-500' : 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)]') : 'bg-slate-700/30'}`}
                                              />
                                           );
                                        })}
@@ -382,7 +341,7 @@ export const ActivityLog: React.FC = () => {
                            {filteredOrders.map((order) => {
                               const table = tables.find(t => t.id === order.table_id);
                               const token = order.takeaway_orders?.[0]?.token_number || (order as any).token_number;
-                              const logicalStatus = getLogicalStatus(order);
+                              const statusStyle = getCompositeStatus(order.status, order.payment_status);
                               const progress = getProgress(order);
 
                               return (
@@ -414,13 +373,13 @@ export const ActivityLog: React.FC = () => {
                                        {formatTime(order.created_at || order.timestamp)}
                                     </td>
                                     <td className="px-6 py-3">
-                                       <div className="flex flex-col gap-1.5 w-32">
-                                          <div className={`text-[9px] font-black uppercase tracking-widest ${getStatusColor(logicalStatus).split(' ')[1]}`}>
-                                             {logicalStatus}
-                                          </div>
+                                        <div className="flex flex-col gap-1.5 w-32">
+                                           <div className={`text-[9px] font-black uppercase tracking-widest ${statusStyle.color}`}>
+                                              {statusStyle.label}
+                                           </div>
                                           <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
                                              <div
-                                                className={`h-full transition-all duration-500 ${logicalStatus === 'CANCELLED' ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                                                className={`h-full transition-all duration-500 ${cancelledStatuses.includes(order.status) ? 'bg-rose-500' : 'bg-emerald-500'}`}
                                                 style={{ width: `${progress}%` }}
                                              />
                                           </div>
@@ -470,17 +429,17 @@ export const ActivityLog: React.FC = () => {
                <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-10">
 
                   {/* High Fidelity Status Card */}
-                  <div className="relative group">
-                     <div className={`p-6 rounded-2xl border flex items-center gap-5 transition-all duration-500 ${getStatusColor(getLogicalStatus(selectedOrder))}`}>
-                        <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center shadow-inner">
-                           {getLogicalStatus(selectedOrder) === 'PAID' ? <CheckCircle2 size={32} /> : cancelledStatuses.includes(selectedOrder.status as string) ? <XCircle size={32} /> : <Timer size={32} />}
-                        </div>
-                        <div>
-                           <div className="font-black uppercase tracking-[0.2em] text-[10px] opacity-70 mb-1">State Configuration</div>
-                           <div className="font-serif text-2xl font-bold">{getLogicalStatus(selectedOrder)}</div>
-                        </div>
-                     </div>
-                  </div>
+                   <div className="relative group">
+                      <div className={`p-6 rounded-2xl border flex items-center gap-5 transition-all duration-500 ${getCompositeStatus(selectedOrder.status, selectedOrder.payment_status).bg} ${getCompositeStatus(selectedOrder.status, selectedOrder.payment_status).color} border-current/20`}>
+                         <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center shadow-inner">
+                            {selectedOrder.payment_status === 'PAID' ? <CheckCircle2 size={32} /> : cancelledStatuses.includes(selectedOrder.status as string) ? <XCircle size={32} /> : <Timer size={32} />}
+                         </div>
+                         <div>
+                            <div className="font-black uppercase tracking-[0.2em] text-[10px] opacity-70 mb-1">State Configuration</div>
+                            <div className="font-serif text-2xl font-bold">{getCompositeStatus(selectedOrder.status, selectedOrder.payment_status).label}</div>
+                         </div>
+                      </div>
+                   </div>
 
                   {/* Financial Architecture */}
                   <div className="space-y-6">
@@ -493,7 +452,7 @@ export const ActivityLog: React.FC = () => {
                      <div className="bg-slate-900/40 rounded-3xl p-6 space-y-4 border border-slate-800 shadow-inner">
                         <div className="flex justify-between items-center text-sm">
                            <span className="text-slate-400 font-medium">Gross Subtotal</span>
-                           <span className="text-white font-mono">Rs. {(selectedOrder.breakdown?.subtotal || selectedOrder.total).toLocaleString()}</span>
+                           <span className="text-white font-mono">Rs. {(selectedOrder.breakdown?.subtotal || (selectedOrder.order_items || []).reduce((sum, i) => sum + Number(i.total_price || Number(i.unit_price) * i.quantity || 0), 0) || 0).toLocaleString()}</span>
                         </div>
 
                         {(selectedOrder.tax !== undefined && selectedOrder.tax > 0) && (
@@ -547,7 +506,7 @@ export const ActivityLog: React.FC = () => {
                                  </div>
                                  <div className="space-y-0.5">
                                     <div className="text-sm text-slate-200 font-bold group-hover:text-white transition-colors tracking-tight">
-                                       {item.menu_item?.name || item.item_name || item.menuItem?.name || 'Unknown Protocol'}
+                                       {item.item_name || 'Unknown Item'}
                                     </div>
                                     <div className="flex items-center gap-2">
                                        <div className={`w-1.5 h-1.5 rounded-full ${item.item_status === 'SERVED' ? 'bg-emerald-500' : 'bg-gold-500'}`}></div>

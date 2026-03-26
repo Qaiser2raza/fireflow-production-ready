@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import { Order, Table } from '../../../shared/types';
 import { X, Clock, Users, Receipt, Edit2, CheckCircle2, FileText, Printer, Download } from 'lucide-react';
 import { useThermalPrinter } from '../../../hooks/useThermalPrinter';
@@ -25,11 +25,12 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     currentUser
 }) => {
     const { printReceipt } = useThermalPrinter();
-    const receiptRef = useRef<HTMLDivElement>(null);
 
     const elapsedMinutes = useMemo(() => {
-        return Math.floor((Date.now() - new Date(order.created_at).getTime()) / 60000);
-    }, [order.created_at]);
+        const created = new Date(order.created_at || order.timestamp || Date.now());
+        if (isNaN(created.getTime())) return 0;
+        return Math.floor((Date.now() - created.getTime()) / 60000);
+    }, [order.created_at, order.timestamp]);
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -62,7 +63,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
         const items = (order.order_items || []).map(item => `
             <tr>
                 <td>${item.quantity}</td>
-                <td style="padding: 0 4px;">${item.menu_item?.name || item.item_name}</td>
+                <td style="padding: 0 4px;">${item.item_name || item.menu_item?.name || 'Unknown Item'}</td>
                 <td style="text-align:right;">${formatCurrency(item.unit_price * item.quantity)}</td>
             </tr>
         `).join('');
@@ -114,13 +115,16 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
             </table>
             <div class="divider"></div>
             <div class="totals">
-                <div class="total-row"><span>Subtotal</span><span>${formatCurrency(order.breakdown?.subtotal || order.total || 0)}</span></div>
+                <div class="total-row"><span>Subtotal</span><span>${formatCurrency(order.breakdown?.subtotal || 0)}</span></div>
                 ${(order.service_charge || 0) > 0 ? `<div class="total-row"><span>Service Charge</span><span>${formatCurrency(order.service_charge!)}</span></div>` : ''}
                 ${(order.tax || 0) > 0 ? `<div class="total-row"><span>Tax</span><span>${formatCurrency(order.tax!)}</span></div>` : ''}
                 ${(order.discount || 0) > 0 ? `<div class="total-row"><span>Discount</span><span>-${formatCurrency(order.discount!)}</span></div>` : ''}
             </div>
             <div class="grand-total"><span>TOTAL</span><span>${formatCurrency(order.total || 0)}</span></div>
-            ${!isProforma ? `<div class="payment-badge">PAID VIA ${order.payment_method || 'CASH'}</div>` : ''}
+            ${!isProforma ? (() => {
+                const pm = (order as any).transactions?.[0]?.payment_method || (order as any).payment_method || 'CASH';
+                return `<div class="payment-badge">✓ ${pm === 'CREDIT' ? 'CHARGED — KHATA' : `PAID — ${pm}`}</div>`;
+            })() : ''}
             <div class="footer">
                 <p>*** Thank You! ***</p>
                 <p>Powered by Fireflow POS</p>
@@ -227,7 +231,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                                 <div className="flex-1">
                                                     <div className="flex items-center gap-2">
                                                         <span className="text-white font-bold">
-                                                            {item.quantity}x {item.menu_item?.name || item.item_name}
+                                                            {item.quantity}x {item.item_name || 'Unknown Item'}
                                                         </span>
                                                         <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${getItemStatusColor(item.item_status)}`}>
                                                             {item.item_status}
@@ -319,7 +323,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                         <div className="flex justify-between text-xs">
                                             <span className="text-slate-400">Subtotal</span>
                                             <span className="text-white font-bold">
-                                                Rs. {(order.breakdown?.subtotal || order.total).toLocaleString()}
+                                                Rs. {(order.breakdown?.subtotal || 0).toLocaleString()}
                                             </span>
                                         </div>
                                         {order.service_charge && order.service_charge > 0 && (

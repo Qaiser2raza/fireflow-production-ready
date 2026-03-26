@@ -59,12 +59,15 @@ export interface Customer {
     updated_at?: Date | string;
 }
 
-export interface Vendor {
+export interface Supplier {
     id: string;
     restaurant_id: string;
     name: string;
+    contact_person?: string;
     phone?: string;
-    category: string;
+    address?: string;
+    category?: string;
+    balance?: number;
     created_at?: Date | string;
 }
 
@@ -378,6 +381,11 @@ export interface Order {
     // Advanced Tax Handling
     tax_type?: 'INCLUSIVE' | 'EXCLUSIVE';
     is_tax_exempt?: boolean;
+    service_charge_rate?: number;
+    tax_rate?: number;
+    tax_label?: string;
+    discount_type?: 'flat' | 'percent';
+    discount_value?: number;
     discount_reason?: string;
     discountReason?: string;
 }
@@ -552,7 +560,7 @@ export interface AppContextType {
     logout: () => void;
     addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string, action?: { label: string, onClick: () => void }) => void;
     removeNotification: (id: string) => void;
-    fetchInitialData: () => Promise<void>;
+    fetchInitialData: (userOverride?: any, restaurantIdOverride?: string) => Promise<void>;
     addOrder: (order: Partial<Order>) => Promise<any>;
     updateOrder: (order: Partial<Order>) => Promise<any>;
     cancelOrder: (id: string, reason: string, notes?: string) => Promise<boolean>;
@@ -595,7 +603,7 @@ export interface AppContextType {
     connectionStatus: 'connected' | 'reconnecting' | 'disconnected';
     lastSyncAt?: Date;
     customers: Customer[];
-    vendors: Vendor[];
+    suppliers: Supplier[];
 
     updateTable: (t: any) => Promise<void>;
 
@@ -603,7 +611,10 @@ export interface AppContextType {
     updateCustomer: (c: any) => Promise<void>;
     deleteCustomer: (id: string) => Promise<void>;
 
-    addVendor: (v: any) => Promise<void>;
+    addSupplier: (s: any) => Promise<void>;
+    updateSupplier: (s: any) => Promise<void>;
+    deleteSupplier: (id: string) => Promise<void>;
+    addVendor: (v: any) => Promise<void>; // Temporary bridge
     updateVendor: (v: any) => Promise<void>;
     deleteVendor: (id: string) => Promise<void>;
 

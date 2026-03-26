@@ -34,14 +34,21 @@ const payoutSchema = z.object({
 
 /**
  * GET /api/accounting/session
- * Get current active session
+ * Get active session or all sessions for a date
  */
 router.get('/session', async (req, res) => {
     try {
         const restaurantId = req.restaurantId!; 
         const { date } = req.query;
-        const session = await accounting.getSessionMetrics(restaurantId, date as string);
-        res.json({ success: true, session });
+        if (date) {
+            const sessions = await accounting.getSessionsForDate(restaurantId, date as string);
+            // Default `session` to the FIRST open one, or the last one (for older UI compatibility)
+            const openSession = sessions.find(s => s.status === 'OPEN') || sessions[sessions.length - 1];
+            res.json({ success: true, session: openSession, sessions });
+        } else {
+            const session = await accounting.getSessionMetrics(restaurantId);
+            res.json({ success: true, session, sessions: session ? [session] : [] });
+        }
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
@@ -66,14 +73,54 @@ router.get('/ledger/export', async (req, res) => {
 
 /**
  * GET /api/accounting/ledger
- * Get recent ledger entries
+ * Get recent ledger entries, optionally filtered by accountId or date
  */
 router.get('/ledger', async (req, res) => {
     try {
-        const { limit } = req.query;
-        const restaurantId = req.restaurantId!; // SaaS Security
-        const entries = await accounting.getRecentLedger(restaurantId, Number(limit) || 50);
-        res.json({ success: true, entries });
+        const { limit, accountId, date } = req.query;
+        const restaurantId = req.restaurantId!;
+
+        const { prisma } = await import('../../shared/lib/prisma');
+
+        const dateFilter: any = {};
+        if (date) {
+            const d = new Date(date as string);
+            const start = new Date(d); start.setHours(0, 0, 0, 0);
+            const end = new Date(d); end.setHours(23, 59, 59, 999);
+            dateFilter.gte = start;
+            dateFilter.lte = end;
+        }
+
+        const lines = await prisma.journal_entry_lines.findMany({
+            where: {
+                chart_of_accounts: { restaurant_id: restaurantId },
+                ...(accountId && typeof accountId === 'string' ? { account_id: accountId } : {}),
+                ...(date ? { journal_entries: { date: dateFilter } } : {})
+            },
+            include: {
+                journal_entries: {
+                    select: { reference_type: true, reference_id: true, description: true, date: true, created_at: true }
+                },
+                chart_of_accounts: { select: { code: true, name: true } }
+            },
+            orderBy: [{ journal_entries: { date: 'desc' } }, { id: 'asc' }],
+            take: Number(limit) || 100
+        });
+
+        const entries = lines.map(l => ({
+            id: l.id,
+            created_at: (l.journal_entries as any)?.created_at || (l.journal_entries as any)?.date,
+            reference_type: (l.journal_entries as any)?.reference_type,
+            account_name: (l.chart_of_accounts as any)?.name,
+            account_code: (l.chart_of_accounts as any)?.code,
+            description: l.description || (l.journal_entries as any)?.description,
+            amount: Math.abs(Number(l.debit) - Number(l.credit)),
+            transaction_type: Number(l.debit) > 0 ? 'DEBIT' : 'CREDIT',
+            debit: Number(l.debit),
+            credit: Number(l.credit),
+        }));
+        
+        return res.json({ success: true, entries });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
@@ -184,6 +231,81 @@ router.get('/trial-balance', async (req, res) => {
         res.json({ success: true, trial_balance: trialBalance });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /api/accounting/manual-journal
+ * Create a manual double-entry journal posting.
+ * Requires ADMIN or SUPER_ADMIN.
+ */
+router.post('/manual-journal', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const { date, description, referenceId, lines } = req.body;
+        const restaurantId = req.restaurantId!;
+
+        if (!lines || !Array.isArray(lines) || lines.length < 2) {
+            return res.status(400).json({ error: 'Manual journals require at least 2 lines' });
+        }
+
+        // Validate balancing
+        let totalDebit = 0;
+        let totalCredit = 0;
+        for (const line of lines) {
+            totalDebit += Number(line.debit) || 0;
+            totalCredit += Number(line.credit) || 0;
+            if (!line.accountId) return res.status(400).json({ error: 'All lines must specify an accountId' });
+            if ((Number(line.debit) || 0) < 0 || (Number(line.credit) || 0) < 0) {
+                 return res.status(400).json({ error: 'Amounts cannot be negative' });
+            }
+        }
+
+        if (Math.abs(totalDebit - totalCredit) > 0.01) {
+            return res.status(400).json({ error: `Journal is out of balance. Debits: ${totalDebit}, Credits: ${totalCredit}` });
+        }
+        if (totalDebit === 0) {
+            return res.status(400).json({ error: 'Journal must have a non-zero value' });
+        }
+
+        const { prisma } = await import('../../shared/lib/prisma');
+        const { Decimal } = await import('@prisma/client/runtime/library');
+
+        // Verify accounts exist and belong to restaurant
+        const accountIds = lines.map(l => l.accountId);
+        const validAccounts = await prisma.chart_of_accounts.count({
+            where: {
+                id: { in: accountIds },
+                restaurant_id: restaurantId,
+            }
+        });
+
+        if (validAccounts !== new Set(accountIds).size) {
+            return res.status(400).json({ error: 'One or more invalid account IDs' });
+        }
+
+        const journal = await prisma.journal_entries.create({
+            data: {
+                restaurant_id: restaurantId,
+                reference_type: 'MANUAL_JOURNAL',
+                reference_id: referenceId || `MJ-${Date.now()}`,
+                date: date ? new Date(date) : new Date(),
+                description: description || 'Manual Journal Entry',
+                processed_by: req.staffId!,
+                lines: {
+                    create: lines.map(l => ({
+                        account_id: l.accountId,
+                        description: l.description || description || 'Manual line',
+                        debit: new Decimal(Number(l.debit) || 0),
+                        credit: new Decimal(Number(l.credit) || 0)
+                    }))
+                }
+            },
+            include: { lines: true }
+        });
+
+        res.json({ success: true, journal });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message || 'Internal server error' });
     }
 });
 

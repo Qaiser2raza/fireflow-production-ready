@@ -1,12 +1,52 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../../client/contexts/AppContext';
-import { Plus, Trash2, Edit2, Save, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Map, Loader2 } from 'lucide-react';
+import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
+
+const API_BASE_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 export const ZonesPanel: React.FC = () => {
-    const { sections, addSection, updateSection, deleteSection } = useAppContext();
+    const { sections, addSection, updateSection, deleteSection, operationsConfig, currentUser, addNotification, fetchInitialData } = useAppContext();
     const [isAdding, setIsAdding] = useState(false);
     const [newSectionName, setNewSectionName] = useState('');
     const [newSectionPrefix, setNewSectionPrefix] = useState('T');
+
+    // Policy Local State
+    const [policies, setPolicies] = useState({
+        force_table_available: operationsConfig?.force_table_available ?? false,
+        allow_over_capacity: operationsConfig?.allow_over_capacity ?? true,
+        allow_table_merging: operationsConfig?.allow_table_merging ?? false
+    });
+    const [isSavingPolicies, setIsSavingPolicies] = useState(false);
+    const [hasPolicyChanges, setHasPolicyChanges] = useState(false);
+
+    const updatePolicy = (key: string, value: boolean) => {
+        setPolicies(prev => ({ ...prev, [key]: value }));
+        setHasPolicyChanges(true);
+    };
+
+    const handleSavePolicies = async () => {
+        if (!currentUser?.restaurant_id) return;
+        setIsSavingPolicies(true);
+        try {
+            const res = await fetchWithAuth(`${API_BASE_URL}/operations/config/${currentUser.restaurant_id}`, {
+                method: 'PATCH',
+                body: JSON.stringify(policies)
+            });
+
+            if (res.ok) {
+                addNotification('success', 'Floor management policies updated');
+                setHasPolicyChanges(false);
+                await fetchInitialData();
+            } else {
+                throw new Error('Save failed');
+            }
+        } catch (e) {
+            addNotification('error', 'Failed to save policies');
+        } finally {
+            setIsSavingPolicies(false);
+        }
+    };
 
     // Editing state
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -74,48 +114,75 @@ export const ZonesPanel: React.FC = () => {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 gap-4">
-                {sections.map(section => (
-                    <div key={section.id} className="bg-slate-900/50 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
-                        {editingId === section.id ? (
-                            <div className="flex gap-4 flex-1 items-center">
-                                <input
-                                    className="flex-1 bg-black border border-slate-600 rounded px-2 py-1"
-                                    value={editName}
-                                    onChange={e => setEditName(e.target.value)}
-                                />
-                                <input
-                                    className="w-20 bg-black border border-slate-600 rounded px-2 py-1"
-                                    value={editPrefix}
-                                    onChange={e => setEditPrefix(e.target.value)}
-                                />
-                                <button onClick={saveEdit} className="text-green-500 hover:text-green-400"><Save size={18} /></button>
-                                <button onClick={() => setEditingId(null)} className="text-slate-500 hover:text-white"><X size={18} /></button>
-                            </div>
-                        ) : (
-                            <div className="flex-1">
-                                <span className="font-bold text-lg mr-3">{section.name}</span>
-                                <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400">Prefix: {section.prefix}</span>
-                            </div>
-                        )}
-
-                        {!editingId && (
-                            <div className="flex gap-2">
-                                <button onClick={() => startEdit(section)} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white">
-                                    <Edit2 size={18} />
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        if (confirm('Delete this zone? Tables in this zone may be orphaned.')) deleteSection(section.id);
-                                    }}
-                                    className="p-2 hover:bg-red-900/30 rounded text-red-500 hover:text-red-400"
-                                >
-                                    <Trash2 size={18} />
-                                </button>
-                            </div>
-                        )}
+            <div className="mt-12 pt-8 border-t border-slate-800">
+                <div className="flex justify-between items-center mb-6">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-orange-500/10 flex items-center justify-center text-orange-500 font-bold border border-orange-500/20">
+                            <Map size={20} />
+                        </div>
+                        <div>
+                            <h3 className="text-xl font-bold text-white uppercase tracking-tighter">Floor Management Policy</h3>
+                            <p className="text-xs text-slate-500">Configure operational rules for table seating</p>
+                        </div>
                     </div>
-                ))}
+                    {hasPolicyChanges && (
+                        <button
+                            onClick={handleSavePolicies}
+                            disabled={isSavingPolicies}
+                            className="bg-orange-500 text-black px-6 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest flex items-center gap-2 hover:bg-orange-400 active:scale-95 transition-all shadow-lg shadow-orange-500/20"
+                        >
+                            {isSavingPolicies ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                            {isSavingPolicies ? 'Saving...' : 'Save Policies'}
+                        </button>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-2xl flex items-center justify-between group hover:border-orange-500/30 transition-colors">
+                        <div>
+                            <h4 className="text-sm font-bold text-white uppercase tracking-tight">Allow Over-Capacity</h4>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed mt-1">
+                                Seat more guests than table standard capacity
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => updatePolicy('allow_over_capacity', !policies.allow_over_capacity)}
+                            className={`w-10 h-5 rounded-full transition-all relative ${policies.allow_over_capacity ? 'bg-orange-600' : 'bg-slate-800'}`}
+                        >
+                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${policies.allow_over_capacity ? 'right-1' : 'left-1'}`} />
+                        </button>
+                    </div>
+
+                    <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-2xl flex items-center justify-between group hover:border-orange-500/30 transition-colors">
+                        <div>
+                            <h4 className="text-sm font-bold text-white uppercase tracking-tight">Table Merging</h4>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed mt-1">
+                                Enable combining multiple tables into one bill
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => updatePolicy('allow_table_merging', !policies.allow_table_merging)}
+                            className={`w-10 h-5 rounded-full transition-all relative ${policies.allow_table_merging ? 'bg-orange-600' : 'bg-slate-800'}`}
+                        >
+                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${policies.allow_table_merging ? 'right-1' : 'left-1'}`} />
+                        </button>
+                    </div>
+
+                    <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-2xl flex items-center justify-between group hover:border-orange-500/30 transition-colors">
+                        <div>
+                            <h4 className="text-sm font-bold text-white uppercase tracking-tight">Force Available</h4>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed mt-1">
+                                Allow cashier to clear an occupied table
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => updatePolicy('force_table_available', !policies.force_table_available)}
+                            className={`w-10 h-5 rounded-full transition-all relative ${policies.force_table_available ? 'bg-orange-600' : 'bg-slate-800'}`}
+                        >
+                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${policies.force_table_available ? 'right-1' : 'left-1'}`} />
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     );

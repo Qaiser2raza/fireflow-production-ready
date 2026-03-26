@@ -34,6 +34,7 @@ const GL = {
     RIDER_EXPENSE: '5000',
     GENERAL_EXPENSE: '5010',
     CUSTOMER_ACCOUNT: '1040',
+    SUPPLIER_PAYABLE: '2020',
 } as const;
 
 type GLCode = typeof GL[keyof typeof GL];
@@ -141,7 +142,7 @@ export class JournalEntryService {
         const restaurantId = order.restaurant_id;
 
         // Resolve accounts – if not yet seeded, silently skip
-        const [cashAcc, cardAcc, riderAcc, taxAcc, scAcc, foodRevAcc, delivRevAcc] =
+        const [cashAcc, cardAcc, riderAcc, taxAcc, scAcc, foodRevAcc, delivRevAcc, customerAcc] =
             await Promise.all([
                 resolveAccount(restaurantId, GL.CASH, db),
                 resolveAccount(restaurantId, GL.CARD_RECEIVABLE, db),
@@ -150,6 +151,7 @@ export class JournalEntryService {
                 resolveAccount(restaurantId, GL.SC_PAYABLE, db),
                 resolveAccount(restaurantId, GL.FOOD_REVENUE, db),
                 resolveAccount(restaurantId, GL.DELIVERY_REVENUE, db),
+                resolveAccount(restaurantId, GL.CUSTOMER_ACCOUNT, db),
             ]);
 
         if (!foodRevAcc) {
@@ -174,19 +176,39 @@ export class JournalEntryService {
                 debit: total,
             });
         } else {
-            // Figure out payment method from transactions
-            const cardPayment = (order.transactions as any[]).find(
-                (t: any) => t.payment_method === 'CARD' && t.type === 'PAYMENT'
-            );
-            const assetAcc = cardPayment && cardAcc ? cardAcc : cashAcc;
-            if (assetAcc) {
+            // Support Split Payments: Iterate through all paid transactions
+            const transactions = (order.transactions as any[]) || [];
+            
+            for (const t of transactions) {
+                if (t.status !== 'PAID') continue;
+
+                const amount = new Decimal(t.amount);
+                let assetAcc = cashAcc; // Default to Cash
+
+                if (t.payment_method === 'CREDIT' && customerAcc) {
+                    assetAcc = customerAcc;
+                } else if (t.payment_method === 'CARD' && cardAcc) {
+                    assetAcc = cardAcc;
+                } else if (t.payment_method === 'RAAST' && cardAcc) { // Raast hits digital receivable
+                    assetAcc = cardAcc;
+                }
+
+                if (assetAcc) {
+                    lines.push({
+                        accountId: assetAcc.id,
+                        description: `Payment [${t.payment_method}] – Order #${order.order_number}`,
+                        debit: amount,
+                    });
+                }
+            }
+
+            if (lines.length === 0 && cashAcc) {
+                // Fallback for legacy orders with no transactions yet
                 lines.push({
-                    accountId: assetAcc.id,
-                    description: `Payment received – Order #${order.order_number}`,
+                    accountId: cashAcc.id,
+                    description: `Payment received (CASH) – Order #${order.order_number}`,
                     debit: total,
                 });
-            } else {
-                return; // No asset account found; skip
             }
         }
 
@@ -397,6 +419,7 @@ export class JournalEntryService {
             { code: '4010', name: 'Delivery Fee Revenue', type: 'REVENUE', description: 'Customer-paid delivery charges' },
             { code: '5000', name: 'Rider Payroll & Floats', type: 'EXPENSE', description: 'Rider float issuances and wage payouts' },
             { code: '5010', name: 'General Operating Expenses', type: 'EXPENSE', description: 'Supplier payments, petty cash, other outflows' },
+            { code: '2020', name: 'Accounts Payable (Suppliers)', type: 'LIABILITY', description: 'Outstanding balances owed to vendors' },
         ];
 
         const results = [];
@@ -407,7 +430,7 @@ export class JournalEntryService {
 
             if (!existing) {
                 const created = await prisma.chart_of_accounts.create({
-                    data: { ...acc, restaurant_id: restaurantId, type: acc.type as any }
+                    data: { ...acc, restaurant_id: restaurantId, type: acc.type as any, is_system: true }
                 });
                 results.push(created);
             }
@@ -425,7 +448,7 @@ export class JournalEntryService {
      * CR  2000  Tax Payable           tax   (if applicable)
      * CR  2010  Service Charge        sc    (if applicable)
      */
-    async recordCreditSaleJournal(orderId: string, customerId: string, tx?: any) {
+    async recordCreditSaleJournal(orderId: string, _customerId: string, tx?: any) {
         const db = tx || prisma;
 
         // Idempotency
@@ -617,6 +640,85 @@ export class JournalEntryService {
         }
 
         return balance;
+    }
+
+    /**
+     * POST SUPPLIER BILL JOURNAL
+     * We receive a bill from a vendor.
+     *
+     * DR  5010  Operating Expense    amount
+     * CR  2020  Supplier Payable     amount (Liability increases)
+     */
+    async recordSupplierBillJournal(params: {
+        restaurantId: string;
+        supplierId: string;
+        amount: number | Decimal;
+        referenceId: string; // PO ID
+        description: string;
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const [expenseAcc, supplierAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.GENERAL_EXPENSE, db),
+            resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
+        ]);
+
+        if (!expenseAcc || !supplierAcc) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'SUPPLIER_BILL',
+            referenceId: params.referenceId,
+            date: new Date(),
+            description: params.description,
+            processedBy: params.processedBy,
+            lines: [
+                { accountId: expenseAcc.id, description: 'Supplier bill expense', debit: amount },
+                { accountId: supplierAcc.id, description: 'Supplier payable created', credit: amount },
+            ],
+        }, db);
+    }
+
+    /**
+     * POST SUPPLIER PAYMENT JOURNAL
+     * We pay a vendor (clears liability).
+     *
+     * DR  2020  Supplier Payable     amount (Liability decreases)
+     * CR  1000  Cash (or 1010 Card)   amount (Asset decreases)
+     */
+    async recordSupplierPaymentJournal(params: {
+        restaurantId: string;
+        supplierId: string;
+        amount: number | Decimal;
+        payoutId: string;
+        paymentMethod: 'CASH' | 'CARD';
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const assetCode = params.paymentMethod === 'CARD' ? GL.CARD_RECEIVABLE : GL.CASH;
+        const [supplierAcc, assetAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
+            resolveAccount(params.restaurantId, assetCode, db),
+        ]);
+
+        if (!supplierAcc || !assetAcc) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'SUPPLIER_PAYMENT',
+            referenceId: params.payoutId,
+            date: new Date(),
+            description: `Payment to supplier`,
+            processedBy: params.processedBy,
+            lines: [
+                { accountId: supplierAcc.id, description: 'Supplier payable cleared', debit: amount },
+                { accountId: assetAcc.id, description: 'Cash paid to vendor', credit: amount },
+            ],
+        }, db);
     }
 }
 

@@ -274,7 +274,7 @@ export const DashboardView: React.FC = () => {
             {velocity.length === 0 ? (
               <div className="h-full flex items-center justify-center text-slate-500 font-mono text-xs">Awaiting data...</div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%" debounce={100}>
+              <ResponsiveContainer key={`vel-${velocity.length}`} width="99%" height="100%" minWidth={1} minHeight={1} debounce={50}>
                 <AreaChart data={velocity}>
                   <defs>
                     <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
@@ -305,7 +305,7 @@ export const DashboardView: React.FC = () => {
             {productMix.length === 0 ? (
               <div className="h-full flex items-center justify-center text-slate-500 font-mono text-xs">Awaiting data...</div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%" debounce={100}>
+              <ResponsiveContainer key={`pmix-${productMix.length}`} width="99%" height="100%" minWidth={1} minHeight={1} debounce={50}>
                 <BarChart data={productMix} layout="vertical" margin={{ left: -20 }}>
                   <XAxis type="number" stroke="#334155" fontSize={10} />
                   <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={10} width={120} tick={{ fill: '#94a3b8' }} />

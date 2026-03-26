@@ -16,7 +16,9 @@ const customerSchema = z.object({
     phone: z.string(),
     address: z.string().optional(),
     notes: z.string().optional(),
-    restaurant_id: z.string()
+    restaurant_id: z.string(),
+    credit_enabled: z.boolean().optional(),
+    credit_limit: z.number().optional()
 });
 
 const addressSchema = z.object({
@@ -74,14 +76,18 @@ router.post('/customers', async (req, res) => {
             update: {
                 name: validated.name,
                 address: validated.address,
-                notes: validated.notes
+                notes: validated.notes,
+                credit_enabled: validated.credit_enabled,
+                credit_limit: validated.credit_limit !== undefined ? new Decimal(String(validated.credit_limit)) : undefined
             },
             create: {
                 restaurant_id,
                 phone: validated.phone,
                 name: validated.name,
                 address: validated.address,
-                notes: validated.notes
+                notes: validated.notes,
+                credit_enabled: validated.credit_enabled || false,
+                credit_limit: new Decimal(String(validated.credit_limit || 0))
             }
         });
 
@@ -139,6 +145,12 @@ router.post('/customers/:id/addresses', async (req, res) => {
         const { id } = req.params;
         const validated = addressSchema.parse(req.body);
 
+        // Security check BEFORE writing: verify customer belongs to this restaurant
+        const customerVerify = await prisma.customers.findFirst({
+            where: { id, restaurant_id: req.restaurantId }
+        });
+        if (!customerVerify) return res.status(403).json({ error: 'Unauthorized' });
+
         if (validated.is_default) {
             await prisma.customer_addresses.updateMany({
                 where: { customer_id: id },
@@ -155,12 +167,6 @@ router.post('/customers/:id/addresses', async (req, res) => {
                 is_default: validated.is_default || false
             }
         });
-
-        // Final sanity check: Verify customer belongs to restaurant
-        const customerVerify = await prisma.customers.findFirst({
-            where: { id, restaurant_id: req.restaurantId }
-        });
-        if (!customerVerify) throw new Error('Unauthorized');
 
         res.json(address);
     } catch (error: any) {
@@ -245,7 +251,7 @@ router.get('/customers/:id/balance', async (req, res) => {
     });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-    const balance = await journalEntryService.getCustomerBalance(
+    const balance = await accounting.getCustomerBalance(
       req.restaurantId!,
       req.params.id
     );
@@ -374,10 +380,10 @@ router.get('/customers/:id/statement', async (req, res) => {
         },
         orderBy: { created_at: 'desc' },
       }),
-      prisma.ledger_entries.findMany({
+      prisma.customer_ledgers.findMany({
         where: {
           restaurant_id: req.restaurantId!,
-          account_id: req.params.id,
+          customer_id: req.params.id,
         },
         orderBy: { created_at: 'desc' },
       }),
@@ -388,10 +394,106 @@ router.get('/customers/:id/statement', async (req, res) => {
       success: true,
       customer,
       orders,
-      ledger_entries: ledgerEntries,
+      ledger_entries: ledgerEntries.map(l => ({
+        ...l,
+        amount: l.amount?.toString() || '0',
+        balance_after: l.balance_after?.toString() || '0'
+      })),
       current_balance: balance.toString(),
       interpretation: interpretCustomerBalance(balance),
     });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/customers/:id/topup
+ * Add advance credit/top-up to customer account
+ */
+router.post('/customers/:id/topup', async (req, res) => {
+    try {
+        const { amount, paymentMethod } = req.body;
+        if (!amount || Number(amount) <= 0) {
+            return res.status(400).json({ error: 'Valid amount required' });
+        }
+
+        const customer = await prisma.customers.findFirst({
+            where: { id: req.params.id, restaurant_id: req.restaurantId }
+        });
+        if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+        await accounting.topUpAccount({
+            restaurantId: req.restaurantId!,
+            customerId: req.params.id,
+            amount: Number(amount),
+            paymentMethod: (paymentMethod || 'CASH') as 'CASH' | 'CARD',
+            processedBy: req.staffId!
+        });
+
+        // Return updated balance
+        const newBalance = await accounting.getCustomerBalance(req.restaurantId!, req.params.id);
+        
+        res.json({ 
+            success: true, 
+            new_balance: newBalance.toString(),
+            interpretation: interpretCustomerBalance(newBalance)
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /api/customers/:id/charge
+ * Directly charge an amount to customer's account (e.g. from POS)
+ */
+router.post('/customers/:id/charge', async (req, res) => {
+  try {
+    const { amount, orderId, description } = req.body;
+    
+    if (!amount || Number(amount) <= 0) {
+        return res.status(400).json({ error: 'Valid amount required' });
+    }
+
+    const customer = await prisma.customers.findFirst({
+      where: { id: req.params.id, restaurant_id: req.restaurantId }
+    });
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    // Use AccountingService to post the charge
+    if (orderId) {
+        // Link customer to order
+        await prisma.orders.update({
+            where: { id: orderId },
+            data: { customer_id: req.params.id }
+        });
+        
+        // Explicitly create a CREDIT transaction for AccountingService to detect
+        await prisma.transactions.create({
+            data: {
+                restaurant_id: req.restaurantId,
+                order_id: orderId,
+                amount: Number(amount),
+                payment_method: 'CREDIT',
+                status: 'PAID',
+                transaction_ref: `KHATA-${Date.now()}`
+            }
+        });
+        await accounting.recordOrderSale(orderId);
+    } else {
+        await accounting.recordManualCharge({
+            restaurantId: req.restaurantId!,
+            customerId: req.params.id,
+            amount: Number(amount),
+            description: description || `Manual POS Charge`,
+            processedBy: req.staffId!
+        });
+    }
+
+    // Return updated balance so frontend can confirm
+    const newBalance = await accounting.getCustomerBalance(req.restaurantId!, req.params.id);
+    res.json({ success: true, newBalance: newBalance.toString(), interpretation: `Outstanding: Rs. ${newBalance.toString()}` });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

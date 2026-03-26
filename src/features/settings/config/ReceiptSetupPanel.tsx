@@ -214,6 +214,43 @@ export const ReceiptSetupPanel: React.FC = () => {
 
                 <div className={toggleRowClass}>
                     <div>
+                        <h4 className="text-sm font-bold text-white">Show Cashier Name</h4>
+                        <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Print the name of the logged-in cashier on receipts</p>
+                    </div>
+                    <input
+                        type="checkbox"
+                        checked={config.show_cashier_name || config.showCashierName || false}
+                        onChange={e => setConfig({...config, show_cashier_name: e.target.checked, showCashierName: e.target.checked})}
+                        className="size-5 accent-gold-500 cursor-pointer"
+                    />
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+                    <div className="flex items-center gap-2">
+                        <Printer size={14} className="text-indigo-400" />
+                        <h4 className="text-sm font-bold text-white uppercase tracking-tighter">Local System Printer</h4>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4">
+                        <div>
+                            <label className={labelClass}>Primary Printer Name</label>
+                            <input
+                                value={config.primary_printer || config.primaryPrinter || 'Default'}
+                                onChange={e => setConfig({...config, primary_printer: e.target.value, primaryPrinter: e.target.value})}
+                                className={inputClass}
+                                placeholder="e.g. POS-80, Thermal Printer"
+                            />
+                            <p className="text-[9px] text-slate-500 mt-1 uppercase font-bold tracking-tight">Exact name as shown in Windows Control Panel</p>
+                        </div>
+                        <div className="flex items-center justify-between p-2 pt-0">
+                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-none">Diagnostic: Global Print Lock Status</span>
+                            <span className={`text-[10px] font-black uppercase tracking-widest ${config.show_print_dialog ? 'text-amber-500' : 'text-emerald-500'}`}>
+                                {config.show_print_dialog ? 'Dialog Active' : 'Auto-Pass Through'}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div className={toggleRowClass}>
+                    <div>
                         <h4 className="text-sm font-bold text-white">Auto-Print KOT</h4>
                         <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Push ticket to kitchen as soon as order is fired</p>
                     </div>

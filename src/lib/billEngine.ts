@@ -55,11 +55,29 @@ export const getDefaultBillConfig = (
   // Check both naming conventions for robustness
   const scRate = Number(operationsConfig?.serviceChargeRate ?? operationsConfig?.service_charge_rate ?? 5);
   const scEnabled = Boolean(operationsConfig?.serviceChargeEnabled ?? operationsConfig?.service_charge_enabled ?? false);
+  const taxEnabled = Boolean(operationsConfig?.taxEnabled ?? operationsConfig?.tax_enabled ?? false);
   
   const taxRate = Number(operationsConfig?.taxRate ?? operationsConfig?.tax_rate ?? 16);
   
   const taxLabel = operationsConfig?.taxLabel || operationsConfig?.tax_label || 'GST';
   const defaultDeliveryFee = Number(operationsConfig?.defaultDeliveryFee ?? operationsConfig?.default_delivery_fee ?? 0);
+
+  // Check for specific order type defaults (v3.2)
+  const orderDefaults = operationsConfig?.order_type_defaults?.[orderType];
+  if (orderDefaults) {
+    return {
+      discountType: orderDefaults.discount_type || 'flat',
+      discountValue: Number(orderDefaults.default_discount_value ?? 0),
+      serviceChargeEnabled: Boolean(orderDefaults.service_charge_enabled),
+      serviceChargeRate: Number(orderDefaults.default_service_charge_rate ?? scRate),
+      taxEnabled: Boolean(orderDefaults.tax_enabled),
+      taxRate: Number(orderDefaults.default_tax_rate ?? taxRate),
+      taxLabel: taxLabel,
+      taxInclusive: Boolean(orderDefaults.tax_inclusive),
+      deliveryFeeEnabled: Boolean(orderDefaults.delivery_fee_enabled),
+      deliveryFee: Number(orderDefaults.default_delivery_fee ?? defaultDeliveryFee),
+    };
+  }
 
   switch (orderType) {
     case 'DINE_IN':
@@ -68,7 +86,7 @@ export const getDefaultBillConfig = (
         discountValue: 0,
         serviceChargeEnabled: scEnabled, // Respect global setting
         serviceChargeRate: scRate,
-        taxEnabled: false,       // Default to OFF as per user preference (most are exempt)
+        taxEnabled, // Respect global setting
         taxRate,
         taxLabel,
         taxInclusive: false,
@@ -82,7 +100,7 @@ export const getDefaultBillConfig = (
         discountValue: 0,
         serviceChargeEnabled: false, // Takeaway usually no service charge
         serviceChargeRate: scRate,
-        taxEnabled: false,
+        taxEnabled, // Respect global setting
         taxRate,
         taxLabel,
         taxInclusive: false,
@@ -96,7 +114,7 @@ export const getDefaultBillConfig = (
         discountValue: 0,
         serviceChargeEnabled: false,
         serviceChargeRate: scRate,
-        taxEnabled: false,
+        taxEnabled, // Respect global setting
         taxRate,
         taxLabel,
         taxInclusive: false,
@@ -110,7 +128,7 @@ export const getDefaultBillConfig = (
         discountValue: 0,
         serviceChargeEnabled: false,
         serviceChargeRate: 5,
-        taxEnabled: false,
+        taxEnabled, // Respect global setting
         taxRate: 16,
         taxLabel: 'GST',
         taxInclusive: false,

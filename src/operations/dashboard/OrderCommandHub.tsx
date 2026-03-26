@@ -10,6 +10,7 @@ import { RecallModal } from './components/RecallModal';
 import { Order, OrderStatus } from '../../shared/types';
 
 import { OrderDetailModal } from './components/OrderDetailModal';
+import { getCompositeStatus } from '../../shared/lib/orderStatus';
 
 export const OrderCommandHub: React.FC = () => {
   const { tables, orders, sections, setActiveView, seatGuests, setOrderToEdit, updateOrderStatus, cancelOrder, currentUser } = useAppContext();
@@ -284,16 +285,8 @@ export const OrderCommandHub: React.FC = () => {
 // --- COMPONENTS ---
 
 const PulseCard: React.FC<{ order: any }> = ({ order }) => {
-  const getStatusColor = () => {
-    if (order.status === 'READY') {
-      return (order.type === 'DELIVERY' && (order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id))
-        ? 'text-green-500' // Out for delivery
-        : 'text-yellow-500'; // Just ready
-    }
-    if (order.status === 'PREPARING') return 'text-blue-500';
-    return 'text-slate-500';
-  };
-
+  const statusStyle = getCompositeStatus(order.status, order.payment_status);
+  
   const getStatusIcon = () => {
     if (order.status === 'READY') {
       return (order.type === 'DELIVERY' && (order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id))
@@ -320,12 +313,12 @@ const PulseCard: React.FC<{ order: any }> = ({ order }) => {
       <div className="font-bold text-white mb-1">{order.customer_name || 'Guest'}</div>
 
       <div className="flex items-center justify-between">
-        <div className={`flex items-center gap-1 text-xs ${getStatusColor()}`}>
+        <div className={`flex items-center gap-1 text-[10px] font-black uppercase tracking-widest ${statusStyle.color}`}>
           <StatusIcon size={14} className={order.status === 'PREPARING' ? 'animate-spin' : ''} />
-          <span className="uppercase tracking-wider font-bold">
-            {(order.status === 'READY' && order.type === 'DELIVERY' && (order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id))
+          <span>
+            {(statusStyle.label === 'Ready' && order.type === 'DELIVERY' && (order.assigned_driver_id || order.delivery_orders?.[0]?.driver_id))
               ? 'Out for Delivery'
-              : order.status}
+              : statusStyle.label}
           </span>
         </div>
         <div className="text-sm font-black text-white">Rs. {order.total?.toLocaleString()}</div>

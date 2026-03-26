@@ -1,19 +1,21 @@
-
 import React, { useState } from 'react';
 import { useAppContext } from '../../client/contexts/AppContext';
 import { 
-  Building2, Receipt, Calculator, Box, Map, Store, Printer, 
-  FileType, Users, Wand2, Database, LayoutGrid, Cpu, QrCode
+  Building2, Receipt, Calculator, Box, Map, Printer, 
+  FileType, Users, Wand2, Database, LayoutGrid, Cpu, QrCode,
+  ClipboardList, History, ShieldAlert, Truck
 } from 'lucide-react';
-import { OperationsPanel } from './config/OperationsPanel';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
+// import { OperationsPanel } from './config/OperationsPanel'; // Removed - consolidated
 import { ZonesPanel } from './config/ZonesPanel';
 import { TablesPanel } from './config/TablesPanel';
-import { VendorsPanel } from './config/VendorsPanel';
+import { SuppliersPanel } from './config/SuppliersPanel';
 import { FloorPlanConfigView } from './config/FloorPlanConfigView';
 import { PrintersPanel } from './config/PrintersPanel';
 import { FeaturesPanel } from './config/FeaturesPanel';
 import { SystemUpdatePanel } from './config/SystemUpdatePanel';
 import { StaffView } from './StaffView';
+import { OrderSettingsPanel } from './config/OrderSettingsPanel';
 
 import { BusinessProfilePanel } from './config/BusinessProfilePanel';
 import { ReceiptSetupPanel } from './config/ReceiptSetupPanel';
@@ -22,13 +24,11 @@ import { InvoiceTemplatesPanel } from './config/InvoiceTemplatesPanel';
 import { DeviceManagementView } from './DeviceManagementView';
 import { QRCodePairing } from './QRCodePairing';
 
-import { CustomersView } from '../../operations/customers/CustomersView';
 import { MenuView } from '../../operations/menu/MenuView';
 import { BillingView } from '../restaurant/BillingView';
 import { ActivityLog } from '../../operations/activity/ActivityLog';
 import { TransactionsView } from '../../operations/transactions/TransactionsView';
 import { OrdersView } from '../../operations/orders/OrdersView';
-import { ClipboardList, History } from 'lucide-react';
 
 const DummyPanel: React.FC<{ name: string }> = ({ name }) => (
   <div className="p-8 text-slate-500 italic uppercase font-bold tracking-widest text-[10px]">Component for {name} coming soon...</div>
@@ -36,7 +36,7 @@ const DummyPanel: React.FC<{ name: string }> = ({ name }) => (
 
 export const SettingsView: React.FC = () => {
   const { currentUser, operationsConfig, addNotification } = useAppContext();
-  const [activePanel, setActivePanel] = useState<string>('tax-billing');
+  const [activePanel, setActivePanel] = useState<string>('business-profile');
   const [showWizard, setShowWizard] = useState(false);
 
   if (currentUser?.role !== 'ADMIN' && currentUser?.role !== 'SUPER_ADMIN' && currentUser?.role !== 'MANAGER') {
@@ -58,13 +58,33 @@ export const SettingsView: React.FC = () => {
     // Seed logic here
   };
 
+  const handleFactoryReset = async () => {
+    if (!confirm('DANGER: This will PERMANENTLY delete all transactional data (Orders, Transactions, Ledgers). There is no undo. Proceed?')) return;
+    
+    try {
+        const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/system/factory-reset`, {
+            method: 'POST'
+        });
+        if (res.ok) {
+            alert('System reset successfully. Application will reload.');
+            window.location.reload();
+        } else {
+            const err = await res.json();
+            alert('Reset failed: ' + (err.error || 'Check server logs'));
+        }
+    } catch (err: any) {
+        alert('Exception: ' + err.message);
+    }
+  };
+
   const navGroups = [
     {
       label: 'Company',
       items: [
-        { id: 'business-profile', label: 'Business profile', icon: Building2 },
-        { id: 'receipt-setup', label: 'Receipt setup', icon: Receipt },
-        { id: 'tax-billing', label: 'Tax & billing', icon: Calculator },
+        { id: 'business-profile', label: 'Business Profile', icon: Building2 },
+        { id: 'setup-wizard', label: 'Setup Wizard', icon: Wand2, action: () => setShowWizard(true) },
+        { id: 'order-defaults', label: 'Order Defaults', icon: Calculator },
+        { id: 'receipt-setup', label: 'Receipt Setup', icon: Receipt },
       ]
     },
     {
@@ -72,8 +92,8 @@ export const SettingsView: React.FC = () => {
       items: [
         { id: 'menu-lab', label: 'Menu Lab', icon: Box },
         { id: 'inventory', label: 'Inventory', icon: Box },
-        { id: 'zones-tables', label: 'Zones & tables', icon: Map },
-        { id: 'vendors', label: 'Vendors', icon: Store },
+        { id: 'zones-tables', label: 'Zones & Tables', icon: Map },
+        { id: 'suppliers', label: 'Suppliers', icon: Truck },
         { id: 'active-orders', label: 'Command Hub', icon: ClipboardList },
       ]
     },
@@ -81,17 +101,15 @@ export const SettingsView: React.FC = () => {
       label: 'Print & Devices',
       items: [
         { id: 'printers', label: 'Printers', icon: Printer },
-        { id: 'invoice-templates', label: 'Invoice templates', icon: FileType },
+        { id: 'invoice-templates', label: 'Invoice Templates', icon: FileType },
         { id: 'pairing', label: 'Device Pairing', icon: QrCode },
         { id: 'devices', label: 'Device Management', icon: Cpu },
       ]
     },
     {
-      label: 'Staff & Patrons',
+      label: 'Staff Settings',
       items: [
-        { id: 'staff-roles', label: 'Staff & roles', icon: Users },
-        { id: 'patrons', label: 'Patrons', icon: Users },
-        { id: 'setup-wizard', label: 'Setup wizard', icon: Wand2, action: () => setShowWizard(true) },
+        { id: 'staff-roles', label: 'Staff & Roles', icon: Users },
       ]
     },
     {
@@ -154,6 +172,16 @@ export const SettingsView: React.FC = () => {
               <Database size={12} className="group-hover:animate-pulse" />
               <span>Sync Cloud Data</span>
             </button>
+            
+            {(currentUser?.role === 'ADMIN' || currentUser?.role === 'SUPER_ADMIN') && (
+              <button
+                onClick={handleFactoryReset}
+                className="text-[10px] text-red-500/40 hover:text-red-500 flex items-center gap-1.5 transition-colors group mt-2 pt-2 border-t border-red-500/10"
+              >
+                <ShieldAlert size={12} />
+                <span>Factory Reset</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -162,7 +190,6 @@ export const SettingsView: React.FC = () => {
           <div className={`${['menu-lab', 'audit-log', 'patrons', 'billing', 'transactions', 'active-orders'].includes(activePanel) ? 'w-full h-full' : 'max-w-5xl'}`}>
             {activePanel === 'business-profile' && <BusinessProfilePanel />}
             {activePanel === 'receipt-setup' && <ReceiptSetupPanel />}
-            {activePanel === 'tax-billing' && <OperationsPanel />}
             {activePanel === 'menu-lab' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><MenuView /></div>}
             {activePanel === 'inventory' && <DummyPanel name="Inventory" />}
             {activePanel === 'zones-tables' && (
@@ -174,11 +201,11 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
             )}
-            {activePanel === 'vendors' && <VendorsPanel />}
+            {activePanel === 'suppliers' && <SuppliersPanel />}
+            {activePanel === 'order-defaults' && <OrderSettingsPanel />}
             {activePanel === 'printers' && <PrintersPanel />}
             {activePanel === 'invoice-templates' && <InvoiceTemplatesPanel />}
             {activePanel === 'staff-roles' && <StaffView />}
-            {activePanel === 'patrons' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><CustomersView /></div>}
             {activePanel === 'billing' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><BillingView /></div>}
             {activePanel === 'active-orders' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><OrdersView /></div>}
             {activePanel === 'transactions' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><TransactionsView /></div>}

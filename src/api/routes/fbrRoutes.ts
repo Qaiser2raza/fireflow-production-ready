@@ -54,7 +54,10 @@ router.get('/stats', authMiddleware, async (req: any, res) => {
 router.get('/invoices', authMiddleware, async (req: any, res) => {
     try {
         const restaurant_id = req.user.restaurant_id;
-        const { status, search, limit = 50 } = req.query;
+        const { status, search, limit = '50', page = '1' } = req.query;
+
+        const take = Math.min(Number(limit) || 50, 100);
+        const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
 
         const where: any = { restaurant_id };
         if (status) where.fbr_sync_status = status;
@@ -66,13 +69,19 @@ router.get('/invoices', authMiddleware, async (req: any, res) => {
             ];
         }
 
-        const invoices = await prisma.orders.findMany({
-            where,
-            orderBy: { created_at: 'desc' },
-            take: Number(limit),
-        }) as any[];
+        const [invoices, totalCount] = await Promise.all([
+            prisma.orders.findMany({
+                where,
+                orderBy: { created_at: 'desc' },
+                take,
+                skip
+            }) as any,
+            prisma.orders.count({ where })
+        ]);
 
-        res.json({ success: true, invoices });
+        const totalPages = Math.ceil(totalCount / take);
+
+        res.json({ success: true, invoices, totalCount, totalPages, currentPage: Number(page) || 1 });
     } catch (err: any) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -86,6 +95,33 @@ router.post('/sync/:orderId', authMiddleware, requireRole('MANAGER', 'ADMIN'), a
     try {
         const result = await fbrService.syncOrder(req.params.orderId);
         res.json(result);
+    } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+/**
+ * POST /api/fbr/void/:orderId
+ * Voids a pending FBR invoice so it's excluded from sync batches
+ */
+router.post('/void/:orderId', authMiddleware, requireRole('MANAGER', 'ADMIN'), async (req: any, res) => {
+    try {
+        const order = await prisma.orders.findUnique({
+            where: { id: req.params.orderId, restaurant_id: req.user.restaurant_id }
+        });
+
+        if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+        
+        if (order.fbr_sync_status === 'SYNCED') {
+            return res.status(400).json({ success: false, error: 'Cannot void an already synced invoice via this method. Use Returns to issue a credit note.' });
+        }
+
+        await prisma.orders.update({
+            where: { id: order.id },
+            data: { fbr_sync_status: 'VOIDED' } as any
+        });
+
+        res.json({ success: true, message: 'Invoice marked as voided' });
     } catch (err: any) {
         res.status(500).json({ success: false, error: err.message });
     }

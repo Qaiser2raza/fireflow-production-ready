@@ -1,0 +1,12 @@
+{
+  "id": "bf09e47c-e901-42d1-8b58-44a2493e8a5c",
+  "restaurant_id": "2d2786e8-661e-4acc-9ed9-9f7d62dda3b7",
+  "customer_id": "2f98c180-b1de-4213-a126-65c99177d4f1",
+  "order_id": null,
+  "entry_type": "TOP_UP",
+  "amount": "1000",
+  "balance_after": "6500",
+  "description": "Prepaid Top-up via CASH",
+  "processed_by": "1ba321a7-cd20-4526-9f8c-b30ccc57d894",
+  "created_at": "2026-03-22T18:57:44.140Z"
+}

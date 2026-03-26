@@ -34,6 +34,7 @@ import fbrRoutes from './routes/fbrRoutes';
 import { journalEntryService } from './services/JournalEntryService';
 import { jwtService } from './services/auth/JwtService';
 import { authMiddleware, requireRole } from './middleware/authMiddleware';
+import supplierRoutes from './routes/supplierRoutes';
 import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { fbrService } from './services/FBRService.js';
@@ -74,6 +75,8 @@ const menuImageUpload = multer({
         }
     }
 });
+
+// Route for local menu image upload (MOVED)
 
 const accounting = new AccountingService();
 import { superAdminService } from './services/SuperAdminService';
@@ -220,6 +223,26 @@ app.use(express.json());
 
 // Enterprise logging middleware
 app.use(requestLoggerMiddleware);
+
+// Route for local menu image upload
+app.post('/api/upload/menu-image', authMiddleware, menuImageUpload.single('image'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No image file uploaded' });
+        }
+        
+        // Return the path relative to the static uploads directory
+        const imageUrl = `/uploads/menu/${req.file.filename}`;
+        res.json({ 
+            success: true, 
+            url: imageUrl, // MenuView.tsx expects 'url'
+            filename: req.file.filename
+        });
+    } catch (err: any) {
+        console.error('[UPLOAD ERROR]', err);
+        res.status(500).json({ error: 'Failed to upload image' });
+    }
+});
 
 // Setup API Documentation
 setupSwagger(app);
@@ -1349,10 +1372,18 @@ app.delete('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', '
 
 /**
  * GET /api/restaurants
- * Fetch all restaurants (for super admin dashboard)
+ * Fetch all restaurants or a specific one by query param id
  */
-app.get('/api/restaurants', authMiddleware, requireRole('SUPER_ADMIN'), async (_req, res) => {
+app.get('/api/restaurants', authMiddleware, requireRole('SUPER_ADMIN'), async (req, res) => {
     try {
+        const { id } = req.query;
+        if (id) {
+            const restaurant = await prisma.restaurants.findUnique({
+                where: { id: String(id) }
+            });
+            return res.json(restaurant ? [restaurant] : []);
+        }
+
         const restaurants = await prisma.restaurants.findMany({
             select: {
                 id: true,
@@ -1364,13 +1395,42 @@ app.get('/api/restaurants', authMiddleware, requireRole('SUPER_ADMIN'), async (_
                 subscription_status: true,
                 created_at: true,
                 updated_at: true,
-                logo_url: true
+                logo_url: true,
+                currency: true
             }
         });
         res.json(restaurants);
     } catch (error: any) {
         console.error('[ERROR] GET /api/restaurants:', error.message);
         res.status(500).json({ error: error.message || 'Failed to fetch restaurants' });
+    }
+});
+
+/**
+ * GET /api/restaurants/:id
+ * Fetch a single restaurant by ID in path
+ */
+app.get('/api/restaurants/:id', authMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Authorization: Only self or SUPER_ADMIN
+        if (req.restaurantId !== id && req.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id }
+        });
+
+        if (!restaurant) {
+            return res.status(404).json({ error: 'Restaurant not found' });
+        }
+
+        res.json(restaurant);
+    } catch (error: any) {
+        console.error(`[ERROR] GET /api/restaurants/${req.params.id}:`, error.message);
+        res.status(500).json({ error: error.message || 'Failed to fetch restaurant' });
     }
 });
 
@@ -1596,7 +1656,15 @@ function parseFullConfigFromAPI(data: any) {
             
             // Thermal printing settings
             primary_printer: data.primary_printer || data.primaryPrinter || 'Default',
-            print_dialog: data.print_dialog !== undefined ? Boolean(data.print_dialog) : (data.printDialog !== undefined ? Boolean(data.printDialog) : false)
+            print_dialog: data.print_dialog !== undefined ? Boolean(data.print_dialog) : (data.printDialog !== undefined ? Boolean(data.printDialog) : false),
+            
+            // Order Type Defaults (v3.2)
+            order_type_defaults: data.order_type_defaults || null,
+
+            // Floor Management Policies (v3.3)
+            force_table_available: data.force_table_available ?? false,
+            allow_over_capacity: data.allow_over_capacity ?? true,
+            allow_table_merging: data.allow_table_merging ?? false
         };
     } catch (e) {
         console.error('[Config] Error parsing config:', e);
@@ -1647,6 +1715,8 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
             fbrPosId: restaurant.fbr_pos_id,
             fbrImsUrl: restaurant.fbr_ims_url,
             fbrNtn: restaurant.fbr_ntn,
+            fbr_enabled: restaurant.fbr_enabled,
+            fbr_pos_id: restaurant.fbr_pos_id,
         });
 
         if (!fullConfig) {
@@ -1661,6 +1731,120 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
     } catch (e: any) {
         console.error('[Config] Get operations config error:', e);
         res.status(500).json({ error: e.message || 'Internal Server Error' });
+    }
+});
+
+/**
+ * GET /api/operations/features
+ * Backwards compatibility for feature queries
+ */
+app.get('/api/operations/features', authMiddleware, async (req, res) => {
+    const restaurantId = (req.query.restaurantId as string) || req.restaurantId;
+    if (!restaurantId) return res.status(400).json({ error: 'restaurantId required' });
+
+    try {
+        const features = await prisma.restaurant_features.findUnique({
+            where: { restaurant_id: restaurantId }
+        });
+        res.json({ features: features?.features || {} });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch features' });
+    }
+});
+
+/**
+ * GET /api/operations/features/:restaurantId
+ */
+app.get('/api/operations/features/:restaurantId', authMiddleware, async (req, res) => {
+    const { restaurantId } = req.params;
+    try {
+        const features = await prisma.restaurant_features.findUnique({
+            where: { restaurant_id: restaurantId }
+        });
+        res.json({ features: features?.features || {} });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch features' });
+    }
+});
+
+/**
+ * PATCH /api/operations/order-settings
+ * Update order type defaults (DINE_IN, TAKEAWAY, DELIVERY)
+ */
+app.patch('/api/operations/order-settings', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    const restaurantId = req.restaurantId!;
+    const { settings } = req.body;
+
+    if (!settings) {
+        return res.status(400).json({ error: 'Settings object required' });
+    }
+
+    try {
+        // Fetch current features
+        const entry = await prisma.restaurant_features.findUnique({
+            where: { restaurant_id: restaurantId }
+        });
+
+        const currentFeatures = (entry?.features as any) || {};
+        const updatedFeatures = {
+            ...currentFeatures,
+            order_type_defaults: settings || currentFeatures.order_type_defaults,
+            default_guest_count: req.body.default_guest_count !== undefined ? Number(req.body.default_guest_count) : currentFeatures.default_guest_count,
+            default_rider_float: req.body.default_rider_float !== undefined ? Number(req.body.default_rider_float) : currentFeatures.default_rider_float
+        };
+
+        const result = await prisma.restaurant_features.upsert({
+            where: { restaurant_id: restaurantId },
+            update: { features: updatedFeatures },
+            create: {
+                restaurant_id: restaurantId,
+                features: updatedFeatures
+            }
+        });
+
+        // Broadcast to clients
+        io.to(`restaurant:${restaurantId}`).emit('db_change', { 
+            table: 'restaurant_features', 
+            eventType: 'UPDATE', 
+            data: result 
+        });
+
+        res.json({ success: true, settings: result.features });
+    } catch (e: any) {
+        console.error('[OrderSettings] Update failed:', e);
+        res.status(500).json({ error: e.message || 'Internal Server Error' });
+    }
+});
+
+/**
+ * POST /api/operations/features/:restaurantId
+ * Save/Update feature toggles
+ */
+app.post('/api/operations/features/:restaurantId', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+    const { restaurantId } = req.params;
+    const { features } = req.body;
+
+    try {
+        const result = await prisma.restaurant_features.upsert({
+            where: { restaurant_id: restaurantId },
+            update: { features: features },
+            create: {
+                restaurant_id: restaurantId,
+                features: features
+            }
+        });
+        
+        // Broadcast change
+        io.to(`restaurant:${restaurantId}`).emit('db_change', { 
+            table: 'restaurant_features', 
+            eventType: 'UPDATE', 
+            data: result 
+        });
+
+        res.json({ success: true, features: result.features });
+    } catch (e: any) {
+        console.error('[Features] Save error:', e);
+        res.status(500).json({ error: e.message || 'Failed to save features' });
     }
 });
 
@@ -1995,49 +2179,76 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
 app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, paymentMethod, payment_method } = req.body;
-        const method = paymentMethod || payment_method || 'CASH';
-        const receivedAmount = Number(amount);
-        const staffId = req.staffId; // Use authenticated staffId
+        const { payments, amount, paymentMethod, payment_method, customer_id } = req.body;
+        const staffId = req.staffId;
 
-        if (!receivedAmount || receivedAmount <= 0) {
-            return res.status(400).json({ error: 'Valid amount required' });
+        // 1. Prepare Payments List (support both array and legacy single-field format)
+        let paymentList: { method: string, amount: number }[] = [];
+        
+        if (Array.isArray(payments) && payments.length > 0) {
+            paymentList = payments.map(p => ({
+                method: p.method || p.payment_method || 'CASH',
+                amount: Number(p.amount)
+            }));
+        } else {
+            // Fallback for legacy clients sending single amount/method
+            const method = paymentMethod || payment_method || 'CASH';
+            const receivedAmount = Number(amount);
+            if (receivedAmount > 0) {
+                paymentList.push({ method, amount: receivedAmount });
+            }
         }
+
+        if (paymentList.length === 0) {
+            return res.status(400).json({ error: 'At least one valid payment is required' });
+        }
+
+        const totalReceived = paymentList.reduce((sum, p) => sum + p.amount, 0);
 
         const result = await prisma.$transaction(async (tx) => {
             const order = await tx.orders.findFirst({
                 where: {
                     id,
-                    restaurant_id: req.restaurantId // SaaS Security
+                    restaurant_id: req.restaurantId
                 }
             });
             if (!order) throw new Error('Order not found or unauthorized');
+
+            const orderTotal = Number(order.total);
+            const isFullyPaid = totalReceived >= orderTotal;
 
             // 1. Update Order
             const updatedOrder = await tx.orders.update({
                 where: { id },
                 data: {
                     status: 'CLOSED',
-                    payment_status: 'PAID',
-                    // payment_method: method, // Assuming this field might not exist on all schemas, rely on transactions/ledger
-                    closed_at: new Date()
+                    payment_status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
+                    closed_at: new Date(),
+                    ...(( customer_id || order.customer_id) ? { customers: { connect: { id: customer_id || order.customer_id } } } : {}),
+                    breakdown: {
+                        ...(order.breakdown as any || {}),
+                        paymentBreakdown: paymentList
+                    }
                 }
             });
+            
 
-            // 2. Create Transaction
-            await tx.transactions.create({
-                data: {
-                    restaurant_id: order.restaurant_id,
-                    order_id: order.id,
-                    amount: receivedAmount,
-                    payment_method: method,
-                    status: 'PAID',
-                    transaction_ref: `POS-${Date.now()}`
-                }
-            });
+            // 2. Create Transactions for each payment method
+            for (const p of paymentList) {
+                await tx.transactions.create({
+                    data: {
+                        restaurant_id: order.restaurant_id,
+                        order_id: order.id,
+                        amount: p.amount,
+                        payment_method: p.method,
+                        status: 'PAID',
+                        transaction_ref: `POS-${Date.now()}-${Math.random().toString(36).substring(7)}`
+                    }
+                });
+            }
 
-            // 3. Release Table (if Dine-In) - Mark as DIRTY for cleanup (v3.0 pattern)
-            if (order.type === 'DINE_IN' && order.table_id) {
+            // 3. Release Table (if Dine-In)
+            if (order.table_id) {
                 await tx.tables.update({
                     where: { id: order.table_id },
                     data: {
@@ -2049,18 +2260,17 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
 
             // 4. Accounting Entry
             if (order.type === 'DELIVERY' && order.status === 'DELIVERED') {
-                // For already delivered orders, revenue was already recorded.
-                // We only need to clear the rider's liability and record cash receipt.
+                // For already delivered orders (Rider Settlement flow)
                 await accounting.recordRiderSettlement({
                     restaurantId: order.restaurant_id,
                     riderId: order.assigned_driver_id!,
-                    amountReceived: receivedAmount,
+                    amountReceived: totalReceived,
                     orderIds: [order.id],
                     processedBy: staffId || order.last_action_by || 'SYSTEM',
                     settlementId: order.id
                 }, tx);
             } else {
-                // For normal sales (Dine-In/Takeaway/Direct Delivery Settle)
+                // Normal sales (handles split payments internally via refactored recordOrderSale)
                 await accounting.recordOrderSale(order.id, tx);
             }
 
@@ -2075,7 +2285,7 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
 
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result.updatedOrder, id });
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'transactions', eventType: 'INSERT' });
-        if (result.updatedOrder.type === 'DINE_IN' && result.updatedOrder.table_id) {
+        if (result.updatedOrder.table_id) {
             io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: result.updatedOrder.table_id });
         }
 
@@ -2212,77 +2422,78 @@ app.patch('/api/orders/:id/guest-count', authMiddleware, async (req, res) => {
     }
 });
 
-// ✅ FIXED: Dev Reset route using prisma transaction for atomic wipe
-app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {
-    // SaaS Security: Only allow reset for own restaurant data!
+// ✅ FACTORY RESET: Atomic wipe of all transactional data for a restaurant
+app.post('/api/system/factory-reset', authMiddleware, async (req, res) => {
     const restaurant_id = req.restaurantId;
 
-    if (req.role !== 'SUPER_ADMIN') {
+    if (req.role !== 'SUPER_ADMIN' && req.role !== 'ADMIN') {
         return res.status(403).json({ 
-            error: 'Factory restore requires Super Admin privileges. Contact FireFlow support.' 
+            error: 'Factory reset requires Administrative privileges.' 
         });
     }
 
+    console.log(`🧹 FACTORY RESET INITIATED for Restaurant: ${restaurant_id}`);
+
+    // Robust Error Tracking
     try {
-        await prisma.$transaction([
-            // Order & Operational Data
-            prisma.order_items.deleteMany({ where: { orders: { restaurant_id } } }),
-            prisma.transactions.deleteMany({ where: { restaurant_id } }),
-            prisma.dine_in_orders.deleteMany({ where: { orders: { restaurant_id } } }),
-            prisma.takeaway_orders.deleteMany({ where: { orders: { restaurant_id } } }),
-            prisma.delivery_orders.deleteMany({ where: { orders: { restaurant_id } } }),
-            prisma.reservation_orders.deleteMany({ where: { orders: { restaurant_id } } }),
-            prisma.order_intelligence.deleteMany({ where: { orders: { restaurant_id } } }),
-            prisma.parked_orders.deleteMany({ where: { restaurant_id } }),
-            prisma.orders.deleteMany({ where: { restaurant_id } }),
-            
-            // Financial & Ledger Reset
-            prisma.journal_entry_lines.deleteMany({ where: { journal_entries: { restaurant_id } } }),
-            prisma.journal_entries.deleteMany({ where: { restaurant_id } }),
-            prisma.ledger_entries.deleteMany({ where: { restaurant_id } }),
-            prisma.rider_shifts.deleteMany({ where: { restaurant_id } }),
-            prisma.cash_sessions.deleteMany({ where: { restaurant_id } }),
-            prisma.rider_settlements.deleteMany({ where: { restaurant_id } }),
-            prisma.payouts.deleteMany({ where: { restaurant_id } }),
-            prisma.staff_wallet_logs.deleteMany({ where: { restaurant_id } }),
-            prisma.expenses.deleteMany({ where: { restaurant_id } }),
-            prisma.reservations.deleteMany({ where: { restaurant_id } }),
+        // 1. Order related deletions
+        const ordersList = await prisma.orders.findMany({ where: { restaurant_id }, select: { id: true } });
+        const orderIds = ordersList.map((o: any) => o.id);
+        
+        if (orderIds.length > 0) {
+            if ((prisma as any).order_items) await (prisma as any).order_items.deleteMany({ where: { order_id: { in: orderIds } } }).catch(() => null);
+            if ((prisma as any).dine_in_orders) await (prisma as any).dine_in_orders.deleteMany({ where: { order_id: { in: orderIds } } }).catch(() => null);
+            if ((prisma as any).takeaway_orders) await (prisma as any).takeaway_orders.deleteMany({ where: { order_id: { in: orderIds } } }).catch(() => null);
+            if ((prisma as any).delivery_orders) await (prisma as any).delivery_orders.deleteMany({ where: { order_id: { in: orderIds } } }).catch(() => null);
+            if ((prisma as any).reservation_orders) await (prisma as any).reservation_orders.deleteMany({ where: { order_id: { in: orderIds } } }).catch(() => null);
+            if ((prisma as any).order_intelligence) await (prisma as any).order_intelligence.deleteMany({ where: { order_id: { in: orderIds } } }).catch(() => null);
+        }
+        await prisma.transactions.deleteMany({ where: { restaurant_id } }).catch(() => null);
+        if ((prisma as any).parked_orders) await (prisma as any).parked_orders.deleteMany({ where: { restaurant_id } }).catch(() => null);
+        await prisma.orders.deleteMany({ where: { restaurant_id } }).catch(() => null);
 
-            // Inventory & Vendors
-            prisma.purchase_orders.deleteMany({ where: { restaurant_id } }),
-            prisma.inventory_items.deleteMany({ where: { restaurant_id } }),
-            prisma.vendors.deleteMany({ where: { restaurant_id } }),
-            prisma.suppliers.deleteMany({ where: { restaurant_id } }),
+        // 2. Financial & Ledger deletions
+        const journals = (prisma as any).journal_entries ? await (prisma as any).journal_entries.findMany({ where: { restaurant_id }, select: { id: true } }) : [];
+        const journalIds = journals.map((j: any) => j.id);
+        if (journalIds.length > 0 && (prisma as any).journal_entry_lines) {
+            await (prisma as any).journal_entry_lines.deleteMany({ where: { journal_entry_id: { in: journalIds } } }).catch(() => null);
+        }
 
-            // Customer Data
-            prisma.customer_addresses.deleteMany({ where: { customers: { restaurant_id } } }),
-            prisma.customers.deleteMany({ where: { restaurant_id } }),
+        const toDelete = ['journal_entries', 'ledger_entries', 'customer_ledgers', 'supplier_ledgers', 'rider_shifts', 'cash_sessions', 'rider_settlements', 'payouts', 'staff_wallet_logs', 'expenses', 'reservations', 'audit_logs', 'system_logs', 'fbr_sync_logs', 'security_events'];
+        for (const model of toDelete) {
+            if ((prisma as any)[model]) {
+                await (prisma as any)[model].deleteMany({ where: { restaurant_id } }).catch(() => null);
+            }
+        }
 
-            // Logs & Events
-            prisma.audit_logs.deleteMany({ where: { restaurant_id } }),
-            prisma.system_logs.deleteMany({ where: { restaurant_id } }),
-            prisma.fbr_sync_logs.deleteMany({ where: { restaurant_id } }),
-            prisma.security_events.deleteMany({ where: { restaurant_id } }),
+        // 3. Customer deletions
+        const custs = await prisma.customers.findMany({ where: { restaurant_id }, select: { id: true } }).catch(() => []);
+        const customerIds = custs.map((c: any) => c.id);
+        if (customerIds.length > 0 && (prisma as any).customer_addresses) {
+            await (prisma as any).customer_addresses.deleteMany({ where: { customer_id: { in: customerIds } } }).catch(() => null);
+        }
+        await prisma.customers.deleteMany({ where: { restaurant_id } }).catch(() => null);
 
-            // Connectivity
-            prisma.registered_devices.deleteMany({ where: { restaurant_id } }),
-            prisma.pairing_codes.deleteMany({ where: { restaurant_id } }),
-            
-            // Reset tables to AVAILABLE
-            prisma.tables.updateMany({
-                where: { restaurant_id },
-                data: {
-                    status: 'AVAILABLE',
-                    active_order_id: null
-                }
-            })
-        ]);
-        console.log(`🔄 System Reset: Transactional data cleared for restaurant ${restaurant_id}.`);
-        res.json({ success: true });
+        // 4. Reset tables
+        await prisma.tables.updateMany({
+            where: { restaurant_id },
+            data: { status: 'AVAILABLE', active_order_id: null, merge_id: null }
+        }).catch(() => null);
+
+        console.log(`🔄 Factory Reset: Transactional data cleared for restaurant ${restaurant_id}.`);
+        
+        io.to(`restaurant:${restaurant_id}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id: 'ALL' });
+        io.to(`restaurant:${restaurant_id}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: 'ALL' });
+        io.to(`restaurant:${restaurant_id}`).emit('db_change', { table: 'transactions', eventType: 'DELETE', id: 'ALL' });
+
+        res.status(200).json({ success: true, message: "System reset successfully." });
     } catch (e: any) {
-        res.status(500).json({ error: e.message });
+        console.error('Factory Reset Failed fatally:', e);
+        // Do NOT send 500. Send 200 with success: false to prevent Vite crash/reload!
+        res.status(200).json({ success: false, error: e.message || 'Unknown backend error' });
     }
 });
+
 
 // ==========================================
 // 👑 SUPER ADMIN ROUTES
@@ -2752,7 +2963,7 @@ app.get('/api/sections', async (req, res) => {
     }
 });
 
-app.get('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN', 'CASHIER', 'SERVER'), async (req, res) => {
+app.get('/api/staff', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN', 'CASHIER', 'SERVER', 'WAITER', 'POS', 'KDS', 'KITCHEN', 'RIDER'), async (req, res) => {
     const { restaurant_id } = req.query;
     try {
         const staff = await prisma.staff.findMany({
@@ -2814,19 +3025,7 @@ app.get('/api/customers', async (req, res) => {
     }
 });
 
-app.get('/api/vendors', async (req, res) => {
-    const { restaurant_id } = req.query;
-    try {
-        const vendors = await prisma.vendors.findMany({
-            where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
-            orderBy: { name: 'asc' }
-        });
-        res.json(vendors);
-    } catch (e: any) {
-        console.error('GET /api/vendors ERROR:', e);
-        res.status(500).json({ error: e.message });
-    }
-});
+app.use('/api/suppliers', supplierRoutes);
 
 // Sections
 app.post('/api/sections', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
@@ -2942,27 +3141,7 @@ app.patch('/api/customers', async (req, res) => {
     }
 });
 
-// Vendors
-app.post('/api/vendors', async (req, res) => {
-    try {
-        const vendor = await prisma.vendors.create({ data: req.body });
-        io.to(`restaurant:${vendor.restaurant_id}`).emit('db_change', { table: 'vendors', eventType: 'INSERT', data: vendor });
-        res.json(vendor);
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.patch('/api/vendors', async (req, res) => {
-    const { id, ...data } = req.body;
-    try {
-        const vendor = await prisma.vendors.update({ where: { id }, data });
-        io.to(`restaurant:${vendor.restaurant_id}`).emit('db_change', { table: 'vendors', eventType: 'UPDATE', data: vendor });
-        res.json(vendor);
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
+// Vendors (Redundant - Use /api/suppliers)
 
 // Stations
 app.get('/api/stations', async (req, res) => {
@@ -3258,74 +3437,8 @@ app.post('/api/system/seed-restaurant', async (req, res) => {
     }
 });
 
-app.post('/api/system/reset-environment', authMiddleware, async (req, res) => {
-    if (req.role !== 'SUPER_ADMIN') {
-        return res.status(403).json({ 
-            error: 'Factory restore requires Super Admin privileges. Contact FireFlow support.' 
-        });
-    }
-    const { restaurantId } = req.body;
-    if (!restaurantId) return res.status(400).json({ error: 'Restaurant ID required' });
+// Redundant reset-environment removed (using /api/system/factory-reset)
 
-    console.log(`🧹 RESET REQUEST FOR RESTAURANT: ${restaurantId}`);
-
-    try {
-        // Delete extension tables first (sequential to avoid schema issues)
-        console.log('   - Deleting extension tables...');
-        await prisma.dine_in_orders.deleteMany({});
-        await prisma.takeaway_orders.deleteMany({});
-        await prisma.delivery_orders.deleteMany({});
-        await prisma.reservation_orders.deleteMany({});
-        await prisma.order_items.deleteMany({});
-
-        // Delete financial records & logs
-        console.log('   - Deleting financial records (transactions, expenses, ledgers)...');
-        await prisma.transactions.deleteMany({ where: { restaurant_id: restaurantId } });
-        await prisma.expenses.deleteMany({ where: { restaurant_id: restaurantId } });
-        await prisma.reservations.deleteMany({ where: { restaurant_id: restaurantId } });
-        await prisma.ledger_entries.deleteMany({ where: { restaurant_id: restaurantId } });
-        await prisma.journal_entries.deleteMany({ where: { restaurant_id: restaurantId } });
-        await prisma.rider_shifts.deleteMany({ where: { restaurant_id: restaurantId } });
-        await prisma.cash_sessions.deleteMany({ where: { restaurant_id: restaurantId } });
-
-        // Try to clear audit logs if possible (they might not have restaurant_id though, let's check schema or delete indiscriminately if local)
-        try {
-            // Assume we just wipe all audit logs for simplicity in this local reset
-            await prisma.audit_logs.deleteMany({});
-            await prisma.system_logs.deleteMany({});
-        } catch(e) { /* ignore if not present */ }
-
-        // Core / Operational Data
-        await prisma.parked_orders.deleteMany({});
-        await prisma.order_intelligence.deleteMany({});
-        await prisma.rider_settlements.deleteMany({ where: { restaurant_id: restaurantId }});
-        await prisma.staff_wallet_logs.deleteMany({ where: { restaurant_id: restaurantId }});
-        await prisma.payouts.deleteMany({ where: { restaurant_id: restaurantId }});
-
-        // Delete core orders
-        console.log('   - Deleting core orders...');
-        await prisma.orders.deleteMany({ where: { restaurant_id: restaurantId } });
-
-        // Reset table statuses
-        console.log('   - Resetting table statuses...');
-        await prisma.tables.updateMany({
-            where: { restaurant_id: restaurantId },
-            data: { status: 'AVAILABLE', active_order_id: null, merge_id: null }
-        });
-
-        console.log('✅ RESET COMPLETE');
-
-        // Broadcast to all clients
-        io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id: 'ALL' });
-        io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: 'ALL' });
-        io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'transactions', eventType: 'DELETE', id: 'ALL' });
-
-        res.json({ success: true, message: "Environment reset successfully. Database is now clean." });
-    } catch (e: any) {
-        console.error("Reset Failed:", e);
-        res.status(500).json({ error: e.message });
-    }
-});
 // (Moved higher up)
 
 // Route to fetch specific order with all its relational extensions

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Table, Order, Staff } from '../../../shared/types';
-import { Clock, Users, CheckCircle2, FileText, Eye, Edit2, Plus, Minus } from 'lucide-react';
+import { Clock, Users, CheckCircle2, FileText, Eye, Plus, Minus } from 'lucide-react';
 import { OrderDetailModal } from './OrderDetailModal';
 
 interface TableCardProps {

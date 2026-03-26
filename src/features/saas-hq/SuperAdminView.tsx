@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Building2, Users, CreditCard, Zap, Search, Trash2,
   CheckCircle2, XCircle, Banknote, Loader2,
-  Copy, Shield, ChevronRight,
+  Copy, Shield,
   ExternalLink
 } from 'lucide-react';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
@@ -39,7 +39,11 @@ const PLAN_COSTS = {
 // SUPER ADMIN VIEW
 // ==========================================
 
-export const SuperAdminView: React.FC = () => {
+interface SuperAdminViewProps {
+  onEnterRestaurant?: (restaurantId: string, restaurantName: string) => void;
+}
+
+export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestaurant }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'restaurants' | 'payments' | 'licenses'>('overview');
   const [restaurants, setRestaurants] = useState<RestaurantWithOwner[]>([]);
   const [loading, setLoading] = useState(true);
@@ -198,9 +202,9 @@ export const SuperAdminView: React.FC = () => {
   };
 
   const handleManageRestaurant = (r: RestaurantWithOwner) => {
-    // In a full implementation, this could open a shell to that restaurant
-    // For now, let's show an insight summary
-    alert(`Establishing Secure Management Link to ${r.name}...\nLocation: ${r.city}\nActive Orders: ${r.orderCount}\nPlan: ${r.subscription_plan}`);
+    if (onEnterRestaurant) {
+      onEnterRestaurant(r.id, r.name);
+    }
   };
 
   const filteredRestaurants = restaurants.filter(r =>
@@ -340,9 +344,10 @@ export const SuperAdminView: React.FC = () => {
                     </button>
                     <button
                       onClick={() => handleManageRestaurant(r)}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-bold flex items-center gap-2 transition-all"
+                      className="px-4 py-2 bg-gold-500 hover:bg-gold-600 text-black rounded-lg text-sm font-black flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(234,179,8,0.2)] hover:shadow-[0_0_20px_rgba(234,179,8,0.35)]"
+                      title="Enter restaurant mode — access full POS, Settings & Factory Reset"
                     >
-                      Manage <ChevronRight size={16} />
+                      Enter <ExternalLink size={14} />
                     </button>
                   </div>
                 </div>

@@ -55,8 +55,8 @@ ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "status_new" "OrderStatus_new";
 
 UPDATE "orders"
 SET "status_new" = CASE
-    WHEN "status" IN ('DRAFT', 'CONFIRMED', 'PREPARING', 'FIRED') THEN 'ACTIVE'::"OrderStatus_new"
-    WHEN "status" IN ('READY', 'SERVED', 'BILL_REQUESTED') THEN 'READY'::"OrderStatus_new"
+    WHEN "status"::text IN ('DRAFT', 'CONFIRMED', 'PREPARING', 'FIRED') THEN 'ACTIVE'::"OrderStatus_new"
+    WHEN "status"::text IN ('READY', 'SERVED', 'BILL_REQUESTED') THEN 'READY'::"OrderStatus_new"
     WHEN "status" = 'COMPLETED' THEN 'CLOSED'::"OrderStatus_new"
     WHEN "status" = 'CANCELLED' THEN 'CANCELLED'::"OrderStatus_new"
     WHEN "status" = 'VOIDED' THEN 'VOIDED'::"OrderStatus_new"
@@ -68,10 +68,10 @@ ALTER TABLE "order_items" ADD COLUMN IF NOT EXISTS "item_status_new" "ItemStatus
 
 UPDATE "order_items"
 SET "item_status_new" = CASE
-    WHEN "item_status" IN ('PENDING', 'DRAFT', 'FIRED') THEN 'PENDING'::"ItemStatus_new"
-    WHEN "item_status" = 'PREPARING' THEN 'PREPARING'::"ItemStatus_new"
-    WHEN "item_status" IN ('READY', 'DONE') THEN 'DONE'::"ItemStatus_new"
-    WHEN "item_status" = 'SERVED' THEN 'SERVED'::"ItemStatus_new"
+    WHEN "item_status"::text IN ('PENDING', 'DRAFT', 'FIRED') THEN 'PENDING'::"ItemStatus_new"
+    WHEN "item_status"::text = 'PREPARING' THEN 'PREPARING'::"ItemStatus_new"
+    WHEN "item_status"::text IN ('READY', 'DONE') THEN 'DONE'::"ItemStatus_new"
+    WHEN "item_status"::text = 'SERVED' THEN 'SERVED'::"ItemStatus_new"
     ELSE 'PENDING'::"ItemStatus_new"
 END;
 

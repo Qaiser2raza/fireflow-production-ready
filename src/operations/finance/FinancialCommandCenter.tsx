@@ -20,16 +20,18 @@ import {
     Banknote,
     Eye,
     Printer,
-    ExternalLink,
-    Bike
+    Bike,
+    FileEdit
 } from 'lucide-react';
 import { useAppContext as useApp } from '../../client/contexts/AppContext';
 import { ZReportModal } from '../../shared/components/ZReportModal';
 import { ChartOfAccountsModal } from './components/ChartOfAccountsModal';
+import { TrialBalanceModal } from './components/TrialBalanceModal';
+import { ManualJournalEntryModal } from './components/ManualJournalEntryModal';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const FinancialCommandCenter: React.FC = () => {
-    const { currentUser, activeSession, setActiveSession, drivers } = useApp();
+    const { currentUser, activeSession, setActiveSession, drivers, suppliers } = useApp();
     const restaurantId = currentUser?.restaurant_id;
     const staffId = currentUser?.id;
 
@@ -42,6 +44,8 @@ const FinancialCommandCenter: React.FC = () => {
     const [ledger, setLedger] = useState<any[]>([]);
     const [metrics, setMetrics] = useState<any>({});
     const [loading, setLoading] = useState(true);
+    const [coaAccounts, setCoaAccounts] = useState<any[]>([]);
+    const [ledgerAccountFilter, setLedgerAccountFilter] = useState<string>('');
     const [showPayoutModal, setShowPayoutModal] = useState(false);
     const [showOpenModal, setShowOpenModal] = useState(false);
     const [showCloseModal, setShowCloseModal] = useState(false);
@@ -49,7 +53,7 @@ const FinancialCommandCenter: React.FC = () => {
     const [showCOAModal, setShowCOAModal] = useState(false);
     const [activeReport, setActiveReport] = useState<any>(null);
     const [openingAmount, setOpeningAmount] = useState('');
-    const [payoutData, setPayoutData] = useState({ amount: '', category: 'EXPENSE', notes: '' });
+    const [payoutData, setPayoutData] = useState({ amount: '', category: 'EXPENSE', notes: '', supplierId: '' });
     const [actualCount, setActualCount] = useState('');
     const [productMix, setProductMix] = useState<any[]>([]);
     const [velocity, setVelocity] = useState<any[]>([]);
@@ -59,6 +63,8 @@ const FinancialCommandCenter: React.FC = () => {
     const [reportData, setReportData] = useState<any>(null);
     const [reportLoading, setReportLoading] = useState(false);
     const [selectedRiderId, setSelectedRiderId] = useState<string>('');
+    const [showTrialBalanceModal, setShowTrialBalanceModal] = useState(false);
+    const [showManualJournalModal, setShowManualJournalModal] = useState(false);
 
     const fetchSession = async () => {
         try {
@@ -66,7 +72,31 @@ const FinancialCommandCenter: React.FC = () => {
             const res = await fetchWithAuth(`${apiBase}/accounting/session?date=${selectedDate}`);
             const data = await res.json();
             
-            if (data.success && data.session) {
+            if (data.success && data.sessions && data.sessions.length > 0) {
+                // If there are multiple sessions, aggregate the metrics for the whole day view.
+                // We'll keep activeSession as the FIRST open one (or the latest) so Z-Report button targets that one.
+                const openSession = data.sessions.find((s: any) => s.status === 'OPEN') || data.sessions[data.sessions.length - 1];
+                setActiveSession(openSession);
+
+                const aggregatedMetrics = data.sessions.reduce((acc: any, s: any) => {
+                    const m = s.metrics || {};
+                    return {
+                        expectedCash: Number(acc.expectedCash || 0) + Number(m.expectedCash || 0),
+                        totalRevenue: Number(acc.totalRevenue || 0) + Number(m.totalRevenue || 0),
+                        payouts: Number(acc.payouts || 0) + Number(m.payouts || 0),
+                        cashSales: Number(acc.cashSales || 0) + Number(m.cashSales || 0),
+                        settlements: Number(acc.settlements || 0) + Number(m.settlements || 0),
+                        orderCount: Number(acc.orderCount || 0) + Number(m.orderCount || 0)
+                    };
+                }, {});
+
+                setMetrics(aggregatedMetrics);
+                setStats({
+                    expectedCash: aggregatedMetrics.expectedCash,
+                    todaySales: aggregatedMetrics.totalRevenue,
+                    totalPayouts: aggregatedMetrics.payouts
+                });
+            } else if (data.success && data.session) {
                 setActiveSession(data.session);
                 setMetrics(data.session.metrics || {});
                 setStats({
@@ -87,10 +117,12 @@ const FinancialCommandCenter: React.FC = () => {
         }
     };
 
-    const fetchLedger = async () => {
+    const fetchLedger = async (accountId?: string) => {
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
-            const res = await fetchWithAuth(`${apiBase}/accounting/ledger?limit=50&date=${selectedDate}`);
+            const acctParam = accountId || ledgerAccountFilter;
+            const url = `${apiBase}/accounting/ledger?limit=100&date=${selectedDate}${acctParam ? `&accountId=${acctParam}` : ''}`;
+            const res = await fetchWithAuth(url);
             const data = await res.json();
             if (data.success) {
                 setLedger(data.entries);
@@ -103,12 +135,20 @@ const FinancialCommandCenter: React.FC = () => {
         }
     };
 
+    const fetchCOA = async () => {
+        try {
+            const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
+            const res = await fetchWithAuth(`${apiBase}/accounting/coa`);
+            if (res.ok) setCoaAccounts(await res.json());
+        } catch { /* silent */ }
+    };
+
     const fetchIntelligence = async () => {
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
             const [velocityRes, productRes] = await Promise.all([
-                fetchWithAuth(`${apiBase}/reports/velocity?start=${new Date(selectedDate).toISOString()}&end=${new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString()}`),
-                fetchWithAuth(`${apiBase}/reports/product-mix?start=${new Date(selectedDate).toISOString()}&end=${new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString()}`)
+                fetchWithAuth(`${apiBase}/reports/velocity?start=${new Date(selectedDate).toISOString()}&end=${new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString()}&format=json`),
+                fetchWithAuth(`${apiBase}/reports/product-mix?start=${new Date(selectedDate).toISOString()}&end=${new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString()}&format=json`)
             ]);
             
             const velocityData = await velocityRes.json();
@@ -148,9 +188,14 @@ const FinancialCommandCenter: React.FC = () => {
 
     useEffect(() => {
         setLoading(true);
-        Promise.all([fetchSession(), fetchLedger(), fetchIntelligence()])
+        Promise.all([fetchSession(), fetchLedger(), fetchIntelligence(), fetchCOA()])
             .finally(() => setLoading(false));
     }, [selectedDate, restaurantId]);
+
+    // Re-fetch ledger whenever account filter changes
+    useEffect(() => {
+        fetchLedger(ledgerAccountFilter);
+    }, [ledgerAccountFilter]);
 
 
     const handleOpenSession = async () => {
@@ -186,6 +231,7 @@ const FinancialCommandCenter: React.FC = () => {
                     amount: Number(payoutData.amount),
                     category: payoutData.category,
                     notes: payoutData.notes,
+                    supplierId: payoutData.category === 'SUPPLIER' ? payoutData.supplierId : undefined,
                     sessionId: activeSession?.id // Ensure session ID is passed
                 })
             });
@@ -194,7 +240,7 @@ const FinancialCommandCenter: React.FC = () => {
                 fetchSession();
                 fetchLedger(); // Refresh ledger after payout
                 setShowPayoutModal(false);
-                setPayoutData({ amount: '', category: 'EXPENSE', notes: '' });
+                setPayoutData({ amount: '', category: 'EXPENSE', notes: '', supplierId: '' });
             }
         } catch (error) {
             console.error('Payout error:', error);
@@ -259,6 +305,37 @@ const FinancialCommandCenter: React.FC = () => {
         }
     };
 
+    const handlePrintLedger = () => {
+        const dateLabel = selectedDate || new Date().toLocaleDateString();
+        const rows = ledger.map((e: any) => `
+            <tr>
+                <td>${e.created_at ? new Date(e.created_at).toLocaleTimeString() : '—'}</td>
+                <td>${e.reference_type || ''}</td>
+                <td>${(e.description || e.account_name || 'Cash Drawer').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+                <td style="color:${e.transaction_type==='DEBIT'?'#166534':'#991b1b'}">${e.transaction_type}</td>
+                <td class="amt">${e.transaction_type==='DEBIT' ? 'Rs. '+Number(e.amount).toLocaleString() : ''}</td>
+                <td class="amt">${e.transaction_type==='CREDIT' ? 'Rs. '+Number(e.amount).toLocaleString() : ''}</td>
+            </tr>`).join('');
+
+        const html = `<!DOCTYPE html><html><head><title>General Ledger — ${dateLabel}</title>
+        <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;font-size:10px;color:#000;padding:20px}
+        h1{font-size:16px;font-weight:900;margin-bottom:2px}p{font-size:9px;color:#555;margin-bottom:16px}
+        table{width:100%;border-collapse:collapse}th{background:#000;color:#fff;font-size:9px;text-transform:uppercase;letter-spacing:.08em;padding:6px 8px;text-align:left}
+        td{padding:5px 8px;border-bottom:1px solid #e5e7eb;font-size:9px;vertical-align:middle}
+        tr:nth-child(even){background:#f9fafb}.amt{text-align:right;font-family:monospace}
+        @media print{body{padding:10px}}</style></head>
+        <body><h1>General Ledger — ${dateLabel}</h1>
+        <p>Printed by Fireflow POS &bull; ${new Date().toLocaleString()}</p>
+        <table><thead><tr><th>Time</th><th>Ref</th><th>Description</th><th>Type</th><th class="amt">Debit (Dr)</th><th class="amt">Credit (Cr)</th></tr></thead>
+        <tbody>${rows}</tbody></table></body></html>`;
+
+        const w = window.open('', '_blank', 'width=900,height=700');
+        if (!w) return;
+        w.document.write(html);
+        w.document.close();
+        w.print();
+    };
+
     if (loading) return <div className="p-8 text-slate-500 animate-pulse font-mono uppercase tracking-widest text-xs">Initializing Ledger...</div>;
 
     return (
@@ -310,6 +387,18 @@ const FinancialCommandCenter: React.FC = () => {
                 </div>
 
                 <div className="flex gap-4">
+                    <button
+                        onClick={() => setShowManualJournalModal(true)}
+                        className="px-5 py-3 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-600/20 hover:text-indigo-300 transition-all flex items-center gap-2"
+                    >
+                        <FileEdit size={16} strokeWidth={3} /> Post Journal
+                    </button>
+                    <button
+                        onClick={() => setShowTrialBalanceModal(true)}
+                        className="px-5 py-3 bg-slate-900 border border-slate-800 text-blue-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:border-blue-500/50 hover:text-blue-300 transition-all flex items-center gap-2"
+                    >
+                        <FileText size={16} strokeWidth={3} /> Trial Balance
+                    </button>
                     <button
                         onClick={handleViewHistory}
                         className="px-5 py-3 bg-slate-900 border border-slate-800 text-slate-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:border-slate-600 hover:text-white transition-all flex items-center gap-2"
@@ -388,8 +477,19 @@ const FinancialCommandCenter: React.FC = () => {
                     <div className="flex items-center gap-3">
                         <History className="text-white" size={20} />
                         <h2 className="text-sm font-black text-white uppercase tracking-widest">Real-time General Ledger</h2>
+                        {/* Account Filter */}
+                        <select
+                            value={ledgerAccountFilter}
+                            onChange={e => setLedgerAccountFilter(e.target.value)}
+                            className="ml-4 bg-slate-900 border border-slate-700 text-white text-[10px] font-bold uppercase rounded-xl px-3 py-2 outline-none focus:border-indigo-500 transition-all"
+                        >
+                            <option value="">All Accounts</option>
+                            {coaAccounts.map((a: any) => (
+                                <option key={a.id} value={a.id}>{a.code} – {a.name}</option>
+                            ))}
+                        </select>
                     </div>
-                    <div className="flex gap-4">
+                    <div className="flex gap-4 items-center">
                         <button
                             onClick={() => setShowCOAModal(true)}
                             className="text-[10px] font-black text-emerald-400 uppercase tracking-widest hover:text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg bg-emerald-500/10"
@@ -397,10 +497,17 @@ const FinancialCommandCenter: React.FC = () => {
                             Configure COA
                         </button>
                         <button
+                            onClick={handlePrintLedger}
+                            className="flex items-center gap-1.5 text-[10px] font-black text-slate-300 uppercase tracking-widest hover:text-white border border-slate-700 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 transition-all"
+                            title="Print Ledger (LaserJet A4)"
+                        >
+                            <Printer size={12} strokeWidth={3} /> Print Ledger
+                        </button>
+                        <button
                             onClick={() => window.open(window.location.origin + `/api/accounting/ledger/export?token=${sessionStorage.getItem('accessToken')}&date=${selectedDate}`, '_blank')}
                             className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 px-3 py-1.5"
                         >
-                            Export Journal (CSV)
+                            Export CSV
                         </button>
                     </div>
                 </div>
@@ -409,40 +516,46 @@ const FinancialCommandCenter: React.FC = () => {
                     <table className="w-full text-left">
                         <thead>
                             <tr className="text-[10px] font-black uppercase text-slate-500 border-b border-slate-800/50">
-                                <th className="px-4 py-3">Timestamp</th>
+                                <th className="px-4 py-3">Time</th>
                                 <th className="px-4 py-3">Reference</th>
-                                <th className="px-4 py-3">Account / Entity</th>
+                                <th className="px-4 py-3">Description</th>
                                 <th className="px-4 py-3">Nature</th>
-                                <th className="px-4 py-3 text-right">Debit</th>
-                                <th className="px-4 py-3 text-right">Credit</th>
+                                <th className="px-4 py-3 text-right">Debit (Dr)</th>
+                                <th className="px-4 py-3 text-right">Credit (Cr)</th>
                             </tr>
                         </thead>
                         <tbody className="text-xs font-mono">
                             {ledger.map((entry: any) => (
                                 <tr key={entry.id} className={`border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors ${entry.transaction_type === 'CREDIT' && entry.reference_type === 'PAYOUT' ? 'bg-red-500/5' : ''}`}>
-                                    <td className="px-4 py-4 text-slate-500">
-                                        {new Date(entry.created_at).toLocaleTimeString()}
+                                    <td className="px-4 py-3 text-slate-500 text-[10px]">
+                                        {entry.created_at ? new Date(entry.created_at).toLocaleTimeString() : '—'}
                                     </td>
-                                    <td className="px-4 py-4 font-bold text-white">
-                                        {entry.reference_type}
+                                    <td className="px-4 py-3">
+                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{entry.reference_type}</span>
                                     </td>
-                                    <td className="px-4 py-4 text-slate-400">
-                                        {entry.account_id ? 'Wait Staff / Rider' : 'Cash Drawer'}
+                                    <td className="px-4 py-3 text-slate-400 max-w-[220px] truncate">
+                                        {entry.description || (entry.account_name ? `${entry.account_name}` : 'Cash Drawer')}
                                     </td>
-                                    <td className={`px-4 py-4 font-black uppercase ${entry.transaction_type === 'DEBIT' ? 'text-emerald-500' : 'text-red-500'}`}>
+                                    <td className={`px-4 py-3 font-black uppercase text-[10px] ${entry.transaction_type === 'DEBIT' ? 'text-emerald-500' : 'text-rose-500'}`}>
                                         {entry.transaction_type}
                                     </td>
-                                    <td className="px-4 py-4 text-right text-emerald-400">
-                                        {entry.transaction_type === 'DEBIT' ? `Rs. ${Number(entry.amount).toLocaleString()}` : '--'}
+                                    <td className="px-4 py-3 text-right text-emerald-400">
+                                        {(entry.debit > 0 || entry.transaction_type === 'DEBIT')
+                                            ? `Rs. ${Number(entry.debit || entry.amount || 0).toLocaleString()}`
+                                            : <span className="text-slate-700">—</span>}
                                     </td>
-                                    <td className="px-4 py-4 text-right text-red-400">
-                                        {entry.transaction_type === 'CREDIT' ? `(Rs. ${Number(entry.amount).toLocaleString()})` : '--'}
+                                    <td className="px-4 py-3 text-right text-rose-400">
+                                        {(entry.credit > 0 || entry.transaction_type === 'CREDIT')
+                                            ? `(Rs. ${Number(entry.credit || entry.amount || 0).toLocaleString()})`
+                                            : <span className="text-slate-700">—</span>}
                                     </td>
                                 </tr>
                             ))}
                             {ledger.length === 0 && (
                                 <tr>
-                                    <td colSpan={6} className="text-center py-8 text-slate-600 italic">No transactions recorded yet.</td>
+                                    <td colSpan={6} className="text-center py-10 text-slate-600 italic">
+                                        {ledgerAccountFilter ? 'No journal entries for this account on the selected date.' : 'No transactions recorded yet.'}
+                                    </td>
                                 </tr>
                             )}
                         </tbody>
@@ -600,6 +713,21 @@ const FinancialCommandCenter: React.FC = () => {
                                     <option value="WITHDRAWAL">Owner Withdrawal</option>
                                 </select>
                             </div>
+                            {payoutData.category === 'SUPPLIER' && (
+                                <div className="animate-in slide-in-from-top-2 duration-300">
+                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Select Supplier</label>
+                                    <select
+                                        value={payoutData.supplierId}
+                                        onChange={(e) => setPayoutData({ ...payoutData, supplierId: e.target.value })}
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-white outline-none focus:border-gold-500 transition-all"
+                                    >
+                                        <option value="">Choose Supplier...</option>
+                                        {suppliers?.map((s: any) => (
+                                            <option key={s.id} value={s.id}>{s.name} (Bal: Rs. {Number(s.balance || 0).toLocaleString()})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                             <div>
                                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Amount (PKR)</label>
                                 <input
@@ -622,8 +750,17 @@ const FinancialCommandCenter: React.FC = () => {
                                 />
                             </div>
                             <div className="flex gap-4 pt-4">
-                                <button onClick={() => setShowPayoutModal(false)} className="flex-1 py-4 bg-slate-800 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-700 transition-all">Cancel</button>
-                                <button onClick={handlePayout} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-500 transition-all shadow-xl shadow-red-600/20">Confirm Payout</button>
+                                <button onClick={() => {
+                                    setShowPayoutModal(false);
+                                    setPayoutData({ amount: '', category: 'EXPENSE', notes: '', supplierId: '' });
+                                }} className="flex-1 py-4 bg-slate-800 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-700 transition-all">Cancel</button>
+                                <button 
+                                    onClick={handlePayout} 
+                                    disabled={payoutData.category === 'SUPPLIER' && !payoutData.supplierId}
+                                    className={`flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-500 transition-all shadow-xl shadow-red-600/20 disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    Confirm Payout
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -676,6 +813,21 @@ const FinancialCommandCenter: React.FC = () => {
 
             {/* COA MODAL */}
             {showCOAModal && <ChartOfAccountsModal onClose={() => setShowCOAModal(false)} />}
+
+            {/* Trial Balance Modal */}
+            {showTrialBalanceModal && <TrialBalanceModal isOpen={showTrialBalanceModal} onClose={() => setShowTrialBalanceModal(false)} />}
+
+            {/* Manual Journal Entry Modal */}
+            {showManualJournalModal && (
+                <ManualJournalEntryModal 
+                    isOpen={showManualJournalModal} 
+                    onClose={() => setShowManualJournalModal(false)} 
+                    onSuccess={() => {
+                        fetchLedger();
+                        fetchCOA();
+                    }}
+                />
+            )}
 
             {/* Report History Modal */}
             {showHistoryModal && (
@@ -820,7 +972,7 @@ const FinancialCommandCenter: React.FC = () => {
                                         </h3>
                                         <div className="space-y-4">
                                             {/* Placeholder for complex rendering - For now, show key-value pairs or simple lists */}
-                                            {renderPreviewContent(previewReport.title, reportData)}
+                                            {renderPreviewContent(reportData)}
                                         </div>
                                     </div>
                                 </div>
@@ -839,7 +991,7 @@ const FinancialCommandCenter: React.FC = () => {
 };
 
 // Helper for Preview Content Rendering
-const renderPreviewContent = (title: string, data: any) => {
+const renderPreviewContent = (data: any) => {
     // Simplified rendering for preview - mostly lists of important metrics
     const items = data.orders || data.breakdown || data.categories || data.waiters || data.tax_breakdown || [];
     

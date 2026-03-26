@@ -249,8 +249,8 @@ export const BusinessProfilePanel: React.FC = () => {
                 <div className="flex items-center gap-3 bg-slate-900/50 p-4 rounded-xl border border-slate-800">
                     <input
                         type="checkbox"
-                        checked={config.is_fbr_registered || false}
-                        onChange={e => setConfig({...config, is_fbr_registered: e.target.checked})}
+                        checked={config.is_fbr_registered || config.fbrEnabled || false}
+                        onChange={e => setConfig({...config, is_fbr_registered: e.target.checked, fbrEnabled: e.target.checked})}
                         className="size-5 accent-gold-500"
                         id="is_fbr_registered"
                     />
@@ -260,15 +260,26 @@ export const BusinessProfilePanel: React.FC = () => {
                     </div>
                 </div>
 
-                {config.is_fbr_registered && (
-                    <div className="mt-4 animate-in slide-in-from-top-2">
-                        <label className={labelClass}>FBR POS Number</label>
-                        <input
-                            value={config.fbr_pos_number || ''}
-                            onChange={e => setConfig({...config, fbr_pos_number: e.target.value})}
-                            className={inputClass}
-                            placeholder="Enter 12-digit POS identifier"
-                        />
+                {(config.is_fbr_registered || config.fbrEnabled) && (
+                    <div className="mt-4 animate-in slide-in-from-top-2 grid grid-cols-2 gap-4">
+                        <div>
+                            <label className={labelClass}>FBR POS Number</label>
+                            <input
+                                value={config.fbr_pos_number || config.fbrPosId || ''}
+                                onChange={e => setConfig({...config, fbr_pos_number: e.target.value, fbrPosId: e.target.value})}
+                                className={inputClass}
+                                placeholder="Enter 12-digit POS identifier"
+                            />
+                        </div>
+                        <div>
+                            <label className={labelClass}>IMS API URL (Optional)</label>
+                            <input
+                                value={config.fbr_ims_url || config.fbrImsUrl || ''}
+                                onChange={e => setConfig({...config, fbr_ims_url: e.target.value, fbrImsUrl: e.target.value})}
+                                className={inputClass}
+                                placeholder="https://ims.fbr.gov.pk/..."
+                            />
+                        </div>
                     </div>
                 )}
             </div>
