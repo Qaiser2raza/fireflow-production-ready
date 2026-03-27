@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../../client/contexts/AppContext';
-import { Plus, Trash2, Edit2, Save, X, Map, Loader2 } from 'lucide-react';
+import { Plus, Save, X, Map, Loader2 } from 'lucide-react';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 
 const API_BASE_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 export const ZonesPanel: React.FC = () => {
-    const { sections, addSection, updateSection, deleteSection, operationsConfig, currentUser, addNotification, fetchInitialData } = useAppContext();
+    const { sections, addSection, operationsConfig, currentUser, addNotification, fetchInitialData } = useAppContext();
     const [isAdding, setIsAdding] = useState(false);
     const [newSectionName, setNewSectionName] = useState('');
     const [newSectionPrefix, setNewSectionPrefix] = useState('T');
@@ -48,11 +48,6 @@ export const ZonesPanel: React.FC = () => {
         }
     };
 
-    // Editing state
-    const [editingId, setEditingId] = useState<string | null>(null);
-    const [editName, setEditName] = useState('');
-    const [editPrefix, setEditPrefix] = useState('');
-
     const handleAdd = async () => {
         if (!newSectionName) return;
         await addSection({ name: newSectionName, prefix: newSectionPrefix, priority: sections.length + 1 });
@@ -61,18 +56,7 @@ export const ZonesPanel: React.FC = () => {
         setNewSectionPrefix('T');
     };
 
-    const startEdit = (section: any) => {
-        setEditingId(section.id);
-        setEditName(section.name);
-        setEditPrefix(section.prefix || 'T');
-    };
 
-    const saveEdit = async () => {
-        if (editingId) {
-            await updateSection({ id: editingId, name: editName, prefix: editPrefix });
-            setEditingId(null);
-        }
-    };
 
     return (
         <div className="text-slate-200">

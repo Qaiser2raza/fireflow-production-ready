@@ -3,12 +3,11 @@ import {
     TrendingUp, 
     TrendingDown, 
     Scale, 
-    Download,
     Calendar,
     ArrowRight
 } from 'lucide-react';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
-import { Button } from '../../../shared/ui/Button';
+
 import { Card } from '../../../shared/ui/Card';
 
 export const FinancialReportsView: React.FC = () => {

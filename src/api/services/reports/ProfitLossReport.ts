@@ -2,7 +2,7 @@ import { prisma } from '../../../shared/lib/prisma';
 import { Decimal } from '@prisma/client/runtime/library';
 
 export async function getProfitLossReport(restaurantId: string, range: { start: Date; end: Date }) {
-    const lines = await prisma.journal_lines.findMany({
+    const lines = await prisma.journal_entry_lines.findMany({
         where: {
             journal_entries: {
                 restaurant_id: restaurantId,
@@ -15,7 +15,7 @@ export async function getProfitLossReport(restaurantId: string, range: { start: 
         include: {
             chart_of_accounts: true
         }
-    });
+    }) as any[];
 
     const revenue = lines.filter(l => l.chart_of_accounts.code.startsWith('4'));
     const expenses = lines.filter(l => l.chart_of_accounts.code.startsWith('5'));

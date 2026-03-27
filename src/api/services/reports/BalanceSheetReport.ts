@@ -2,7 +2,7 @@ import { prisma } from '../../../shared/lib/prisma';
 import { Decimal } from '@prisma/client/runtime/library';
 
 export async function getBalanceSheetReport(restaurantId: string, asOf: Date) {
-    const lines = await prisma.journal_lines.findMany({
+    const lines = await prisma.journal_entry_lines.findMany({
         where: {
             journal_entries: {
                 restaurant_id: restaurantId,
@@ -14,7 +14,7 @@ export async function getBalanceSheetReport(restaurantId: string, asOf: Date) {
         include: {
             chart_of_accounts: true
         }
-    });
+    }) as any[];
 
     const assets: Record<string, Decimal> = {};
     const liabilities: Record<string, Decimal> = {};

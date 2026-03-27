@@ -4,7 +4,7 @@ import {
     Plus,
     Receipt
 } from 'lucide-react';
-import { apiClient as api } from '../../../shared/lib/apiClient';
+
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { useRestaurant } from '../../../client/RestaurantContext';
 import { useAppContext } from '../../../client/contexts/AppContext';

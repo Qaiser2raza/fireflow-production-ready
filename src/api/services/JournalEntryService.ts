@@ -1051,6 +1051,42 @@ export class JournalEntryService {
             ],
         }, db);
     }
+
+    /**
+     * POST SUPPLIER BILL JOURNAL JOURNAL
+     */
+    async recordSupplierBillJournal(params: {
+        restaurantId: string;
+        supplierId: string;
+        amount: number | Decimal;
+        billId: string;
+        description: string;
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+
+        const [inventoryAcc, payableAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.INVENTORY_ASSET, db),
+            resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
+        ]);
+
+        if (!inventoryAcc || !payableAcc) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'SUPPLIER_BILL',
+            referenceId: params.billId,
+            date: new Date(),
+            description: params.description,
+            processedBy: params.processedBy,
+            lines: [
+                { accountId: inventoryAcc.id, description: 'Inventory received', debit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
+                { accountId: payableAcc.id, description: 'Supplier payable created', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
+            ],
+        }, db);
+    }
 }
 
 export const journalEntryService = new JournalEntryService();

@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { 
-    X, Search, Printer, Edit2, Clock, 
-    Hash, Phone, ShoppingBag, Utensils, Bike, 
-    AlertCircle, SearchIcon, Filter, Calendar
+    X, Printer, Edit2, Clock, 
+    Phone, ShoppingBag, Utensils, Bike, 
+    AlertCircle, SearchIcon, Calendar
 } from 'lucide-react';
 import { Order } from '../../../shared/types';
 import { Button } from '../../../shared/ui/Button';
@@ -28,7 +28,6 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
         return orders
             .filter(o => {
                 // 1. Filter by Active Session ID (Strict Shift Accountability)
-                if (activeSession && o.session_id !== activeSession.id) return false;
                 
                 // 2. Filter by search (Order # or Phone)
                 const searchLower = search.toLowerCase();
@@ -148,7 +147,7 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
 };
 
 const OrderCard: React.FC<{ order: Order, onEdit: () => void, onPrint: () => void }> = ({ order, onEdit, onPrint }) => {
-    const elapsed = Math.floor((Date.now() - new Date(order.created_at || Date.now()).getTime()) / 60000);
+
     
     const getIcon = () => {
         if (order.type === 'DINE_IN') return <Utensils className="w-4 h-4" />;

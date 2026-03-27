@@ -228,7 +228,7 @@ router.get('/z-report/:sessionId', async (req, res) => {
 router.get('/z-reports', async (req, res) => {
     try {
         const { prisma } = await import('../../shared/lib/prisma');
-        const sessions = await prisma.cash_sessions.findMany({
+        const sessions = await prisma.cashier_sessions.findMany({
             where: { restaurant_id: req.restaurantId! },
             orderBy: { opened_at: 'desc' },
             take: 30

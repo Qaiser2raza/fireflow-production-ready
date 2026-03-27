@@ -595,7 +595,7 @@ export class AccountingService {
         staffId: string;
         openingBalance: number | Decimal;
     }) {
-        const existing = await prisma.cash_sessions.findFirst({
+        const existing = await prisma.cashier_sessions.findFirst({
             where: {
                 restaurant_id: data.restaurantId,
                 status: 'OPEN'
@@ -606,18 +606,18 @@ export class AccountingService {
             throw new Error(`Session already open since ${existing.opened_at}`);
         }
 
-        return await prisma.cash_sessions.create({
+        return await prisma.cashier_sessions.create({
             data: {
                 restaurant_id: data.restaurantId,
                 opened_by: data.staffId,
-                opening_balance: new Decimal(data.openingBalance.toString()),
+                opening_float: new Decimal(data.openingBalance.toString()),
                 status: 'OPEN'
             }
         });
     }
 
     async getActiveSession(restaurantId: string) {
-        return await prisma.cash_sessions.findFirst({
+        return await prisma.cashier_sessions.findFirst({
             where: {
                 restaurant_id: restaurantId,
                 status: 'OPEN'
@@ -631,7 +631,7 @@ export class AccountingService {
         actualBalance: number | Decimal;
         notes?: string;
     }) {
-        const session = await prisma.cash_sessions.findUnique({
+        const session = await prisma.cashier_sessions.findUnique({
             where: { id: data.sessionId }
         });
 
@@ -657,17 +657,17 @@ export class AccountingService {
             else movement = movement.minus(amt);
         });
 
-        const expected = new Decimal(session.opening_balance).plus(movement);
+        const expected = new Decimal(session.opening_float).plus(movement);
         const variance = actual.minus(expected);
 
-        return await prisma.cash_sessions.update({
+        return await prisma.cashier_sessions.update({
             where: { id: data.sessionId },
             data: {
                 closed_at: new Date(),
                 closed_by: data.staffId,
-                expected_balance: expected,
-                actual_balance: actual,
-                variance: variance,
+                expected_cash: expected,
+                actual_cash: actual,
+                difference: variance,
                 status: 'CLOSED',
                 notes: data.notes
             }
@@ -728,7 +728,7 @@ export class AccountingService {
             const startOfDay = new Date(new Date(businessDate).setHours(0, 0, 0, 0));
             const endOfDay = new Date(new Date(businessDate).setHours(23, 59, 59, 999));
             
-            session = await prisma.cash_sessions.findFirst({
+            session = await prisma.cashier_sessions.findFirst({
                 where: {
                     restaurant_id: restaurantId,
                     opened_at: { gte: startOfDay, lte: endOfDay }
@@ -777,7 +777,7 @@ export class AccountingService {
             }
         });
 
-        const expectedCash = new Decimal(session.opening_balance)
+        const expectedCash = new Decimal(session.opening_float)
             .plus(cashSales)
             .plus(settlements) // Net settlements (In - Out)
             .minus(payouts);
@@ -788,7 +788,7 @@ export class AccountingService {
         return {
             ...session,
             metrics: {
-                openingBalance: session.opening_balance,
+                openingBalance: session.opening_float,
                 cashSales,
                 payouts,
                 settlements,
@@ -800,13 +800,62 @@ export class AccountingService {
     }
 
     /**
+     * Records a supplier payment.
+     * Debits Accounts Payable (2020), Credits Cash (1000).
+     */
+    async recordSupplierPayment(data: {
+        restaurantId: string;
+        supplierId: string;
+        amount: number | Decimal;
+        notes: string;
+        processedBy: string;
+        referenceId?: string;
+    }, tx?: any): Promise<void> {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // 1. CREDIT: Cash (cash leaves)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'CREDIT',
+            amount: amount,
+            referenceType: 'PAYOUT',
+            referenceId: data.referenceId,
+            description: `Supplier payment: ${data.notes}`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 2. DEBIT: Accounts Payable (liability reduced)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.supplierId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'PAYOUT',
+            referenceId: data.referenceId,
+            description: `Supplier payable reduced: ${data.notes}`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 3. Post supplier ledger entry
+        await this.postSupplierLedger({
+            restaurantId: data.restaurantId,
+            supplierId: data.supplierId,
+            amount: amount,
+            entryType: 'PAYMENT',
+            description: data.notes,
+            processedBy: data.processedBy
+        }, db);
+    }
+
+    /**
      * Retrieves an array of all sessions and their metrics for a given date.
      */
     async getSessionsForDate(restaurantId: string, businessDate: string) {
         const startOfDay = new Date(new Date(businessDate).setHours(0, 0, 0, 0));
         const endOfDay = new Date(new Date(businessDate).setHours(23, 59, 59, 999));
         
-        const sessions = await prisma.cash_sessions.findMany({
+        const sessions = await prisma.cashier_sessions.findMany({
             where: {
                 restaurant_id: restaurantId,
                 opened_at: { gte: startOfDay, lte: endOfDay }
@@ -847,7 +896,7 @@ export class AccountingService {
                 }
             });
 
-            const expectedCash = new Decimal(session.opening_balance)
+            const expectedCash = new Decimal(session.opening_float)
                 .plus(cashSales)
                 .plus(settlements)
                 .minus(payouts);
@@ -857,7 +906,7 @@ export class AccountingService {
             results.push({
                 ...session,
                 metrics: {
-                    openingBalance: session.opening_balance,
+                    opening_float: Number(session.opening_float),
                     cashSales,
                     payouts,
                     settlements,
@@ -945,7 +994,7 @@ export class AccountingService {
      * Full audit-grade report with staff, tax, voids, velocity, and payout breakdown.
      */
     async getZReport(sessionId: string) {
-        const session = await prisma.cash_sessions.findUnique({
+        const session = await prisma.cashier_sessions.findUnique({
             where: { id: sessionId }
         });
 
@@ -1059,11 +1108,13 @@ export class AccountingService {
 
         // --- Cash flow ---
         const cashFlow = {
-            opening_float: session.opening_balance,
-            payouts: new Decimal(0),
-            rider_settlements: new Decimal(0),
-            actual_cash: session.actual_balance || 0,
-            expected_cash: session.expected_balance || 0
+            openingBalance: session.opening_float ? session.opening_float.toNumber() : 0,
+            cashSales: new Decimal(0), // Initialize cashSales here
+            payouts: new Decimal(0), // Initialize payouts here
+            rider_settlements: new Decimal(0), // Initialize rider_settlements here
+            expectedCash: session.expected_cash ? session.expected_cash.toNumber() : 0,
+            actualCash: session.actual_cash ? session.actual_cash.toNumber() : 0,
+            variance: session.difference ? session.difference.toNumber() : 0,
         };
 
         ledgerEntries.forEach((entry: any) => {
@@ -1100,7 +1151,7 @@ export class AccountingService {
                 opened_at: session.opened_at,
                 closed_at: session.closed_at,
                 status: session.status,
-                variance: session.variance,
+                variance: session.difference,
                 opened_by: opener?.name || 'Unknown',
                 closed_by: closer?.name || 'Pending',
                 duration_minutes: session.closed_at
@@ -1217,7 +1268,7 @@ export class AccountingService {
                 restaurantId: data.restaurantId,
                 supplierId: data.supplierId,
                 amount: amount,
-                referenceId: data.referenceId || `bill-${Date.now()}`,
+                billId: data.referenceId || `bill-${Date.now()}`,
                 description: data.description || 'Supplier bill',
                 processedBy: data.processedBy
             }, db);

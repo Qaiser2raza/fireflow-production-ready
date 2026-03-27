@@ -102,7 +102,7 @@ router.post('/', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'),
 // POST /api/suppliers/payment - Record a payment to a supplier
 router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
-        const { supplierId, amount, description, paymentMethod, referenceId } = req.body;
+        const { supplierId, amount, description, referenceId } = req.body;
         const restaurantId = req.restaurantId!;
 
         if (!supplierId || !amount) {
@@ -113,8 +113,7 @@ router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER
             restaurantId,
             supplierId,
             amount,
-            description,
-            paymentMethod: paymentMethod || 'CASH',
+            notes: description || 'Supplier payment',
             processedBy: req.staffId!,
             referenceId
         });

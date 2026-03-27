@@ -24,7 +24,6 @@ interface CustomerComponentProps {
 
 export const CustomerComponent: React.FC<CustomerComponentProps> = ({
     mode,
-    orderId,
     amount = 0,
     initialShowAddForm = false,
     onConfirm,
@@ -34,7 +33,7 @@ export const CustomerComponent: React.FC<CustomerComponentProps> = ({
     const [matchingCustomers, setMatchingCustomers] = useState<Customer[]>([]);
     const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
     const [isSearching, setIsSearching] = useState(false);
-    const [isPosting, setIsPosting] = useState(false);
+    const [isPosting] = useState(false);
     const [showAddForm, setShowAddForm] = useState(initialShowAddForm);
     const [error, setError] = useState<string | null>(null);
 
