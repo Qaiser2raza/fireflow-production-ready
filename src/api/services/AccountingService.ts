@@ -256,6 +256,55 @@ export class AccountingService {
     }
 
     /**
+     * processPayout — called by the API route.
+     * Creates the payout record, calls recordPayout for ledger entries,
+     * and calls recordPayoutJournal for double-entry.
+     * All inside a single DB transaction.
+     */
+    async processPayout(data: {
+        restaurantId: string;
+        staffId: string;
+        amount: number;
+        category: string;
+        notes: string;
+    }): Promise<any> {
+        return await prisma.$transaction(async (tx) => {
+            // 1. Create the payout record
+            const payout = await tx.payouts.create({
+                data: {
+                    restaurant_id: data.restaurantId,
+                    amount: new Decimal(data.amount.toString()),
+                    category: data.category,
+                    notes: data.notes,
+                    processed_by: data.staffId as any,
+                }
+            });
+
+            // 2. Record ledger entries (single-entry)
+            await this.recordPayout({
+                restaurantId: data.restaurantId,
+                amount: data.amount,
+                category: data.category,
+                notes: data.notes,
+                processedBy: data.staffId,
+                referenceId: payout.id,
+            }, tx);
+
+            // 3. Record journal entries (double-entry)
+            await journalEntryService.recordPayoutJournal({
+                restaurantId: data.restaurantId,
+                amount: data.amount,
+                payoutId: payout.id,
+                category: data.category,
+                notes: data.notes,
+                processedBy: data.staffId,
+            }, tx);
+
+            return payout;
+        });
+    }
+
+    /**
      * Records issuing a float to a rider.
      * Impacts: Credit Cash Drawer (Cash Out), Debit Rider (Debt Up).
      */

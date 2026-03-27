@@ -24,6 +24,13 @@ const COA_ACCOUNTS = [
   { code: '4010', name: 'Delivery Fee Revenue',       type: 'REVENUE',   description: 'Delivery charges collected from customers' },
 
   // EXPENSES
+  {
+      code: '4900',
+      name: 'Discount Expense',
+      type: 'EXPENSE',
+      description: 'Discounts given to customers — contra-revenue',
+      is_system: true
+  },
   { code: '5000', name: 'Rider Payouts',              type: 'EXPENSE',   description: 'Cash paid to delivery riders' },
   { code: '5010', name: 'General Expenses',           type: 'EXPENSE',   description: 'Miscellaneous operational expenses' },
   { code: '5020', name: 'Cost of Goods Sold',         type: 'EXPENSE',   description: 'Direct food and ingredient costs' },

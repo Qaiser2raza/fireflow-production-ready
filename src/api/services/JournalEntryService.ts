@@ -36,8 +36,8 @@ const GL = {
     ROUNDING: '4020',
     RIDER_EXPENSE: '5000',
     GENERAL_EXPENSE: '5010',
-    DISCOUNT: '5020',
-    COGS: '5030', // NEW (Cost of Goods Sold)
+    DISCOUNT: '4900',   // Discount Expense (contra-revenue)
+    COGS: '5020',       // Cost of Goods Sold
     CUSTOMER_ACCOUNT: '1040',
 } as const;
 
@@ -453,6 +453,65 @@ export class JournalEntryService {
             lines: [
                 { accountId: expenseAcc.id, description: `${params.category} expense`, debit: amount, referenceType: 'PAYOUT', referenceId: params.payoutId, meta: { category: params.category } },
                 { accountId: cashAcc.id, description: 'Cash paid out', credit: amount, referenceType: 'PAYOUT', referenceId: params.payoutId, meta: { category: params.category } },
+            ],
+        }, db);
+    }
+
+    /**
+     * POST FLOAT ISSUE JOURNAL
+     * ─────────────────────────────────────────────────────────────────────
+     * When manager issues float cash to a rider before their shift.
+     *
+     *   DR  1020  Rider Receivables     amount  (rider now owes this)
+     *   CR  1000  Cash                  amount  (cash leaves drawer)
+     */
+    async recordFloatIssueJournal(params: {
+        restaurantId: string;
+        riderId: string;
+        amount: number | Decimal;
+        settlementId: string;
+        processedBy?: string;
+    }, tx: any): Promise<void> {
+        const db = tx;
+
+        const existing = await db.journal_entries.findFirst({
+            where: { reference_type: 'FLOAT_ISSUE', reference_id: params.settlementId }
+        });
+        if (existing) return;
+
+        const [riderAcc, cashAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.RIDER_RECEIVABLE, db),
+            resolveAccount(params.restaurantId, GL.CASH, db),
+        ]);
+
+        if (!riderAcc || !cashAcc) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'FLOAT_ISSUE',
+            referenceId: params.settlementId,
+            date: new Date(),
+            description: `Float issued to rider`,
+            processedBy: params.processedBy,
+            lines: [
+                {
+                    accountId: riderAcc.id,
+                    description: 'Rider receivable — float issued',
+                    debit: amount,
+                    referenceType: 'RIDER',
+                    referenceId: params.riderId,
+                    meta: { settlementId: params.settlementId }
+                },
+                {
+                    accountId: cashAcc.id,
+                    description: 'Cash paid out as float',
+                    credit: amount,
+                    referenceType: 'RIDER',
+                    referenceId: params.riderId,
+                    meta: { settlementId: params.settlementId }
+                },
             ],
         }, db);
     }
