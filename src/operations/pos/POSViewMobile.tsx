@@ -13,7 +13,7 @@ import { useThermalPrinter } from '../../hooks/useThermalPrinter';
 
 export const POSViewMobile: React.FC = () => {
   const {
-    addOrder, updateOrder, calculateOrderTotal, orders,
+    addOrder, updateOrder, fireOrder, calculateOrderTotal, orders,
     currentUser, menuItems, menuCategories,
     tables, addNotification, orderToEdit, setOrderToEdit,
     customers, addCustomer
@@ -267,7 +267,12 @@ export const POSViewMobile: React.FC = () => {
       } as any;
 
       const result = activeOrderId ? await updateOrder(orderPayload) : await addOrder(orderPayload);
-      if (!activeOrderId && result.id) setActiveOrderId(result.id);
+      if (result) {
+        if (!activeOrderId && result.id) setActiveOrderId(result.id);
+        if (shouldFire) {
+          await fireOrder(result.id, orderType);
+        }
+      }
 
       addNotification('success', shouldFire ? 'Sent to Kitchen' : 'Order Saved');
       

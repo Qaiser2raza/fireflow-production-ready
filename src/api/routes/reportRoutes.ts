@@ -7,6 +7,9 @@ import { getStaffPerformanceReport } from '../services/reports/StaffPerformanceR
 import { getCategorySalesReport } from '../services/reports/CategorySalesReport';
 import { getPaymentMethodReport } from '../services/reports/PaymentMethodReport';
 import { getRiderAuditReport } from '../services/reports/RiderAuditReport';
+import { getPayoutExpenseReport } from '../services/reports/PayoutExpenseReport';
+import { getProfitLossReport } from '../services/reports/ProfitLossReport';
+import { getBalanceSheetReport } from '../services/reports/BalanceSheetReport';
 import { renderReport } from '../services/reports/reportTemplates';
 import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/authMiddleware';
@@ -54,6 +57,12 @@ router.get('/loss-prevention', (req, res) => handleReport(req, res, 'Loss Preven
 router.get('/staff-performance', (req, res) => handleReport(req, res, 'Staff Efficiency Performance', 'staff-performance', getStaffPerformanceReport));
 router.get('/category-sales', (req, res) => handleReport(req, res, 'Category Sales Analysis', 'category-sales', getCategorySalesReport));
 router.get('/payment-methods', (req, res) => handleReport(req, res, 'Payment Method Analysis', 'payment-methods', getPaymentMethodReport));
+router.get('/payout-expense', (req, res) => handleReport(req, res, 'Payout & Expense Analysis', 'payout-expense', getPayoutExpenseReport));
+router.get('/profit-loss', (req, res) => handleReport(req, res, 'Profit & Loss Statement', 'profit-loss', getProfitLossReport));
+router.get('/balance-sheet', (req, res) => {
+    const asOf = req.query.asOf ? new Date(req.query.asOf as string) : new Date();
+    return handleReport(req, res, 'Balance Sheet', 'balance-sheet', (restId: string) => getBalanceSheetReport(restId, asOf));
+});
 
 // Legacy Reports (Keep for compatibility but wrap in HTML)
 router.get('/product-mix', (req, res) => handleReport(req, res, 'Product Mix Trend', 'product-mix', ReportsService.getProductMix));

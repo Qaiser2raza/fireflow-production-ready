@@ -164,8 +164,32 @@ router.post('/session/close', async (req, res) => {
  */
 router.post('/payout', async (req, res) => {
     try {
+        const { prisma } = await import('../../shared/lib/prisma');
         const validated = payoutSchema.parse(req.body);
-        const payout = await accounting.processPayout(validated);
+
+        const payout = await prisma.$transaction(async (tx) => {
+            const newPayout = await tx.payouts.create({
+                data: {
+                    restaurant_id: validated.restaurantId,
+                    amount: validated.amount,
+                    category: validated.category,
+                    notes: validated.notes,
+                    processed_by: validated.staffId,
+                }
+            });
+
+            await accounting.recordPayout({
+                restaurantId: validated.restaurantId,
+                amount: validated.amount,
+                category: validated.category,
+                notes: validated.notes,
+                processedBy: validated.staffId,
+                referenceId: newPayout.id
+            }, tx);
+
+            return newPayout;
+        });
+
         res.json({ success: true, payout });
     } catch (e: any) {
         res.status(400).json({ error: e.message });

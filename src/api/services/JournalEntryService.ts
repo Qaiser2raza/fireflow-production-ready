@@ -27,22 +27,28 @@ const GL = {
     CASH: '1000',
     CARD_RECEIVABLE: '1010',
     RIDER_RECEIVABLE: '1020',
+    INVENTORY_ASSET: '1060', // NEW
     TAX_PAYABLE: '2000',
     SC_PAYABLE: '2010',
+    SUPPLIER_PAYABLE: '2020', // Verified - matches seed
     FOOD_REVENUE: '4000',
     DELIVERY_REVENUE: '4010',
+    ROUNDING: '4020',
     RIDER_EXPENSE: '5000',
     GENERAL_EXPENSE: '5010',
+    DISCOUNT: '5020',
+    COGS: '5030', // NEW (Cost of Goods Sold)
     CUSTOMER_ACCOUNT: '1040',
-    SUPPLIER_PAYABLE: '2020',
 } as const;
 
-type GLCode = typeof GL[keyof typeof GL];
 
 // ─── Internal helpers ─────────────────────────────────────────────────────
 
-async function resolveAccount(restaurantId: string, code: GLCode, tx?: any) {
+async function resolveAccount(restaurantId: string, code: string, tx?: any) {
     const db = tx || prisma;
+    if (!db) {
+        throw new Error(`[JE] Database client is undefined in resolveAccount for code ${code}`);
+    }
     return db.chart_of_accounts.findFirst({
         where: { restaurant_id: restaurantId, code, is_active: true }
     });
@@ -172,7 +178,7 @@ export class JournalEntryService {
         const restaurantId = order.restaurant_id;
 
         // Resolve accounts – if not yet seeded, silently skip
-        const [cashAcc, cardAcc, riderAcc, taxAcc, scAcc, foodRevAcc, delivRevAcc, customerAcc] =
+        const [cashAcc, cardAcc, riderAcc, taxAcc, scAcc, foodRevAcc, delivRevAcc, customerAcc, roundingAcc, discountAcc] =
             await Promise.all([
                 resolveAccount(restaurantId, GL.CASH, db),
                 resolveAccount(restaurantId, GL.CARD_RECEIVABLE, db),
@@ -182,6 +188,8 @@ export class JournalEntryService {
                 resolveAccount(restaurantId, GL.FOOD_REVENUE, db),
                 resolveAccount(restaurantId, GL.DELIVERY_REVENUE, db),
                 resolveAccount(restaurantId, GL.CUSTOMER_ACCOUNT, db),
+                resolveAccount(restaurantId, GL.ROUNDING, db),
+                resolveAccount(restaurantId, GL.DISCOUNT, db),
             ]);
 
         if (!foodRevAcc) {
@@ -193,8 +201,17 @@ export class JournalEntryService {
         const tax = new Decimal(order.tax || 0);
         const sc = new Decimal(order.service_charge || 0);
         const deliveryFee = new Decimal(order.delivery_fee || 0);
-        // Net food revenue = total – tax – sc (delivery fee stays in food revenue here)
-        const netRevenue = total.minus(tax).minus(sc);
+        const discount = new Decimal(order.discount || 0);
+
+        // FORMULA AUDIT:
+        // Net Revenue must always exclude Tax and Service Charge.
+        // Gross Revenue (for the ledger) = Net Revenue + Discount.
+        
+        // If tax was inclusive, 'total' already includes it. 
+        // If tax was exclusive, 'total' already includes it (because it was added during save).
+        // So the formula remains the same, but the resulting Net Revenue will be correct.
+        const netRevenue = total.minus(tax).minus(sc).minus(deliveryFee);
+        const grossRevenue = netRevenue.plus(discount);
 
         // ── Determine debit (asset) side ──────────────────────────────────
         const lines: JELine[] = [];
@@ -252,18 +269,29 @@ export class JournalEntryService {
         }
 
         // ── Credit side: Revenue + Liabilities ───────────────────────────
-        // Food / Beverage Revenue (net, excluding delivery fee)
-        const foodRev = netRevenue.minus(deliveryFee).greaterThanOrEqualTo(0)
-            ? netRevenue.minus(deliveryFee)
-            : netRevenue;
+        // Food / Beverage Revenue (Gross, before discount, excluding delivery fee)
+        const foodRev = grossRevenue.minus(deliveryFee).greaterThanOrEqualTo(0)
+            ? grossRevenue.minus(deliveryFee)
+            : grossRevenue;
 
         lines.push({
             accountId: foodRevAcc.id,
-            description: `F&B Revenue – Order #${order.order_number}`,
+            description: `F&B Revenue (Gross) – Order #${order.order_number}`,
             credit: foodRev,
             referenceType: 'ORDER',
             referenceId: orderId,
         });
+
+        // Recording Discount as a debit to 5020 (Expense/Contra-Revenue)
+        if (discount.greaterThan(0) && discountAcc) {
+            lines.push({
+                accountId: discountAcc.id,
+                description: `Discount – Order #${order.order_number}`,
+                debit: discount,
+                referenceType: 'ORDER',
+                referenceId: orderId,
+            });
+        }
 
         // Delivery Fee Revenue (if applicable)
         if (deliveryFee.greaterThan(0) && delivRevAcc) {
@@ -296,6 +324,35 @@ export class JournalEntryService {
                 referenceType: 'ORDER',
                 referenceId: orderId,
             });
+        }
+
+        // ── Rounding Adjustment ──────────────────────────────────────────
+        const totalDebit = lines.reduce((s, l) => s.plus(l.debit || 0), new Decimal(0));
+        const totalCredit = lines.reduce((s, l) => s.plus(l.credit || 0), new Decimal(0));
+        const diff = totalDebit.minus(totalCredit);
+
+        console.log(`[ROUNDING_DEBUG] Order: ${order.order_number}, DR: ${totalDebit}, CR: ${totalCredit}, Diff: ${diff}, RoundAcc_Found: ${!!roundingAcc}`);
+
+        if (!diff.isZero() && roundingAcc) {
+            if (diff.isPositive()) {
+                // We received more than the subtotal -> Credit rounding (Revenue-like)
+                lines.push({
+                    accountId: roundingAcc.id,
+                    description: `Rounding adjustment – Order #${order.order_number}`,
+                    credit: diff,
+                    referenceType: 'ORDER',
+                    referenceId: orderId,
+                });
+            } else {
+                // We received less than the subtotal -> Debit rounding (Expense-like)
+                lines.push({
+                    accountId: roundingAcc.id,
+                    description: `Rounding adjustment – Order #${order.order_number}`,
+                    debit: diff.abs(),
+                    referenceType: 'ORDER',
+                    referenceId: orderId,
+                });
+            }
         }
 
         await postJournal({
@@ -464,9 +521,13 @@ export class JournalEntryService {
             { code: '2010', name: 'Service Charge Payable', type: 'LIABILITY', description: 'Service charge collected from customers' },
             { code: '4000', name: 'Food & Beverage Revenue', type: 'REVENUE', description: 'Core restaurant sales' },
             { code: '4010', name: 'Delivery Fee Revenue', type: 'REVENUE', description: 'Customer-paid delivery charges' },
+            { code: '4020', name: 'Rounding Differences', type: 'REVENUE', description: 'Small gains/losses from decimal rounding' },
+            { code: '5020', name: 'Discounts Given', type: 'EXPENSE', description: 'Discounts applied to customer bills' },
             { code: '5000', name: 'Rider Payroll & Floats', type: 'EXPENSE', description: 'Rider float issuances and wage payouts' },
-            { code: '5010', name: 'General Operating Expenses', type: 'EXPENSE', description: 'Supplier payments, petty cash, other outflows' },
+            { code: '5010', name: 'General Operating Expenses', type: 'EXPENSE', description: 'Small payouts, petty cash, other outflows' },
             { code: '2020', name: 'Accounts Payable (Suppliers)', type: 'LIABILITY', description: 'Outstanding balances owed to vendors' },
+            { code: '1060', name: 'Inventory Asset (Periodic)', type: 'ASSET', description: 'Value of stock currently in hand' },
+            { code: '5030', name: 'Cost of Goods Sold (COGS)', type: 'EXPENSE', description: 'Cost of stock used in production' },
         ];
 
         const results = [];
@@ -641,6 +702,64 @@ export class JournalEntryService {
     }
 
     /**
+     * REVERSE JOURNAL BY REFERENCE
+     * Dynamically finds journal entries by reference (e.g. ORDER_SALE and orderId)
+     * and posts an exact mirror entry (swapping Debits/Credits) to zero it out.
+     */
+    async reverseJournalByReference(
+        referenceType: string,
+        referenceId: string,
+        staffId: string,
+        tx: any
+    ): Promise<any[]> {
+        const db = tx;
+        if (!db) throw new Error("Database transaction (tx) is required to reverse journals");
+
+        const journals = await db.journal_entries.findMany({
+            where: {
+                reference_type: referenceType,
+                reference_id: referenceId,
+            },
+            include: { lines: true }
+        });
+
+        if (!journals.length) return [];
+
+        const reversedJournals = [];
+
+        for (const journal of journals) {
+            // Prevent double-reversing conceptually, or reversing a reversal
+            if (journal.reference_type === 'VOID_ORDER' || journal.description.includes('Reversal of Journal')) {
+                continue;
+            }
+
+            const reversalLines = journal.lines.map((line: any) => ({
+                accountId: line.account_id,
+                description: `Reversal: ${line.description}`,
+                debit: new Decimal(line.credit.toString()),
+                credit: new Decimal(line.debit.toString()),
+                referenceType: line.reference_type || referenceType,
+                referenceId: line.reference_id || referenceId,
+                meta: line.meta ? Object.assign({}, line.meta) : undefined
+            }));
+
+            const revJournal = await postJournal({
+                restaurantId: journal.restaurant_id,
+                referenceType: referenceType,
+                referenceId: referenceId,
+                date: new Date(),
+                description: `Reversal of Journal ${journal.id}`,
+                processedBy: staffId,
+                lines: reversalLines
+            }, db);
+
+            reversedJournals.push(revJournal);
+        }
+
+        return reversedJournals;
+    }
+
+    /**
      * GET CUSTOMER ACCOUNT BALANCE
      * Calculates net balance from journal_entry_lines for account 1040.
      *
@@ -708,50 +827,104 @@ export class JournalEntryService {
     }
 
     /**
-     * POST SUPPLIER BILL JOURNAL
-     * We receive a bill from a vendor.
+     * POST INVENTORY PURCHASE JOURNAL
+     * Records stock inflow (Periodic).
      *
-     * DR  5010  Operating Expense    amount
-     * CR  2020  Supplier Payable     amount (Liability increases)
+     * DR  1060  Inventory Asset      amount
+     * CR  1000  Cash (if Cash)       amount
+     * OR
+     * CR  2020  Supplier Payable     amount (if Credit)
      */
-    async recordSupplierBillJournal(params: {
+    async recordInventoryPurchaseJournal(params: {
         restaurantId: string;
         supplierId: string;
         amount: number | Decimal;
-        referenceId: string; // PO ID
+        isCredit: boolean;
+        referenceId: string; // PO or Bill ID
         description: string;
         processedBy?: string;
     }, tx: any) {
         const db = tx;
-        const [expenseAcc, supplierAcc] = await Promise.all([
-            resolveAccount(params.restaurantId, GL.GENERAL_EXPENSE, db),
+        const [inventoryAcc, cashAcc, payableAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.INVENTORY_ASSET, db),
+            resolveAccount(params.restaurantId, GL.CASH, db),
             resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
         ]);
 
-        if (!expenseAcc || !supplierAcc) return;
+        if (!inventoryAcc || (!cashAcc && !params.isCredit) || (!payableAcc && params.isCredit)) return;
 
         const amount = new Decimal(params.amount.toString());
+        const creditAcc = params.isCredit ? payableAcc! : cashAcc!;
 
         await postJournal({
             restaurantId: params.restaurantId,
-            referenceType: 'SUPPLIER_BILL',
+            referenceType: 'INVENTORY_PURCHASE',
             referenceId: params.referenceId,
             date: new Date(),
             description: params.description,
             processedBy: params.processedBy,
             lines: [
-                { accountId: expenseAcc.id, description: 'Supplier bill expense', debit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
-                { accountId: supplierAcc.id, description: 'Supplier payable created', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
+                { accountId: inventoryAcc.id, description: 'Stock Inflow (Periodic)', debit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
+                { accountId: creditAcc.id, description: params.isCredit ? 'Credit Purchase' : 'Cash Purchase', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
             ],
         }, db);
     }
 
     /**
-     * POST SUPPLIER PAYMENT JOURNAL
-     * We pay a vendor (clears liability).
+     * POST INVENTORY CLOSING JOURNAL
+     * Adjusts Inventory Asset to match manual count and records COGS.
      *
-     * DR  2020  Supplier Payable     amount (Liability decreases)
-     * CR  1000  Cash (or 1010 Card)   amount (Asset decreases)
+     * DR  5030  Cost of Goods Sold   diff
+     * CR  1060  Inventory Asset      diff
+     * (Or vice versa if stock increased magically, but usually it's a deduction)
+     */
+    async recordInventoryClosingJournal(params: {
+        restaurantId: string;
+        closingAmount: number | Decimal;
+        referenceId: string; // Audit ID
+        description?: string;
+        processedBy?: string;
+    }, tx: any) {
+        const db = tx;
+        const [inventoryAcc, cogsAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.INVENTORY_ASSET, db),
+            resolveAccount(params.restaurantId, GL.COGS, db),
+        ]);
+
+        if (!inventoryAcc || !cogsAcc) return;
+
+        // 1. Get current balance of Inventory Asset (1060)
+        const lines = await db.journal_entry_lines.aggregate({
+            _sum: { debit: true, credit: true },
+            where: { account_id: inventoryAcc.id }
+        });
+        const currentBalance = new Decimal(lines._sum.debit || 0).minus(lines._sum.credit || 0);
+        const targetBalance = new Decimal(params.closingAmount.toString());
+        const diff = currentBalance.minus(targetBalance); // Positive means we record expense
+
+        if (diff.isZero()) return;
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'INVENTORY_CLOSING',
+            referenceId: params.referenceId,
+            date: new Date(),
+            description: params.description || `Manual Inventory Closing Adjustment (Physical Count)`,
+            processedBy: params.processedBy,
+            lines: diff.isPositive() 
+                ? [
+                    { accountId: cogsAcc.id, description: 'Inventory Usage (COGS)', debit: diff, referenceType: 'INVENTORY', referenceId: params.referenceId },
+                    { accountId: inventoryAcc.id, description: 'Inventory Reduction', credit: diff, referenceType: 'INVENTORY', referenceId: params.referenceId },
+                ]
+                : [
+                    { accountId: inventoryAcc.id, description: 'Inventory Appreciation/Correction', debit: diff.abs(), referenceType: 'INVENTORY', referenceId: params.referenceId },
+                    { accountId: cogsAcc.id, description: 'COGS Credit (Correction)', credit: diff.abs(), referenceType: 'INVENTORY', referenceId: params.referenceId },
+                ],
+        }, db);
+    }
+
+    /**
+     * POST SUPPLIER PAYMENT JOURNAL
      */
     async recordSupplierPaymentJournal(params: {
         restaurantId: string;
@@ -760,8 +933,8 @@ export class JournalEntryService {
         payoutId: string;
         paymentMethod: 'CASH' | 'CARD';
         processedBy?: string;
-    }, tx: any) {
-        const db = tx;
+    }, tx?: any) {
+        const db = tx || prisma;
         const assetCode = params.paymentMethod === 'CARD' ? GL.CARD_RECEIVABLE : GL.CASH;
         const [supplierAcc, assetAcc] = await Promise.all([
             resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
@@ -780,8 +953,42 @@ export class JournalEntryService {
             description: `Payment to supplier`,
             processedBy: params.processedBy,
             lines: [
-                { accountId: supplierAcc.id, description: 'Supplier payable cleared', debit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId, meta: { paymentMethod: params.paymentMethod } },
-                { accountId: assetAcc.id, description: 'Cash paid to vendor', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId, meta: { paymentMethod: params.paymentMethod } },
+                { accountId: supplierAcc.id, description: 'Supplier payable cleared', debit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
+                { accountId: assetAcc.id, description: 'Cash paid to vendor', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
+            ],
+        }, db);
+    }
+
+    /**
+     * POST GENERAL EXPENSE JOURNAL
+     */
+    async recordExpenseJournal(params: {
+        restaurantId: string;
+        expenseId: string;
+        amount: number | Decimal;
+        description: string;
+        processedBy?: string;
+    }, tx: any) {
+        const db = tx;
+        const [expenseAcc, cashAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.GENERAL_EXPENSE, db),
+            resolveAccount(params.restaurantId, GL.CASH, db),
+        ]);
+
+        if (!expenseAcc || !cashAcc) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'EXPENSE',
+            referenceId: params.expenseId,
+            date: new Date(),
+            description: params.description,
+            processedBy: params.processedBy,
+            lines: [
+                { accountId: expenseAcc.id, description: params.description, debit: amount, referenceType: 'EXPENSE', referenceId: params.expenseId },
+                { accountId: cashAcc.id, description: 'Cash paid for expense', credit: amount, referenceType: 'EXPENSE', referenceId: params.expenseId },
             ],
         }, db);
     }

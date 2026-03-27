@@ -17,6 +17,13 @@ async function main() {
         await prisma.reservation_orders.deleteMany({});
         await prisma.order_items.deleteMany({});
 
+        console.log('   - Deleting transactions...');
+        await prisma.transactions.deleteMany({});
+
+        console.log('   - Deleting journal entries & lines...');
+        await prisma.journal_entry_lines.deleteMany({});
+        await prisma.journal_entries.deleteMany({});
+
         console.log('   - Deleting core orders...');
         await prisma.orders.deleteMany({});
 

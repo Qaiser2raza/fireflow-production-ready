@@ -5,7 +5,9 @@
 
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_URL = (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3001');
+const SOCKET_URL = (typeof window !== 'undefined' 
+    ? (window.location.hostname === 'localhost' ? 'http://localhost:3001' : window.location.origin) 
+    : 'http://localhost:3001');
 
 class SocketIOClient {
     private socket: Socket | null = null;

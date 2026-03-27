@@ -3,6 +3,35 @@ import { IOrderService, CreateOrderDTO, UpdateOrderDTO } from './IOrderService.j
 import { prisma } from '../../../shared/lib/prisma';
 
 export abstract class BaseOrderService implements IOrderService {
+    
+    protected async resolveCustomerId(tx: Prisma.TransactionClient, restaurantId: string, phone?: string, name?: string, providedId?: string): Promise<string | null> {
+        if (providedId) return providedId;
+        if (!phone) return null;
+
+        // Try to find existing customer by phone within this restaurant
+        const existing = await tx.customers.findFirst({
+            where: {
+                restaurant_id: restaurantId,
+                phone: phone
+            }
+        });
+
+        if (existing) return existing.id;
+
+        // If not found but we have a name, create a new customer record automatically
+        if (name) {
+            const newCustomer = await tx.customers.create({
+                data: {
+                    restaurant_id: restaurantId,
+                    name: name,
+                    phone: phone
+                }
+            });
+            return newCustomer.id;
+        }
+
+        return null;
+    }
 
     async createOrder(data: CreateOrderDTO): Promise<orders> {
         return await prisma.$transaction(async (tx) => {
@@ -23,6 +52,9 @@ export abstract class BaseOrderService implements IOrderService {
                     guest_count: data.guest_count ? Number(data.guest_count) : undefined,
                     customer_name: data.customer_name,
                     customer_phone: data.customer_phone,
+                    customers: (await this.resolveCustomerId(tx, data.restaurant_id, data.customer_phone, data.customer_name, data.customer_id)) 
+                        ? { connect: { id: (await this.resolveCustomerId(tx, data.restaurant_id, data.customer_phone, data.customer_name, data.customer_id)) as string } } 
+                        : undefined,
                     delivery_address: data.delivery_address,
                     // Standard Prisma connections for relations
                     tables: data.table_id ? { connect: { id: data.table_id } } : undefined,
@@ -137,6 +169,9 @@ export abstract class BaseOrderService implements IOrderService {
                     guest_count: data.guest_count,
                     customer_name: data.customer_name,
                     customer_phone: data.customer_phone,
+                    customers: (await this.resolveCustomerId(tx, currentOrder?.restaurant_id || data.restaurant_id || '', data.customer_phone, data.customer_name, data.customer_id))
+                        ? { connect: { id: (await this.resolveCustomerId(tx, currentOrder?.restaurant_id || data.restaurant_id || '', data.customer_phone, data.customer_name, data.customer_id)) as string } }
+                        : undefined,
                     delivery_address: data.delivery_address,
                     assigned_waiter_id: data.waiter_id || data.assigned_waiter_id || undefined,
                     updated_at: new Date()
@@ -348,11 +383,15 @@ export abstract class BaseOrderService implements IOrderService {
         const currentOrder = await this.getOrderDetails(orderId);
         if (!currentOrder) throw new Error('Order not found');
 
+        const deliveryData = (currentOrder as any).delivery_orders?.[0] || {};
         const validation = this.validateOrder({
             ...currentOrder,
             status: currentOrder.status || 'ACTIVE',
             type: currentOrder.type as any,
-            items: (currentOrder as any).order_items
+            items: (currentOrder as any).order_items,
+            customer_name: deliveryData.customer_name || currentOrder.customer_name,
+            customer_phone: deliveryData.customer_phone || currentOrder.customer_phone,
+            delivery_address: deliveryData.delivery_address || currentOrder.delivery_address
         } as any, 'FIRE');
 
         if (!validation.valid) {

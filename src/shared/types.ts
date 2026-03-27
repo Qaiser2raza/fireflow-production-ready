@@ -347,6 +347,7 @@ export interface Order {
     takeaway_orders?: TakeawayOrder[];
     delivery_orders?: DeliveryOrder[];
     reservation_orders?: ReservationOrder[];
+    transactions?: Transaction[];
 
     // Legacy fields (Deprecating, but keeping optional for easy refactor if needed, 
     // but ideally we remove them to force fix)
@@ -466,8 +467,8 @@ export interface Transaction {
     orderId?: string;
     order_id?: string;
     amount: number;
-    payment_method: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET';
-    method?: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET'; // Deprecated alias
+    payment_method: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET' | 'CREDIT' | 'KHATA';
+    method?: 'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA' | 'RIDER_WALLET' | 'CREDIT' | 'KHATA'; // Deprecated alias
     status: 'PAID' | 'REFUNDED' | 'VOIDED';
     transaction_ref?: string;
     type?: 'PAYMENT' | 'REFUND';
@@ -563,6 +564,7 @@ export interface AppContextType {
     fetchInitialData: (userOverride?: any, restaurantIdOverride?: string) => Promise<void>;
     addOrder: (order: Partial<Order>) => Promise<any>;
     updateOrder: (order: Partial<Order>) => Promise<any>;
+    fireOrder: (id: string, type: string) => Promise<any>;
     cancelOrder: (id: string, reason: string, notes?: string) => Promise<boolean>;
     voidOrder: (id: string, reason: string, notes: string, refundMethod: string, managerPin: string) => Promise<boolean>;
     updateOrderStatus: (id: string, status: OrderStatus) => Promise<void>;

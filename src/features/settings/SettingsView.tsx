@@ -3,7 +3,7 @@ import { useAppContext } from '../../client/contexts/AppContext';
 import { 
   Building2, Receipt, Calculator, Box, Map, Printer, 
   FileType, Users, Wand2, Database, LayoutGrid, Cpu, QrCode,
-  ClipboardList, History, ShieldAlert, Truck
+  ClipboardList, History, ShieldAlert
 } from 'lucide-react';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 // import { OperationsPanel } from './config/OperationsPanel'; // Removed - consolidated
@@ -30,16 +30,19 @@ import { ActivityLog } from '../../operations/activity/ActivityLog';
 import { TransactionsView } from '../../operations/transactions/TransactionsView';
 import { OrdersView } from '../../operations/orders/OrdersView';
 
-const DummyPanel: React.FC<{ name: string }> = ({ name }) => (
-  <div className="p-8 text-slate-500 italic uppercase font-bold tracking-widest text-[10px]">Component for {name} coming soon...</div>
-);
+import { InventoryLedgerPanel } from './config/InventoryLedgerPanel';
+import { SupplierLedgerPanel } from './config/SupplierLedgerPanel';
+import { CustomerLedgerPanel } from './config/CustomerLedgerPanel';
+import { ExpenseManagerPanel } from './config/ExpenseManagerPanel';
+
 
 export const SettingsView: React.FC = () => {
   const { currentUser, operationsConfig, addNotification } = useAppContext();
   const [activePanel, setActivePanel] = useState<string>('business-profile');
   const [showWizard, setShowWizard] = useState(false);
+  const [activeInventoryTab, setActiveInventoryTab] = useState<'inventory-ledger' | 'supplier-ledger' | 'customer-ledger' | 'expense-manager'>('inventory-ledger');
 
-  if (currentUser?.role !== 'ADMIN' && currentUser?.role !== 'SUPER_ADMIN' && currentUser?.role !== 'MANAGER') {
+  if (currentUser?.role !== 'ADMIN' && currentUser?.role !== 'SUPER_ADMIN' && currentUser?.role !== 'MANAGER' && currentUser?.role !== 'CASHIER') {
     return (
       <div className="h-full flex items-center justify-center p-8 bg-[#020617]">
         <div className="glass-panel p-12 text-center max-w-md">
@@ -47,7 +50,7 @@ export const SettingsView: React.FC = () => {
             <Calculator size={40} className="text-red-500" />
           </div>
           <h2 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">Access Restricted</h2>
-          <p className="text-slate-500 text-sm">You do not have administrative privileges to access system configuration.</p>
+          <p className="text-slate-500 text-sm">You do not have privileges to access system configuration.</p>
         </div>
       </div>
     );
@@ -77,13 +80,16 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  const isManagerOrAdmin = currentUser?.role === 'MANAGER' || currentUser?.role === 'ADMIN' || currentUser?.role === 'SUPER_ADMIN';
+  const isAdmin = currentUser?.role === 'ADMIN' || currentUser?.role === 'SUPER_ADMIN';
+
   const navGroups = [
     {
       label: 'Company',
       items: [
         { id: 'business-profile', label: 'Business Profile', icon: Building2 },
-        { id: 'setup-wizard', label: 'Setup Wizard', icon: Wand2, action: () => setShowWizard(true) },
-        { id: 'order-defaults', label: 'Order Defaults', icon: Calculator },
+        { id: 'setup-wizard', label: 'Setup Wizard', icon: Wand2, action: () => setShowWizard(true), hidden: !isManagerOrAdmin },
+        { id: 'order-defaults', label: 'Order Defaults', icon: Calculator, hidden: !isManagerOrAdmin },
         { id: 'receipt-setup', label: 'Receipt Setup', icon: Receipt },
       ]
     },
@@ -91,38 +97,45 @@ export const SettingsView: React.FC = () => {
       label: 'Operations',
       items: [
         { id: 'menu-lab', label: 'Menu Lab', icon: Box },
-        { id: 'inventory', label: 'Inventory', icon: Box },
-        { id: 'zones-tables', label: 'Zones & Tables', icon: Map },
-        { id: 'suppliers', label: 'Suppliers', icon: Truck },
-        { id: 'active-orders', label: 'Command Hub', icon: ClipboardList },
+        { id: 'inventory-management', label: 'Inventory & Ledger', icon: Box, hidden: !isManagerOrAdmin && currentUser?.role !== 'CASHIER' },
+        { id: 'zones-tables', label: 'Zones & Tables', icon: Map, hidden: !isManagerOrAdmin },
+        { id: 'active-orders', label: 'Command Hub', icon: ClipboardList, hidden: !isManagerOrAdmin },
       ]
     },
     {
       label: 'Print & Devices',
       items: [
         { id: 'printers', label: 'Printers', icon: Printer },
-        { id: 'invoice-templates', label: 'Invoice Templates', icon: FileType },
+        { id: 'customers', label: 'Customers', icon: Users },
+        { id: 'reports', label: 'Financial Reports', icon: Calculator, hidden: !isManagerOrAdmin },
+        { id: 'invoice-templates', label: 'Invoice Templates', icon: FileType, hidden: !isManagerOrAdmin },
         { id: 'pairing', label: 'Device Pairing', icon: QrCode },
-        { id: 'devices', label: 'Device Management', icon: Cpu },
+        { id: 'devices', label: 'Device Management', icon: Cpu, hidden: !isManagerOrAdmin },
       ]
     },
     {
       label: 'Staff Settings',
       items: [
-        { id: 'staff-roles', label: 'Staff & Roles', icon: Users },
+        { id: 'staff-roles', label: 'Staff & Roles', icon: Users, hidden: !isAdmin },
       ]
     },
     {
       label: 'System',
       items: [
-        { id: 'billing', label: 'Billing', icon: Receipt },
-        { id: 'transactions', label: 'Ledger History', icon: History },
-        { id: 'audit-log', label: 'Staff Audit', icon: FileType },
-        { id: 'modules', label: 'Modules', icon: LayoutGrid },
-        { id: 'system-update', label: 'System Update', icon: Cpu },
+        { id: 'billing', label: 'Billing', icon: Receipt, hidden: !isManagerOrAdmin },
+        { id: 'transactions', label: 'Ledger History', icon: History, hidden: !isManagerOrAdmin },
+        { id: 'audit-log', label: 'Staff Audit', icon: FileType, hidden: !isManagerOrAdmin },
+        { id: 'modules', label: 'Modules', icon: LayoutGrid, hidden: !isAdmin },
+        { id: 'system-update', label: 'System Update', icon: Cpu, hidden: !isAdmin },
       ]
     }
   ];
+
+  // Filter hidden items
+  const filteredNavGroups = navGroups.map(group => ({
+    ...group,
+    items: group.items.filter(item => !(item as any).hidden)
+  })).filter(group => group.items.length > 0);
 
   return (
     <div className="h-full flex flex-col bg-[#020617] text-white overflow-hidden font-sans">
@@ -138,7 +151,7 @@ export const SettingsView: React.FC = () => {
         {/* Sidebar */}
         <div className="w-[200px] flex-shrink-0 border-r border-slate-800 flex flex-col bg-slate-900/20">
           <div className="flex-1 overflow-y-auto no-scrollbar py-2">
-            {navGroups.map((group, gIdx) => (
+            {filteredNavGroups.map((group, gIdx) => (
               <div key={gIdx} className="mb-4">
                 <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 px-3 pt-4 pb-1">
                   {group.label}
@@ -146,10 +159,22 @@ export const SettingsView: React.FC = () => {
                 {group.items.map((item) => (
                   <div
                     key={item.id}
-                    onClick={() => item.action ? item.action() : setActivePanel(item.id)}
+                    onClick={() => {
+                      if (item.action) {
+                        item.action();
+                      } else {
+                        setActivePanel(item.id);
+                        // Reset inventory tab if navigating away from inventory management
+                        if (item.id !== 'inventory-management') {
+                          setActiveInventoryTab(currentUser?.role === 'CASHIER' ? 'supplier-ledger' : 'inventory-ledger');
+                        } else if (currentUser?.role === 'CASHIER') {
+                          setActiveInventoryTab('supplier-ledger');
+                        }
+                      }
+                    }}
                     className={`flex items-center gap-2 px-3 py-2 text-xs transition-all mx-1 rounded-lg cursor-pointer ${
-                      activePanel === item.id 
-                        ? 'text-white bg-slate-800 font-bold' 
+                      activePanel === item.id
+                        ? 'text-white bg-slate-800 font-bold'
                         : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
                     }`}
                   >
@@ -165,14 +190,14 @@ export const SettingsView: React.FC = () => {
           {/* DB Status Footer */}
           <div className="px-3 pb-3 mt-auto border-t border-slate-800 pt-3">
             <div className="text-[9px] font-bold uppercase tracking-widest text-slate-600 mb-2">System Health: ONLINE</div>
-            <button 
+            <button
               onClick={handleSeed}
               className="text-[10px] text-slate-500 hover:text-indigo-400 flex items-center gap-1.5 transition-colors group"
             >
               <Database size={12} className="group-hover:animate-pulse" />
               <span>Sync Cloud Data</span>
             </button>
-            
+
             {(currentUser?.role === 'ADMIN' || currentUser?.role === 'SUPER_ADMIN') && (
               <button
                 onClick={handleFactoryReset}
@@ -187,11 +212,52 @@ export const SettingsView: React.FC = () => {
 
         {/* Content Panel */}
         <div className="flex-1 overflow-y-auto bg-slate-950/50 custom-scrollbar p-6">
-          <div className={`${['menu-lab', 'audit-log', 'patrons', 'billing', 'transactions', 'active-orders'].includes(activePanel) ? 'w-full h-full' : 'max-w-5xl'}`}>
+          <div className={`${['menu-lab', 'audit-log', 'patrons', 'billing', 'transactions', 'active-orders', 'inventory-management'].includes(activePanel) ? 'w-full h-full' : 'max-w-5xl'}`}>
             {activePanel === 'business-profile' && <BusinessProfilePanel />}
             {activePanel === 'receipt-setup' && <ReceiptSetupPanel />}
             {activePanel === 'menu-lab' && <div className="h-[80vh] border border-slate-800 rounded-2xl overflow-hidden"><MenuView /></div>}
-            {activePanel === 'inventory' && <DummyPanel name="Inventory" />}
+            {activePanel === 'inventory-management' && (
+              <div className="h-full flex flex-col">
+                <div className="flex border-b border-slate-800 mb-4">
+                  {isManagerOrAdmin && (
+                    <button
+                      className={`px-4 py-2 text-sm font-medium ${activeInventoryTab === 'inventory-ledger' ? 'text-white border-b-2 border-gold-500' : 'text-slate-400 hover:text-white'}`}
+                      onClick={() => setActiveInventoryTab('inventory-ledger')}
+                    >
+                      Inventory Ledger
+                    </button>
+                  )}
+                  <button
+                    className={`px-4 py-2 text-sm font-medium ${activeInventoryTab === 'supplier-ledger' ? 'text-white border-b-2 border-gold-500' : 'text-slate-400 hover:text-white'}`}
+                    onClick={() => setActiveInventoryTab('supplier-ledger')}
+                  >
+                    Supplier Ledger
+                  </button>
+                  {isManagerOrAdmin && (
+                    <>
+                      <button
+                        className={`px-4 py-2 text-sm font-medium ${activeInventoryTab === 'customer-ledger' ? 'text-white border-b-2 border-gold-500' : 'text-slate-400 hover:text-white'}`}
+                        onClick={() => setActiveInventoryTab('customer-ledger')}
+                      >
+                        Customer Ledger
+                      </button>
+                      <button
+                        className={`px-4 py-2 text-sm font-medium ${activeInventoryTab === 'expense-manager' ? 'text-white border-b-2 border-gold-500' : 'text-slate-400 hover:text-white'}`}
+                        onClick={() => setActiveInventoryTab('expense-manager')}
+                      >
+                        Expense Manager
+                      </button>
+                    </>
+                  )}
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {activeInventoryTab === 'inventory-ledger' && <InventoryLedgerPanel />}
+                  {activeInventoryTab === 'supplier-ledger' && <SupplierLedgerPanel />}
+                  {activeInventoryTab === 'customer-ledger' && <CustomerLedgerPanel />}
+                  {activeInventoryTab === 'expense-manager' && <ExpenseManagerPanel />}
+                </div>
+              </div>
+            )}
             {activePanel === 'zones-tables' && (
               <div className="space-y-8">
                 <ZonesPanel />
@@ -201,7 +267,7 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
             )}
-            {activePanel === 'suppliers' && <SuppliersPanel />}
+            { activePanel === 'suppliers' && <SuppliersPanel /> /* Legacy, can keep or remove */ }
             {activePanel === 'order-defaults' && <OrderSettingsPanel />}
             {activePanel === 'printers' && <PrintersPanel />}
             {activePanel === 'invoice-templates' && <InvoiceTemplatesPanel />}

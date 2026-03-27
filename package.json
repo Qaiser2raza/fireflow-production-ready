@@ -25,6 +25,7 @@
     "db:seed": "prisma db seed",
     "db:reset": "prisma db seed",
     "db:reset-orders": "tsx scripts/reset_orders.ts",
+    "db:reset-all": "tsx scripts/reset_orders.ts",
     "publish": "tsx scripts/publish-update.ts"
   },
   "dependencies": {

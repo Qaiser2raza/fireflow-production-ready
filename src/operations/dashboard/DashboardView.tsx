@@ -5,7 +5,8 @@ import { useRestaurant } from '../../client/RestaurantContext';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 import {
   TrendingUp, Users, Activity, HeartPulse,
-  Banknote, ShoppingBag, AlertCircle, Bike, Zap, Navigation, Utensils
+  Banknote, ShoppingBag, AlertCircle, Bike, Zap, Navigation, Utensils,
+  Box, TrendingDown, Calculator
 } from 'lucide-react';
 import { Card } from '../../shared/ui/Card';
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
@@ -46,7 +47,14 @@ export const DashboardView: React.FC = () => {
       }
       const data = await res.json();
       if (data && data.totalSales !== undefined) {
-        setStats(data);
+        setStats((prev: any) => ({ ...prev, ...data }));
+      }
+
+      // Fetch Finance Analytics
+      const resFinance = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/analytics/finance/summary?restaurant_id=${currentUser.restaurant_id}`);
+      if (resFinance.ok) {
+          const financeData = await resFinance.json();
+          setStats((prev: any) => ({ ...prev, finance: financeData }));
       }
 
       // Detailed reports definitely need rights
@@ -182,6 +190,34 @@ export const DashboardView: React.FC = () => {
         <div className="bg-[#0B0F19]/80 border border-red-500/20 rounded-2xl p-4 flex flex-col justify-center">
             <span className="text-[9px] text-red-400 font-black uppercase tracking-widest mb-1.5">Discounts Given</span>
             <span className="text-lg font-serif text-slate-300 lg:truncate tracking-tighter">Rs. {stats.breakdown?.discount?.toLocaleString() || 0}</span>
+        </div>
+      </div>
+
+      {/* NEW: PERIODIC INVENTORY & EXPENSES SUMMARY */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+        <div className="bg-slate-900/60 border border-blue-500/30 rounded-3xl p-6 relative overflow-hidden group">
+            <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400"><Box size={24} /></div>
+                <span className="text-[10px] bg-blue-500/20 text-blue-300 px-3 py-1 rounded-full font-bold uppercase tracking-widest">Inventory In</span>
+            </div>
+            <div className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">Total Purchases</div>
+            <div className="text-3xl font-serif font-black text-white">Rs. {stats.finance?.totalInventoryPurchases?.toLocaleString() || 0}</div>
+        </div>
+        <div className="bg-slate-900/60 border border-red-500/30 rounded-3xl p-6 relative overflow-hidden group">
+            <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-red-500/10 rounded-2xl text-red-400"><TrendingDown size={24} /></div>
+                <span className="text-[10px] bg-red-500/20 text-red-300 px-3 py-1 rounded-full font-bold uppercase tracking-widest">Outflow</span>
+            </div>
+            <div className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">General Expenses</div>
+            <div className="text-3xl font-serif font-black text-white">Rs. {stats.finance?.totalExpenses?.toLocaleString() || 0}</div>
+        </div>
+        <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-3xl p-6 relative overflow-hidden group">
+            <div className="flex justify-between items-start mb-4">
+                <div className="p-3 bg-emerald-500/10 rounded-2xl text-emerald-400"><Calculator size={24} /></div>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded-full font-bold uppercase tracking-widest">Profitability</span>
+            </div>
+            <div className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1">Calculated COGS</div>
+            <div className="text-3xl font-serif font-black text-emerald-400">Rs. {stats.finance?.cogs?.toLocaleString() || 0}</div>
         </div>
       </div>
 

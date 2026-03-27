@@ -26,6 +26,7 @@ import { OrderServiceFactory } from './services/orders/OrderServiceFactory';
 import { AccountingService } from './services/AccountingService';
 import deliveryRoutes from './routes/deliveryRoutes';
 import accountingRoutes from './routes/accountingRoutes';
+import expenseRoutes from './routes/expenseRoutes';
 import customerRoutes from './routes/customerRoutes';
 import reportRoutes from './routes/reportRoutes';
 import coaRoutes from './routes/coaRoutes';
@@ -40,6 +41,9 @@ import { sendPaymentVerified, sendPaymentRejected } from './services/notificatio
 import { fbrService } from './services/FBRService.js';
 import { updateService } from './services/UpdateService';
 import { NetworkDiscoveryService } from './services/NetworkDiscoveryService';
+import financeRoutes from './routes/financeRoutes';
+import cashierRoutes from './routes/cashierRoutes.js';
+// Removed missing analyticsRoutes
 
 // ==========================================
 // 📁 LOCAL FILE UPLOAD — Menu Item Images
@@ -2104,11 +2108,14 @@ app.post('/api/orders/:id/unlock', authMiddleware, async (req, res) => {
                 }
             });
 
-            // 2. Void Transactions
+            // 2. Void Transactions and Journals
             await tx.transactions.updateMany({
                 where: { order_id: id },
                 data: { status: 'VOIDED' }
             });
+            
+            // Revert all accounting records natively in this transaction
+            await accounting.recordOrderVoid(id, staffId || 'SYSTEM', tx);
 
             // 3. Re-occupy Table if Dine-in
             if (order.type === 'DINE_IN' && order.table_id) {
@@ -2335,11 +2342,17 @@ app.post('/api/floor/seat-party', authMiddleware, async (req, res) => {
 app.use('/api', deliveryRoutes);
 app.use('/api', customerRoutes);
 app.use('/api/accounting', accountingRoutes);
+app.use('/api/expenses', expenseRoutes);
 app.use('/api/accounting/coa', coaRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/payouts', requireRole('MANAGER', 'ADMIN'), accountingRoutes); // or specific payout routes if separate
+app.use('/api/coa', coaRoutes);
+app.use('/api/finance', financeRoutes);
+// Removed missing analyticsRoutes usage
+// app.use('/api/analytics', analyticsRoutes);
 app.use('/api/fbr', fbrRoutes);
 app.use('/api/printers', printerRoutes);
+app.use('/api/cashier', cashierRoutes);
 
 // ─── Accounting / COA / Trial Balance routes ──────────────────────────────
 
@@ -2599,14 +2612,14 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
             _count: { id: true }
         });
 
-        // 2. Order Breakdown (Today's Paid/Closed Orders)
+        // 2. Order Breakdown (Today's Orders - Include ACTIVE for live revenue)
         const todaysOrders = await prisma.orders.findMany({
             where: {
                 restaurant_id: String(restaurant_id),
                 created_at: { gte: todayStart },
-                OR: [{ status: 'CLOSED' }, { payment_status: 'PAID' }]
+                NOT: { status: 'CANCELLED' } // Exclude cancelled from revenue
             },
-            select: { type: true, total: true, tax: true, discount: true, service_charge: true }
+            select: { type: true, status: true, total: true, tax: true, discount: true, service_charge: true }
         });
 
         const breakdown = {
@@ -2619,9 +2632,14 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
         };
 
         todaysOrders.forEach(o => {
-            if (o.type === 'DINE_IN') breakdown.dineIn += Number(o.total || 0);
-            if (o.type === 'TAKEAWAY') breakdown.takeaway += Number(o.total || 0);
-            if (o.type === 'DELIVERY') breakdown.delivery += Number(o.total || 0);
+            // Formula: Net Revenue = Grand Total - Tax - SC
+            const netVal = Number(o.total || 0) - Number(o.tax || 0) - Number(o.service_charge || 0);
+
+            if (o.type === 'DINE_IN') breakdown.dineIn += netVal;
+            if (o.type === 'TAKEAWAY') breakdown.takeaway += netVal;
+            if (o.type === 'DELIVERY') breakdown.delivery += netVal;
+            
+            // Separate components
             breakdown.tax += Number(o.tax || 0);
             breakdown.discount += Number(o.discount || 0);
             breakdown.serviceCharge += Number(o.service_charge || 0);
@@ -2639,7 +2657,7 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
         const onRoadCount = await prisma.orders.count({
             where: {
                 restaurant_id: String(restaurant_id),
-                status: 'READY' // In our flow, READY means out for delivery
+                status: 'READY' 
             }
         });
 
@@ -2698,12 +2716,12 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
         });
 
         res.json({
-            totalSales: Number(salesAgg._sum.amount || 0),
-            totalTransactions: salesAgg._count.id || 0,
-            unitAverage: salesAgg._count.id > 0 ? Math.round(Number(salesAgg._sum.amount || 0) / salesAgg._count.id) : 0,
+            totalSales: Number(salesAgg?._sum?.amount || 0),
+            totalTransactions: salesAgg?._count?.id || 0,
+            unitAverage: (salesAgg?._count?.id || 0) > 0 ? Math.round(Number(salesAgg?._sum?.amount || 0) / (salesAgg?._count?.id || 1)) : 0,
             activeOrders: activeOrdersCount,
             kitchenQueue: kitchenQueueCount,
-            totalGuests: Number(guestCountAgg._sum.guest_count || 0),
+            totalGuests: Number(guestCountAgg?._sum?.guest_count || 0),
             statusBreakdown: statusMap,
             breakdown,
             logistics: {

@@ -25,7 +25,7 @@ export async function getPayoutExpenseReport(restaurantId: string, dateRange: Da
     const expenses = await prisma.expenses.findMany({
         where: {
             restaurant_id: restaurantId,
-            date: { gte: dateRange.start, lte: dateRange.end }
+            created_at: { gte: dateRange.start, lte: dateRange.end }
         },
         include: { staff: true }
     }) as any[];
@@ -56,7 +56,7 @@ export async function getPayoutExpenseReport(restaurantId: string, dateRange: Da
         totalExpenses += amt;
         const cat = e.category || 'Uncategorized';
         const proc = e.staff?.name || 'Unknown Staff';
-        const day = new Date(e.date).toISOString().split('T')[0];
+        const day = new Date(e.created_at).toISOString().split('T')[0];
 
         // Decide whether to merge with payouts or keep separate.
         // We will merge them for the "Total Cash Outflow" view.
@@ -88,7 +88,7 @@ export async function getPayoutExpenseReport(restaurantId: string, dateRange: Da
             })),
             ...expenses.map(e => ({
                 id: e.id,
-                date: e.date,
+                date: e.created_at,
                 amount: Number(e.amount),
                 category: e.category,
                 notes: e.description || '',

@@ -58,17 +58,17 @@ export const MenuItemCard: React.FC<MenuItemCardProps> = ({
                     <h3 className="text-white font-black text-[10px] md:text-xs leading-tight uppercase tracking-tight group-hover:text-gold-500 transition-colors truncate">
                         {item.name}
                     </h3>
-                    <p className="font-urdu text-lg text-slate-400 font-bold leading-none mt-1 truncate" dir="rtl">
+                    <p className="font-urdu text-xl text-white font-bold leading-none mt-2 truncate drop-shadow-md" dir="rtl">
                         {item.name_urdu || 'بغیر نام'}
                     </p>
                 </div>
 
-                <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/5">
-                    <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">
+                <div className="flex items-center justify-between mt-3 pt-2 border-t border-white/5">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-gold-500/80 bg-gold-500/5 px-2 py-0.5 rounded shadow-sm">
                         {item.category || 'General'}
                     </span>
                     {item.station && (
-                        <span className="text-[8px] font-black uppercase tracking-widest text-gold-500/60">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-400/60 font-mono">
                             {item.station}
                         </span>
                     )}

@@ -105,6 +105,44 @@
   .stitch-card {
     @apply bg-slate-900/80 border border-slate-800 rounded-3xl p-5 transition-all duration-300;
   }
+
+  /* Premium UI Extensions */
+  .premium-glass {
+    @apply bg-slate-950/40 backdrop-blur-2xl border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)];
+  }
+
+  .receipt-paper {
+    @apply bg-[#fdfdfd] text-[#1a1a1a] shadow-[0_10px_30px_rgba(0,0,0,0.3)] relative overflow-hidden;
+    background-image: radial-gradient(#e5e7eb 0.5px, transparent 0.5px);
+    background-size: 10px 10px;
+  }
+
+  .receipt-edge {
+    background-image: linear-gradient(-45deg, transparent 16px, #fdfdfd 0), linear-gradient(45deg, transparent 16px, #fdfdfd 0);
+    background-repeat: repeat-x;
+    background-position: left bottom;
+    background-size: 22px 32px;
+    height: 32px;
+    width: 100%;
+  }
+
+  .thermal-fade {
+    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+  }
+
+  .numpad-key {
+    @apply flex items-center justify-center bg-slate-900 border border-slate-800 rounded-[1.5rem] 
+           text-2xl font-black text-white transition-all active:scale-95 active:bg-indigo-500/20 active:border-indigo-500/40 hover:bg-slate-800;
+  }
+
+  .method-card {
+    @apply flex flex-col items-center justify-center gap-2 bg-slate-900/40 border border-slate-800/60 rounded-2xl 
+           transition-all hover:bg-slate-900/60 hover:border-slate-700 active:scale-95;
+  }
+
+  .method-card-active {
+    @apply bg-indigo-500/10 border-indigo-500/50 text-indigo-400 shadow-[0_0_20px_rgba(99,102,241,0.15)];
+  }
 }
 
 /* Custom scrollbar */

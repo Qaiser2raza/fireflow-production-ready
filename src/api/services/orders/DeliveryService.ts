@@ -102,6 +102,7 @@ export class DeliveryService extends BaseOrderService {
             where: { order_id: orderId },
             data: {
                 customer_name: data.customer_name,
+                customer_phone: data.customer_phone,
                 delivery_address: data.delivery_address,
                 driver_id: data.driver_id
             }

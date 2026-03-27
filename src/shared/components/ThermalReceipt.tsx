@@ -156,7 +156,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                 {/* Service Charge - Only if Dine In */}
                 {order.type === 'DINE_IN' && serviceCharge > 0 && (
                     <div className="flex justify-between text-[11px]">
-                        <span className="font-bold">SERVICE CHARGE ({order.restaurants?.service_charge_rate || 5}%)</span>
+                        <span className="font-bold uppercase">Service Charge ({order.service_charge_rate || config.service_charge_rate || 5}%)</span>
                         <span className="font-bold">{formatCurrency(serviceCharge)}</span>
                     </div>
                 )}
@@ -195,24 +195,28 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                 </div>
             </div>
 
-            {/* Payment Info */}
-            {isPaid && (
-                <div className="mt-4 p-2 border border-black bg-slate-50 text-center uppercase font-black text-[10px] tracking-widest leading-relaxed">
-                    {order.payment_method === 'SPLIT' && breakdown.paymentBreakdown ? (
-                        <div>
-                            <p className="border-b border-black/20 pb-1 mb-1 italic">Split Payment Breakdown</p>
-                            {breakdown.paymentBreakdown.map((p: any, i: number) => (
-                                <div key={i} className="flex justify-between px-2">
-                                    <span>{p.method === 'CREDIT' ? 'KHATA' : p.method}:</span>
-                                    <span>{formatCurrency(p.amount)}</span>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        `PAID VIA ${order.payment_method || 'CASH'}`
-                    )}
-                </div>
-            )}
+            {/* Payment Info / Breakdown */}
+            <div className="mt-4 p-2 border border-black bg-slate-50 uppercase font-black text-[10px] tracking-widest leading-relaxed">
+                <p className="border-b border-black pb-1 mb-1 text-center italic">Settlement Details</p>
+                
+                {/* Regular Payments Ledger */}
+                {order.transactions?.filter(t => t.status === 'PAID').map((t, i) => (
+                    <div key={i} className="flex justify-between px-2">
+                        <span>{t.payment_method === 'CREDIT' ? 'KHATA (A/C)' : t.payment_method}:</span>
+                        <span>{formatCurrency(Number(t.amount))}</span>
+                    </div>
+                ))}
+
+                {/* Legacy Fallback if no transactions recorded yet */}
+                {(!order.transactions?.some(t => t.status === 'PAID')) && (
+                    <div className="flex justify-between px-2">
+                        <span>{order.payment_method === 'CREDIT' ? 'KHATA (A/C)' : (order.payment_method || 'CASH')}:</span>
+                        <span>{formatCurrency(total)}</span>
+                    </div>
+                )}
+
+                {isPaid && <p className="text-center mt-2 border-t border-black pt-1">*** FULLY PAID ***</p>}
+            </div>
 
             {/* Footer */}
             <div className="mt-8 text-center space-y-2">

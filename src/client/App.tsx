@@ -78,7 +78,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [operationsConfig, setOperationsConfig] = useState<any>(null);
 
-  const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
+  const API_URL = (typeof window !== 'undefined' 
+    ? (window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : window.location.origin + '/api') 
+    : 'http://localhost:3001/api');
 
   // Helper: Get Authorization header with JWT token
   const getAuthHeaders = () => {
@@ -686,6 +688,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         if (!res.ok) {
           console.error('[AppContext] updateOrder failed:', await res.text());
+          return null;
+        }
+        const result = await res.json();
+        await fetchInitialData();
+        return result;
+      },
+      fireOrder: async (id: string, type: string) => {
+        const res = await fetchWithAuth(`${API_URL}/orders/${id}/fire`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type })
+        });
+        if (!res.ok) {
+          console.error('[AppContext] fireOrder failed:', await res.text());
           return null;
         }
         const result = await res.json();

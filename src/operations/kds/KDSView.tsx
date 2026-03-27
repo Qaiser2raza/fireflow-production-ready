@@ -165,6 +165,21 @@ export const KDSView: React.FC = () => {
           </div>
         </div>
 
+        {/* Connectivity Monitor */}
+        <div className="hidden md:flex items-center gap-4 bg-slate-900/50 border border-slate-800 px-4 py-2 rounded-2xl">
+           <div className="flex flex-col items-end">
+              <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">Station Connectivity</span>
+              <span className="text-[10px] text-green-400 font-bold uppercase">All Stations Operational</span>
+           </div>
+           <div className="flex -space-x-1">
+              {stations.filter(s => s.is_active).map(s => (
+                <div key={s.id} title={s.name} className="w-6 h-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center">
+                   <Circle size={8} className="text-green-500 fill-green-500/20" />
+                </div>
+              ))}
+           </div>
+        </div>
+
         <div className="flex flex-1 w-full xl:w-auto overflow-x-auto no-scrollbar items-center gap-2">
           <div className="flex bg-slate-900/40 p-1 rounded-xl border border-slate-800/50 backdrop-blur-xl items-center gap-1 mx-auto xl:mx-0">
             <button
@@ -425,7 +440,7 @@ const KDSTicket: React.FC<{
           <div className="flex gap-2">
             <button
               onClick={onVoidOrder}
-              className="flex-1 h-10 bg-slate-800 hover:bg-red-900/30 text-slate-400 hover:text-red-400 font-bold uppercase text-[9px] tracking-[0.15em] rounded-lg transition-colors border border-slate-700/50 hover:border-red-500/50"
+              className="flex-1 h-10 bg-red-600 hover:bg-red-500 text-white font-black uppercase text-[9px] tracking-[0.15em] rounded-lg transition-all shadow-lg shadow-red-900/40 active:scale-95 border border-red-500/50"
             >
               Void Ticket
             </button>

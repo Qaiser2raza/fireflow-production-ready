@@ -86,16 +86,32 @@ model dine_in_orders {
   staff               staff?   @relation(fields: [waiter_id], references: [id])
 }
 
+enum ExpenseCategory {
+  UTILITIES
+  SALARY
+  MAINTENANCE
+  SUPPLIES
+  MARKETING
+  RENT
+  TRANSPORT
+  MISCELLANEOUS
+}
+
 model expenses {
-  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String?      @db.Uuid
-  description   String       @db.VarChar(100)
-  amount        Decimal      @db.Decimal(10, 2)
-  category      String       @db.VarChar(50)
-  date          DateTime?    @default(now()) @db.Timestamp(6)
-  staff_id      String?      @db.Uuid
-  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  staff         staff?       @relation(fields: [staff_id], references: [id], onUpdate: NoAction)
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String          @db.Uuid
+  category      ExpenseCategory @default(MISCELLANEOUS)
+  amount        Decimal         @db.Decimal(10, 2)
+  description   String
+  reference_id  String?         @db.VarChar(100)
+  processed_by  String?         @db.Uuid
+  created_at    DateTime        @default(now()) @db.Timestamp(6)
+
+  restaurants restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  staff       staff?      @relation(fields: [processed_by], references: [id], onDelete: SetNull)
+
+  @@index([restaurant_id])
+  @@index([created_at])
 }
 
 model installation_logs {
@@ -252,6 +268,8 @@ model orders {
   closed_at                              DateTime?
   completed_at                           DateTime?
   rider_shift_id                         String?             @db.Uuid
+  session_id                             String?             @db.Uuid
+
   delivery_orders                        delivery_orders?
   dine_in_orders                         dine_in_orders?
   order_intelligence                     order_intelligence?
@@ -262,6 +280,8 @@ model orders {
   restaurants                            restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   rider_shift                            rider_shifts?       @relation(fields: [rider_shift_id], references: [id])
   tables                                 tables?             @relation(fields: [table_id], references: [id])
+  cashier_session                        cashier_sessions?   @relation(fields: [session_id], references: [id])
+
   reservation_orders                     reservation_orders?
   takeaway_orders                        takeaway_orders?
   transactions                           transactions[]
@@ -394,7 +414,8 @@ model restaurants {
   subscription_expires_at DateTime?               @db.Timestamp(6)
   trial_ends_at           DateTime?               @db.Timestamp(6)
   audit_logs              audit_logs[]
-  cash_sessions           cash_sessions[]
+  cashier_sessions        cashier_sessions[]
+
   chart_of_accounts       chart_of_accounts[]
   customers               customers[]
   expenses                expenses[]
@@ -547,6 +568,9 @@ model staff {
   registered_devices                      registered_devices[]
   rider_settlements                       rider_settlements[]
   rider_shifts                            rider_shifts[]       @relation("rider_shifts")
+  opened_sessions                         cashier_sessions[]   @relation("opened_sessions")
+  closed_sessions                         cashier_sessions[]   @relation("closed_sessions")
+
   security_events                         security_events[]
   restaurants                             restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   staff_wallet_logs                       staff_wallet_logs[]
@@ -677,20 +701,26 @@ model payouts {
   supplier_ledger supplier_ledgers[]
 }
 
-model cash_sessions {
+model cashier_sessions {
   id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id    String      @db.Uuid
   opened_by        String      @db.Uuid
   closed_by        String?     @db.Uuid
   opened_at        DateTime    @default(now()) @db.Timestamp(6)
   closed_at        DateTime?   @db.Timestamp(6)
-  opening_balance  Decimal     @default(0) @db.Decimal(10, 2)
-  expected_balance Decimal?    @db.Decimal(10, 2)
-  actual_balance   Decimal?    @db.Decimal(10, 2)
-  variance         Decimal?    @db.Decimal(10, 2)
+  opening_float    Decimal     @default(0) @db.Decimal(10, 2)
+  expected_cash    Decimal?    @db.Decimal(10, 2)
+  actual_cash      Decimal?    @db.Decimal(10, 2)
+  difference       Decimal?    @db.Decimal(10, 2)
   status           String      @default("OPEN") @db.VarChar(20)
   notes            String?
+  
   restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  opened_by_staff  staff       @relation("opened_sessions", fields: [opened_by], references: [id])
+  closed_by_staff  staff?      @relation("closed_sessions", fields: [closed_by], references: [id])
+  
+  // Link orders to the session they were created in
+  orders           orders[]
 }
 
 model printers {

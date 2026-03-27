@@ -3,7 +3,7 @@ import { journalEntryService } from './JournalEntryService';
 import { prisma } from '../../shared/lib/prisma';
 
 export type TransactionType = 'DEBIT' | 'CREDIT';
-export type ReferenceType = 'ORDER' | 'SETTLEMENT' | 'PAYOUT' | 'STOCK_IN' | 'OPENING_BALANCE' | 'ADJUSTMENT' | 'RIDER_SHIFT';
+export type ReferenceType = 'ORDER' | 'SETTLEMENT' | 'PAYOUT' | 'STOCK_IN' | 'OPENING_BALANCE' | 'ADJUSTMENT' | 'RIDER_SHIFT' | 'VOID_ORDER';
 
 export interface LedgerEntryData {
     restaurantId: string;
@@ -291,6 +291,15 @@ export class AccountingService {
             referenceType: 'SETTLEMENT',
             referenceId: data.referenceId,
             description: `Float received by rider`,
+            processedBy: data.processedBy
+        }, db);
+
+        // 3. Double-Entry Journal Record
+        await journalEntryService.recordFloatIssueJournal({
+            restaurantId: data.restaurantId,
+            riderId: data.riderId,
+            amount: amount,
+            settlementId: data.referenceId || `FLT-${Date.now()}`,
             processedBy: data.processedBy
         }, db);
     }
@@ -617,73 +626,47 @@ export class AccountingService {
     }
 
     /**
-     * Payout helper: Creates payout record + ledger entry
+     * VOID ORDER (Reverses Sales, Payments, and Settlement Journals & Ledgers)
      */
-    async processPayout(data: {
-        restaurantId: string;
-        amount: number | Decimal;
-        category: string;
-        notes: string;
-        staffId: string;
-        referenceId?: string;
-    }) {
-        return await prisma.$transaction(async (tx) => {
-            const payout = await tx.payouts.create({
-                data: {
-                    restaurant_id: data.restaurantId,
-                    amount: new Decimal(data.amount.toString()),
-                    category: data.category,
-                    notes: data.notes,
-                    processed_by: data.staffId,
-                    reference_id: data.referenceId
-                }
-            });
+    async recordOrderVoid(orderId: string, staffId: string, tx: any) {
+        if (!tx) throw new Error("Transaction required to void order accounting records.");
+        const db = tx;
 
-            await this.recordPayout({
-                restaurantId: data.restaurantId,
-                amount: data.amount,
-                category: data.category,
-                notes: data.notes,
-                processedBy: data.staffId,
-                referenceId: payout.id
-            }, tx);
+        // 1. Reverse Double-Entry Journals
+        await journalEntryService.reverseJournalByReference('ORDER_SALE', orderId, staffId, db);
+        await journalEntryService.reverseJournalByReference('RIDER_SETTLEMENT', orderId, staffId, db);
 
-            // ── Double-Entry Journal ─────────────────────────────────────
-            await journalEntryService.recordPayoutJournal({
-                restaurantId: data.restaurantId,
-                amount: data.amount,
-                payoutId: payout.id,
-                category: data.category,
-                notes: data.notes,
-                processedBy: data.staffId
-            }, tx);
-
-            // ── Supplier Ledger Bridge ───────────────────────────────────
-            if (data.category === 'SUPPLIER' && data.referenceId) {
-                // 1. Post to specialized Supplier Ledger
-                await this.postSupplierLedger({
-                    restaurantId: data.restaurantId,
-                    supplierId: data.referenceId,
-                    payoutId: payout.id,
-                    amount: data.amount,
-                    entryType: 'PAYMENT',
-                    description: data.notes,
-                    processedBy: data.staffId
-                }, tx);
-
-                // 2. Specialized Journal (Liability clearing)
-                await journalEntryService.recordSupplierPaymentJournal({
-                    restaurantId: data.restaurantId,
-                    supplierId: data.referenceId,
-                    amount: data.amount,
-                    payoutId: payout.id,
-                    paymentMethod: 'CASH', // Defaults to cash for payouts
-                    processedBy: data.staffId
-                }, tx);
-            }
-
-            return payout;
+        // Find associated transactions (like Customer Payments) to reverse their journals
+        const transactions = await db.transactions.findMany({
+            where: { order_id: orderId }
         });
+        for (const t of transactions) {
+            await journalEntryService.reverseJournalByReference('CUSTOMER_PAYMENT', t.id, staffId, db);
+            if (t.transaction_ref) {
+                await journalEntryService.reverseJournalByReference('CUSTOMER_PAYMENT', t.transaction_ref, staffId, db);
+            }
+        }
+
+        // 2. Reverse Single-Entry Ledgers (Shift Drawer / Rider Debits)
+        const ledgers = await db.ledger_entries.findMany({
+            where: { 
+                reference_type: { in: ['ORDER', 'SETTLEMENT'] }, 
+                reference_id: orderId 
+            }
+        });
+
+        for (const l of ledgers) {
+            await this.createLedgerEntry({
+                restaurantId: l.restaurant_id,
+                accountId: l.account_id,
+                transactionType: l.transaction_type === 'DEBIT' ? 'CREDIT' : 'DEBIT',
+                amount: l.amount,
+                referenceType: 'VOID_ORDER',
+                referenceId: orderId,
+                description: `VOID REVERSAL: ${l.description}`,
+                processedBy: staffId
+            }, db);
+        }
     }
 
     /**

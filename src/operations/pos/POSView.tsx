@@ -1,67 +1,48 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { MenuItem, OrderItem, OrderType } from '../../shared/types';
 import { useAppContext } from '../../client/contexts/AppContext';
-import {
-  Search,
-  X,
-  Edit2,
-  Plus,
-  Minus,
-  Loader2,
-  Utensils,
-  Flame,
-  ShoppingBag,
-  Bike,
-  Banknote,
-  Printer,
-  CreditCard,
-  Clock,
-  CheckCircle2,
-  CheckSquare,
-  History,
-  Eye
-} from 'lucide-react';
+import { Search, X, Edit2, Plus, Minus, Loader2, Utensils, Flame, ShoppingBag, Bike, Users, Banknote, Printer, History } from 'lucide-react';
 import { useDebounce } from '../../hooks/useDebounce';
-import { useThermalPrinter } from '../../hooks/useThermalPrinter';
-// import { CustomerQuickAdd } from './components/CustomerQuickAdd';
+import { CustomerQuickAdd } from './components/CustomerQuickAdd';
 import { TokenDisplayBanner } from './components/TokenDisplayBanner';
-import { RecallModal } from '../dashboard/components/RecallModal';
 import { MenuItemCard } from './components/MenuItemCard';
 import { FloatingCartBadge } from './components/FloatingCartBadge';
 import { PaymentModal } from './components/PaymentModal';
 import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
-import { ReceiptView } from './ReceiptView';
-import { Order } from '../../shared/types';
-import { calculateBill, getDefaultBillConfig, BillConfig } from '../../lib/billEngine';
-import { generateInvoiceHtml } from '../../shared/lib/invoiceTemplates';
-
+import { calculateBill, getDefaultBillConfig } from '../../lib/billEngine';
+import { RecentOrdersModal } from './components/RecentOrdersModal';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 export const POSView: React.FC = () => {
   const {
-    addOrder, updateOrder, orders,
+    addOrder, updateOrder, fireOrder, orders,
     orderToEdit, setOrderToEdit, setActiveView, currentUser, menuItems, menuCategories,
-    tables, addNotification, customers, processPayment, addCustomer, operationsConfig
+    tables, addNotification, customers, processPayment, operationsConfig
   } = useAppContext();
 
   // UI & Order State
-  // Default to 'trending' (Most Selling)
   const [activeCategory, setActiveCategory] = useState<string>('trending');
   const [searchQuery, setSearchQuery] = useState('');
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [editingField, setEditingField] = useState<'discount' | 'delivery' | 'tax' | 'service' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTokenBanner, setShowTokenBanner] = useState(false);
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
   const [estimatedPickupTime, setEstimatedPickupTime] = useState<Date | undefined>(undefined);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
-  const [showMobileCart, setShowMobileCart] = useState(false); // Mobile-only: cart bottom sheet
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768); // Mobile breakpoint detection
+  const [showMobileCart, setShowMobileCart] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Breakdown Interaction States (v4.0)
+  const [taxEnabled, setTaxEnabled] = useState(true);
+  const [serviceChargeEnabled, setServiceChargeEnabled] = useState(true);
+  const [discountValue, setDiscountValue] = useState(0);
+  const [discountType, setDiscountType] = useState<'flat' | 'percent'>('flat');
+  const [discountReason, setDiscountReason] = useState('');
+  const [deliveryFeeEnabled, setDeliveryFeeEnabled] = useState(false);
+  const [deliveryFeeValue, setDeliveryFeeValue] = useState(0);
 
   // Order Details State
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
-  const [activeOrderNumber, setActiveOrderNumber] = useState<string | null>(null);
-  const [isRecallOpen, setIsRecallOpen] = useState(false);
   const [currentOrderItems, setCurrentOrderItems] = useState<OrderItem[]>([]);
   const [orderType, setOrderType] = useState<OrderType>(currentUser?.role === 'CASHIER' ? 'TAKEAWAY' : 'DINE_IN');
   const [selectedTableId, setSelectedTableId] = useState<string>('');
@@ -69,36 +50,22 @@ export const POSView: React.FC = () => {
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
   const [deliveryAddress, setDeliveryAddress] = useState<string>('');
+  const [customerId, setCustomerId] = useState<string | null>(null);
   const [isCustomerLoading, setIsCustomerLoading] = useState(false);
-  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
+  const [activeSession, setActiveSession] = useState<any>(null);
 
   const debouncedPhone = useDebounce(customerPhone, 400);
 
-  // Bill Config — per-session billing overrides (discount, service, tax, delivery)
-  // Helper: returns the best available config (context > localStorage > {})
-  // Needed because operationsConfig may still be null on first render (async load)
-  const getEffectiveConfig = () => {
-    if (operationsConfig) return operationsConfig;
-    try {
-      const restaurantId = currentUser?.restaurant_id;
-      if (restaurantId) {
-        const stored = localStorage.getItem(`fireflow_operations_config_${restaurantId}`);
-        if (stored) return JSON.parse(stored);
-      }
-    } catch { /* ignore parse errors */ }
-    return {};
-  };
+  const activeOrderData = useMemo(() => 
+    activeOrderId ? orders.find(o => o.id === activeOrderId) : null
+  , [activeOrderId, orders]);
 
-  const [billConfig, setBillConfig] = useState<BillConfig>(() =>
-    getDefaultBillConfig('DINE_IN', getEffectiveConfig())
-  );
+  const isAlreadyPaid = useMemo(() => 
+    activeOrderData?.status === 'CLOSED' || activeOrderData?.payment_status === 'PAID'
+  , [activeOrderData]);
 
-  // Reset bill config to order-type defaults when order type changes
-  // v3.1: Skip reset if we are currently loading an order to edit (recall)
-  useEffect(() => {
-    if (orderToEdit) return;
-    setBillConfig(getDefaultBillConfig(orderType, getEffectiveConfig()));
-  }, [orderType, operationsConfig, orderToEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showRecentOrders, setShowRecentOrders] = useState(false);
 
   // Track mobile breakpoint
   useEffect(() => {
@@ -113,110 +80,14 @@ export const POSView: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Global Barcode Listener
-  useEffect(() => {
-    let buffer = '';
-    let lastKeyTime = Date.now();
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const currentTime = Date.now();
-      
-      // Barcode scanners are fast. If time between keys is > 100ms, it's likely manual typing.
-      if (currentTime - lastKeyTime > 100) {
-        buffer = '';
-      }
-      
-      lastKeyTime = currentTime;
-
-      if (e.key === 'Enter') {
-        if (buffer.length > 5) { // Minimum order number length
-          const scannedNumber = buffer.trim();
-          console.log('[POS] Barcode Scanned:', scannedNumber);
-          
-          // Try to find the order by order_number or ID
-          const foundry = orders.find(o => o.order_number === scannedNumber || o.id === scannedNumber);
-          if (foundry) {
-            setOrderToEdit(foundry);
-            addNotification('success', `Recalled Order: ${foundry.order_number || scannedNumber}`);
-            if (foundry.payment_status !== 'PAID' && foundry.status !== 'CLOSED') {
-                setTimeout(() => setShowPaymentModal(true), 300); // UI needs time to populate order
-            }
-          }
-        }
-        buffer = '';
-        return;
-      }
-
-      // Append alphanumeric keys to buffer
-      if (e.key.length === 1 && /[a-zA-Z0-9-]/.test(e.key)) {
-        buffer += e.key;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [orders, setOrderToEdit, addNotification]);
-
-  // Global Keyboard Shortcuts
-  useEffect(() => {
-    const handleShortcuts = (e: KeyboardEvent) => {
-      // Don't trigger single-key shortcuts if typing in an input
-      const activeElement = document.activeElement;
-      const isInputFocused = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
-
-      // "/" -> Focus Search
-      if (e.key === '/' && !isInputFocused) {
-        e.preventDefault();
-        document.getElementById('pos-search-input')?.focus();
-      }
-
-      // "F9" or "Ctrl+Enter" -> Open Checkout/Payment
-      if (e.key === 'F9' || (e.ctrlKey && e.key === 'Enter')) {
-        e.preventDefault();
-        if (currentOrderItems.length > 0) {
-          setShowPaymentModal(true);
-        } else {
-          addNotification('info', 'Cart is empty');
-        }
-      }
-
-      // "F4" or "Alt+P" -> Quick Print
-      if (e.key === 'F4' || (e.altKey && e.key.toLowerCase() === 'p')) {
-        e.preventDefault();
-        // Fire print logic only if there is an active order
-        if (activeOrderId || currentOrderItems.length > 0) {
-           handlePrint();
-        } else {
-           addNotification('info', 'Nothing to print');
-        }
-      }
-
-      // "Alt+N" -> New Order (Reset Pad)
-      if (e.altKey && e.key.toLowerCase() === 'n') {
-        e.preventDefault();
-        resetPad();
-        addNotification('info', 'New Order Started');
-      }
-
-      // "Escape" -> Close Modals or Clear Pad
-      if (e.key === 'Escape') {
-        // Just clear pad if no dialogs are likely open
-        if (!isInputFocused) {
-            resetPad();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleShortcuts);
-    return () => window.removeEventListener('keydown', handleShortcuts);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentOrderItems, activeOrderId]);
-
-
-  // Load Order for Editing
   useEffect(() => {
     if (orderToEdit) {
-      console.log('[POS] Loading order to edit:', orderToEdit.id, 'Items:', orderToEdit.order_items?.length);
+      // Guard: Only load if it's a different order OR if we don't have items yet
+      if (activeOrderId === orderToEdit.id && currentOrderItems.length > 0) {
+        return; 
+      }
+
+      console.log('[POS] Loading order to edit:', orderToEdit.id);
       // Load order items
       const mappedItems: OrderItem[] = (orderToEdit.order_items || []).map(item => ({
         id: item.id,
@@ -259,120 +130,135 @@ export const POSView: React.FC = () => {
         setCustomerName(deliveryData?.customer_name || deliveryData?.customerName || orderToEdit.customer_name || orderToEdit.customerName || '');
         setCustomerPhone(deliveryData?.customer_phone || deliveryData?.customerPhone || orderToEdit.customer_phone || orderToEdit.customerPhone || '');
         setDeliveryAddress(deliveryData?.delivery_address || deliveryData?.deliveryAddress || orderToEdit.delivery_address || orderToEdit.deliveryAddress || '');
+        setCustomerId(orderToEdit.customer_id || null);
       }
-
-
-      // Restore Bill Config (v3.1 Fix: maintain accurate discounts/taxes on recall)
-      const savedBreakdown = orderToEdit.breakdown;
-      setBillConfig({
-        discountType: orderToEdit.discount_type || (savedBreakdown?.discountPercent > 0 ? 'percent' : 'flat'),
-        discountValue: orderToEdit.discount_value || orderToEdit.discount || savedBreakdown?.discountValue || savedBreakdown?.discount || 0,
-        serviceChargeEnabled: orderToEdit.service_charge !== undefined ? orderToEdit.service_charge > 0 : (savedBreakdown?.serviceCharge > 0),
-        serviceChargeRate: orderToEdit.service_charge_rate || savedBreakdown?.serviceChargeRate || 5,
-        taxEnabled: orderToEdit.tax !== undefined ? orderToEdit.tax > 0 : (savedBreakdown?.tax > 0),
-        taxRate: orderToEdit.tax_rate || savedBreakdown?.taxRate || (operationsConfig?.taxRate ?? 16),
-        taxLabel: orderToEdit.tax_label || savedBreakdown?.taxLabel || (operationsConfig?.taxLabel ?? 'GST'),
-        taxInclusive: orderToEdit.tax_type === 'INCLUSIVE' || (savedBreakdown?.taxInclusive ?? false),
-        deliveryFeeEnabled: orderToEdit.type === 'DELIVERY',
-        deliveryFee: orderToEdit.delivery_fee || savedBreakdown?.deliveryFee || 0,
-      });
 
       addNotification('info', `Editing Order #${orderToEdit.id.slice(-6)}`);
     }
   }, [orderToEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const activeOrderData = useMemo(() => activeOrderId ? orders.find(o => o.id === activeOrderId) : null, [activeOrderId, orders]);
-  const isAlreadyPaid = activeOrderData?.status === 'CLOSED' || activeOrderData?.payment_status === 'PAID';
-
   // Customer Lookup logic
   useEffect(() => {
-    const cleanPhone = (debouncedPhone || '').replace(/\D/g, '');
+    const cleanPhone = debouncedPhone.replace(/\D/g, '');
     if (cleanPhone.length >= 10 && (orderType === 'TAKEAWAY' || orderType === 'DELIVERY')) {
       setIsCustomerLoading(true);
       const match = customers?.find(c => (c.phone || '').replace(/\D/g, '') === cleanPhone);
       if (match) {
         setCustomerName(match.name || '');
         setDeliveryAddress(match.address || '');
-        setSelectedCustomer(match);
+        setCustomerId(match.id);
         addNotification('success', `✓ Customer Found: ${match.name}`);
-      } else {
-        setSelectedCustomer(null);
       }
       setIsCustomerLoading(false);
     } else if (cleanPhone.length === 0) {
       setCustomerName('');
       setDeliveryAddress('');
-      setSelectedCustomer(null);
+      setCustomerId(null);
     }
-  }, [debouncedPhone, orderType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [debouncedPhone, orderType]); // Removed customers/addNotification from deps to prevent re-runs resetting manual name input
 
-  // Live Sync with server (reflect KDS changes in real-time)
+
+
+  // DATA SYNC & RECOVERY
   useEffect(() => {
-    if (activeOrderId && activeOrderData?.order_items) {
-      setCurrentOrderItems(prev => {
-        return prev.map(localItem => {
-          // Only sync items that already have a server-side ID
-          const serverItem = activeOrderData.order_items!.find(si => si.id === localItem.id);
-          if (serverItem) {
-            return { 
-              ...localItem, 
-              item_status: serverItem.item_status,
-              quantity: serverItem.quantity,
-              total_price: serverItem.total_price
-            };
-          }
-          return localItem;
-        });
-      });
-    }
-  }, [activeOrderData?.order_items?.map(i => i.item_status).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+    // 1. Calculate Base Defaults from System Config
+    const cfg = operationsConfig || {};
+    const baseType = orderToEdit?.type || orderType;
+    const typeDefaults = cfg.order_type_defaults?.[baseType];
 
-  const handleServeItem = async (itemId: string) => {
-    if (!activeOrderId || !activeOrderData) return;
-    setIsSubmitting(true);
+    const defaultTax = typeDefaults ? Boolean(typeDefaults.tax_enabled) : Boolean(cfg.taxEnabled ?? cfg.tax_enabled ?? true);
+    const defaultSrv = typeDefaults ? Boolean(typeDefaults.service_charge_enabled) : (baseType === 'DINE_IN');
+    const defaultDisc = Number(typeDefaults?.default_discount_value ?? 0);
+    const defaultDiscType = typeDefaults?.discount_type || 'flat';
+    const defaultDelivery = typeDefaults ? Boolean(typeDefaults.delivery_fee_enabled) : (baseType === 'DELIVERY');
+
+    if (orderToEdit) {
+      setOrderType(orderToEdit.type);
+      if (orderToEdit.type === 'DINE_IN') setSelectedTableId(orderToEdit.tableId || orderToEdit.table_id || '');
+      
+      // Load persisting overrides OR fallback to system defaults (NOT tax > 0)
+      const editOrder = orderToEdit as any;
+      setTaxEnabled(editOrder.tax_enabled ?? (orderToEdit.tax && orderToEdit.tax > 0 ? true : defaultTax));
+      setServiceChargeEnabled(editOrder.service_charge_enabled ?? (orderToEdit.service_charge && orderToEdit.service_charge > 0 ? true : defaultSrv));
+      setDiscountValue(editOrder.discount_value || orderToEdit.discount || defaultDisc);
+      setDiscountType(editOrder.discount_type || defaultDiscType);
+      setDiscountReason(editOrder.discount_reason || editOrder.discountReason || '');
+      setDeliveryFeeEnabled(editOrder.delivery_fee_enabled ?? (orderToEdit.delivery_fee && orderToEdit.delivery_fee > 0 ? true : defaultDelivery));
+      setDeliveryFeeValue(orderToEdit.delivery_fee || Number(typeDefaults?.default_delivery_fee ?? cfg.default_delivery_fee ?? 0));
+    } else {
+      // New Order - strictly follow defaults
+      setTaxEnabled(defaultTax);
+      setServiceChargeEnabled(defaultSrv);
+      setDiscountValue(defaultDisc);
+      setDiscountType(defaultDiscType);
+      setDiscountReason('');
+      setDeliveryFeeEnabled(defaultDelivery);
+      setDeliveryFeeValue(Number(typeDefaults?.default_delivery_fee ?? cfg.default_delivery_fee ?? cfg.defaultDeliveryFee ?? 0));
+    }
+  }, [orderToEdit, orderType, operationsConfig]);
+
+  // Session Management
+  useEffect(() => {
+    if (currentUser?.role === 'CASHIER') {
+      checkActiveSession();
+    }
+  }, [currentUser]);
+
+  const checkActiveSession = async () => {
+    if (!currentUser) return;
     try {
-      const updatedItems = currentOrderItems.map(i => 
-        i.id === itemId ? { ...i, item_status: 'SERVED' } : i
-      );
-      
-      const allServed = updatedItems.every(i => ['SERVED', 'VOIDED', 'CANCELLED', 'SKIPPED'].includes(i.item_status || ''));
-      
-      await updateOrder({
-        id: activeOrderId,
-        items: updatedItems,
-        status: allServed ? 'READY' : 'ACTIVE',
-        last_action_desc: 'Item served by staff'
-      } as any);
-      
-      addNotification('success', 'Item marked as served');
+      const res = await fetchWithAuth(`${(window.location.origin + '/api')}/cashier/current?restaurantId=${currentUser.restaurant_id}&staffId=${currentUser.id}`);
+      const data = await res.json();
+      if (data.success && data.session) {
+        setActiveSession(data.session);
+      }
     } catch (e) {
-      addNotification('error', 'Failed to serve item');
-    } finally {
-      setIsSubmitting(false);
+      console.error('Session check failed', e);
     }
   };
 
   const breakdown = useMemo(() => {
-    return calculateBill(currentOrderItems, billConfig);
-  }, [currentOrderItems, billConfig]);
+    const cfg = operationsConfig || {};
+    const config = getDefaultBillConfig(orderType, cfg);
+    return calculateBill(currentOrderItems, {
+      ...config,
+      taxEnabled,
+      serviceChargeEnabled,
+      discountType,
+      discountValue,
+      deliveryFeeEnabled,
+      deliveryFee: deliveryFeeValue
+    });
+  }, [currentOrderItems, orderType, operationsConfig, taxEnabled, serviceChargeEnabled, discountType, discountValue, deliveryFeeEnabled, deliveryFeeValue]);
 
   const allCategories = useMemo(() => {
     const categories: { id: string; name: string }[] = [];
     const seenNames = new Set<string>();
 
-    // Role-based category filtering logic
-
+    // 1. Add explicitly defined menu categories first
     menuCategories?.forEach(c => {
       const nameLower = c.name.toLowerCase().trim();
-      // Waiter filtering: Hide generic or sensitive categories if needed
-      // For now, we allow all except if we want to explicitly restrict some
-      // Example: if (isWaiter && c.name === 'Staff Meals') return;
       if (!seenNames.has(nameLower)) {
         categories.push({ id: c.id, name: c.name });
         seenNames.add(nameLower);
       }
     });
 
+    const derivedStatus = orderToEdit?.status || activeOrderData?.status;
+
+    // Check if there are any items that haven't been processed yet
+    const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'PENDING');
+
+    // DEBUG: Trace Status for Button
+    console.log('[POS Debug] Order Status Check:', {
+      activeOrderId,
+      activeOrderDataStatus: activeOrderData?.status,
+      orderToEditStatus: orderToEdit?.status,
+      derivedStatus,
+      hasUnfiredItems
+    });
+
+    // 2. Add categories found in items that aren't already in the list
     menuItems?.forEach(i => {
       if (i.category) {
         const nameLower = i.category.toLowerCase().trim();
@@ -384,7 +270,7 @@ export const POSView: React.FC = () => {
     });
 
     return categories;
-  }, [menuCategories, menuItems, currentUser]);
+  }, [menuCategories, menuItems]);
 
   const filteredItems = useMemo(() => {
     let items = Array.isArray(menuItems) ? menuItems : [];
@@ -421,62 +307,18 @@ export const POSView: React.FC = () => {
   const resetPad = () => {
     console.log('[POS] Resetting Pad');
     setActiveOrderId(null);
-    setActiveOrderNumber(null);
     setCurrentOrderItems([]);
-    setOrderType(currentUser?.role === 'CASHIER' ? 'TAKEAWAY' : 'DINE_IN');
-    setSelectedTableId('');
-    setGuestCount(2);
     setCustomerPhone('');
     setCustomerName('');
     setDeliveryAddress('');
-    setOrderToEdit(null);
-    setGeneratedToken(null);
-    setShowTokenBanner(false);
-  };
+    setCustomerId(null);
+    setOrderType(currentUser?.role === 'CASHIER' ? 'TAKEAWAY' : 'DINE_IN');
+    setSelectedTableId('');
+    setGuestCount(2);
+    setIsSubmitting(false);
 
-  const { printReceipt } = useThermalPrinter();
-
-  const handlePrintToken = async () => {
-      if (!generatedToken) return;
-      
-      const readyTime = estimatedPickupTime ? estimatedPickupTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A';
-      
-      const html = `
-        <html>
-        <head>
-            <link href="https://fonts.googleapis.com/css2?family=Libre+Barcode+128&display=swap" rel="stylesheet">
-            <style>
-                body { margin: 0; padding: 0; }
-                .barcode { font-family: 'Libre Barcode 128', sans-serif; font-size: 40px; margin: 5px 0; }
-            </style>
-        </head>
-        <body>
-            <div style="font-family: 'Courier New', Courier, monospace; width: 280px; padding: 10px; text-align: center;">
-                <div style="font-size: 14px; font-weight: bold; margin-bottom: 5px;">${currentUser?.restaurant_id ? 'FIREFLOW POS' : 'TOKEN SLIP'}</div>
-                <div style="border-top: 1px dashed #000; margin: 5px 0;"></div>
-                <div style="font-size: 10px; margin-bottom: 10px;">${orderType} ORDER</div>
-                
-                <div style="font-size: 12px; margin-bottom: 2px;">TOKEN NUMBER</div>
-                <div style="font-size: 40px; font-weight: 900; margin-bottom: 5px;">${generatedToken}</div>
-                
-                <div style="font-size: 10px; margin-bottom: 15px;">Ready In (~): ${readyTime}</div>
-                
-                ${activeOrderNumber ? `
-                    <div style="margin: 15px 0; padding: 5px; border: 1px solid #eee;">
-                        <div class="barcode">${activeOrderNumber}</div>
-                        <div style="font-size: 9px; margin-top: 2px;">${activeOrderNumber}</div>
-                    </div>
-                ` : ''}
-                
-                <div style="border-top: 1px dashed #000; margin: 10px 0;"></div>
-                <div style="font-size: 9px; color: #555;">Please show this token at the counter.</div>
-                <div style="font-size: 8px; margin-top: 5px;">${new Date().toLocaleString()}</div>
-            </div>
-        </body>
-        </html>
-      `;
-      
-      await printReceipt(html);
+    // Clear global edit state
+    if (setOrderToEdit) setOrderToEdit(null);
   };
 
   const handleClose = () => {
@@ -544,37 +386,20 @@ export const POSView: React.FC = () => {
 
   const handleOrderAction = async (shouldFire: boolean = false) => {
     if (currentOrderItems.length === 0) return;
-    setIsSubmitting(true);
 
     // Validations
     if (orderType === 'DINE_IN' && !selectedTableId) {
       addNotification('info', 'Please select a table to fire order.');
       setShowDetailsModal(true);
-      setIsSubmitting(false);
       return;
     }
     if ((orderType === 'DELIVERY' || orderType === 'TAKEAWAY') && !customerPhone) {
       addNotification('info', 'Customer Phone helps track orders.');
       setShowDetailsModal(true);
-      setIsSubmitting(false);
       return;
     }
 
     try {
-      // --- Customer Auto-Save Logic ---
-      if ((orderType === 'DELIVERY' || orderType === 'TAKEAWAY') && customerPhone && customerName) {
-        const existing = customers?.find(c => (c.phone || '').replace(/\D/g, '') === customerPhone.replace(/\D/g, ''));
-        if (!existing) {
-          console.log('[POS] Saving new customer auto-magically...');
-          await addCustomer({
-            name: customerName,
-            phone: customerPhone,
-            address: deliveryAddress,
-            restaurant_id: currentUser?.restaurant_id
-          } as any);
-        }
-      }
-
       // v3.0 Mapping: All flow is through ACTIVE status
       const nextStatus = 'ACTIVE';
       const updatedItems = currentOrderItems.map(item => {
@@ -595,13 +420,9 @@ export const POSView: React.FC = () => {
         guest_count: guestCount,
         customer_name: customerName,
         customer_phone: customerPhone,
+        customer_id: customerId,
         delivery_address: deliveryAddress,
-        total: breakdown.total,
-        discount: breakdown.discount,
-        service_charge: breakdown.serviceCharge,
-        tax: breakdown.tax,
-        delivery_fee: breakdown.deliveryFee,
-        breakdown: breakdown
+        total: breakdown.total
       };
 
       const result = activeOrderId
@@ -621,7 +442,6 @@ export const POSView: React.FC = () => {
           const backendToken = result.takeaway_orders?.[0]?.token_number || result.takeaway_orders?.token_number;
           const token = backendToken || Math.floor(1000 + Math.random() * 9000).toString();
 
-          setActiveOrderNumber(result.order_number || null);
           setGeneratedToken(token);
           setEstimatedPickupTime(new Date(Date.now() + 25 * 60000));
           setShowTokenBanner(true);
@@ -647,30 +467,6 @@ export const POSView: React.FC = () => {
     }
   };
 
-  const handlePrint = async () => {
-    const invoiceSettings = operationsConfig || JSON.parse(localStorage.getItem(`fireflow_operations_config_${currentUser?.restaurant_id}`) || '{}');
-    const selectedTemplate = invoiceSettings.invoice_templates || 'classic';
-    
-    const isPaid = activeOrderData?.payment_status === 'PAID' || activeOrderData?.status === 'CLOSED';
-    const orderItems = currentOrderItems.length > 0 ? currentOrderItems : (activeOrderData?.order_items || []);
-    const paymentMethod = (activeOrderData as any)?.transactions?.[0]?.payment_method || (activeOrderData as any)?.payment_method || 'CASH';
-
-    // Prepare data for the template engine
-    const content = generateInvoiceHtml(selectedTemplate, {
-      config: invoiceSettings,
-      order: activeOrderId ? { ...activeOrderData, type: orderType, table: tables.find(t => t.id === selectedTableId) || activeOrderData?.table } : { id: 'DRAFT', type: orderType, created_at: new Date() },
-      items: orderItems,
-      breakdown: breakdown,
-      isPaid: isPaid,
-      paymentMethod: paymentMethod,
-      customer: selectedCustomer || customers?.find(c => c.id === activeOrderData?.customer_id)
-    });
-
-    await printReceipt(content);
-  };
-
-
-
   return (
     <div className="flex h-full bg-[#020617] text-slate-200 overflow-hidden font-sans">
       {/* LEFT: MENU & CATEGORIES */}
@@ -687,9 +483,8 @@ export const POSView: React.FC = () => {
           <div className="relative flex-1 min-w-[200px] max-w-sm ml-2 mr-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
             <input
-              id="pos-search-input"
               type="text"
-              placeholder="Search Items... (Press /)"
+              placeholder="Search Items..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs font-bold text-white outline-none focus:border-gold-500 transition-all placeholder:text-slate-600"
@@ -703,14 +498,6 @@ export const POSView: React.FC = () => {
               </button>
             )}
           </div>
-
-          <button
-            onClick={() => setIsRecallOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 border border-slate-800 hover:border-blue-500/50 rounded-xl text-blue-500 transition-all font-black uppercase text-[10px] tracking-widest shadow-lg mr-2"
-          >
-            <History size={16} />
-            Recall
-          </button>
 
           <button
             onClick={() => setActiveCategory('all')}
@@ -747,260 +534,186 @@ export const POSView: React.FC = () => {
       </div>
 
       {/* RIGHT: CART & CHECKOUT */}
-      <div className="w-[320px] lg:w-[350px] bg-[#0B0F19] flex flex-col h-full shrink-0 z-20 shadow-2xl relative transition-all">
+      <div className="w-[420px] bg-[#0B0F19] flex flex-col h-full shrink-0 z-20 shadow-2xl relative">
 
         {/* Cart Header */}
-        <div className="p-3 md:p-4 border-b border-white/5 bg-slate-950/50 backdrop-blur-md pb-2">
-          <div className="flex justify-between items-center mb-2">
-            <h2 className="text-lg font-serif font-bold text-white">Current Order</h2>
-            <div className="flex gap-2 items-center">
-              {activeOrderId ? (
-                <span className="px-2 py-1 bg-blue-500/20 text-blue-400 text-[9px] font-black uppercase tracking-widest rounded-lg">EDITING</span>
-              ) : (
-                <span className="px-2 py-1 bg-green-500/20 text-green-400 text-[9px] font-black uppercase tracking-widest rounded-lg">NEW</span>
-              )}
-              <button onClick={handleClose} className="p-1.5 bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-500 rounded-lg transition-colors" title="Close"><X size={14} /></button>
+        <div className="p-6 border-b border-white/5 bg-slate-950/50 backdrop-blur-md">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-serif font-bold text-white">Current Order</h2>
+            {activeOrderId ? (
+              <span className="px-2 py-1 bg-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-lg">EDITING</span>
+            ) : (
+              <span className="px-2 py-1 bg-green-500/20 text-green-400 text-[10px] font-black uppercase tracking-widest rounded-lg">NEW</span>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowRecentOrders(true)}
+                className="p-1.5 bg-slate-800 hover:bg-gold-500/20 text-slate-400 hover:text-gold-500 rounded-lg transition-colors"
+                title="Recent Orders (Recall)"
+              >
+                <History size={16} />
+              </button>
+              <button
+                onClick={handleClose}
+                className="p-1.5 bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-500 rounded-lg transition-colors"
+                title="Close"
+              >
+                <X size={16} />
+              </button>
             </div>
           </div>
 
-          <button
-            onClick={() => setShowDetailsModal(true)}
-            className="w-full bg-slate-900 border border-slate-800 p-2 rounded-lg flex items-center justify-between group hover:border-gold-500/50 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-md bg-slate-800 flex items-center justify-center text-gold-500">
-                {orderType === 'DINE_IN' ? <Utensils size={12} /> : orderType === 'DELIVERY' ? <Bike size={12} /> : <ShoppingBag size={12} />}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowDetailsModal(true)}
+              className="flex-1 bg-slate-900 border border-slate-800 p-3 rounded-xl flex items-center justify-between group hover:border-gold-500/50 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-gold-500">
+                  {orderType === 'DINE_IN' ? <Utensils size={16} /> : orderType === 'DELIVERY' ? <Bike size={16} /> : <ShoppingBag size={16} />}
+                </div>
+                <div className="text-left">
+                  <div className="text-[9px] text-slate-500 font-black uppercase tracking-widest">Type</div>
+                  <div className="text-xs font-bold text-white uppercase">{orderType.replace('_', ' ')}</div>
+                </div>
               </div>
-              <div className="text-[10px] font-bold text-white uppercase flex gap-1.5 items-center">
-                {!(orderType === 'DINE_IN' && selectedTableId) && <span>{orderType.replace('_', ' ')}</span>}
-                {orderType === 'DINE_IN' && (
-                  <>
-                    {selectedTableId && <span className="text-slate-600 hidden md:inline">•</span>}
-                    <span className="text-gold-500 font-black">{tables.find(t => t.id === selectedTableId)?.name || 'Select Table'}</span>
-                  </>
-                )}
-              </div>
-            </div>
-            <Edit2 size={12} className="text-slate-600 group-hover:text-gold-500" />
-          </button>
+              <Edit2 size={14} className="text-slate-600 group-hover:text-gold-500" />
+            </button>
+
+            {orderType === 'DINE_IN' && (
+              <button className="flex-1 bg-slate-900 border border-slate-800 p-3 rounded-xl flex items-center justify-between group">
+                <div className="flex items-center gap-3">
+                  <Users size={16} className="text-slate-500" />
+                  <div className="text-left">
+                    <div className="text-[9px] text-slate-500 font-black uppercase tracking-widest">Table</div>
+                    <div className="text-xs font-bold text-white">{tables.find(t => t.id === selectedTableId)?.name || 'Select'}</div>
+                  </div>
+                </div>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Cart Items */}
-        <div className="flex-1 overflow-y-auto p-2 custom-scrollbar space-y-1">
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-2">
           {currentOrderItems.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 opacity-50">
-              <ShoppingBag size={32} className="mb-2" />
-              <span className="text-[10px] font-black uppercase tracking-[0.2em]">Cart Empty</span>
+              <ShoppingBag size={48} className="mb-4" />
+              <span className="text-xs font-black uppercase tracking-[0.2em]">Cart Empty</span>
             </div>
           ) : (
-            currentOrderItems.map((item, idx) => {
-              const status = item.item_status || 'DRAFT';
-              const isDraft = status === 'DRAFT';
-              const isDone = status === 'DONE';
-              
-              return (
-                <div key={`${item.id || item.menu_item_id}-${idx}`} className="bg-slate-900/50 border border-white/5 rounded-lg p-2 flex flex-col group hover:bg-slate-900 transition-all">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-6 h-6 rounded flex items-center justify-center text-white font-black text-xs border shrink-0 ${isDraft ? 'bg-slate-800 border-white/10' : 'bg-gold-500/10 border-gold-500/20 text-gold-500'}`}>
-                        {item.quantity}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-white uppercase tracking-tight truncate leading-tight flex items-center gap-1.5">
-                          {item.item_name}
-                          {status !== 'DRAFT' && (
-                            <span className={`px-1.5 py-0.5 rounded text-[7px] font-black uppercase tracking-widest flex items-center gap-0.5 ${
-                              status === 'PENDING' ? 'bg-blue-500/10 text-blue-400' :
-                              status === 'PREPARING' ? 'bg-orange-500/10 text-orange-500' :
-                              status === 'DONE' ? 'bg-green-500 text-slate-950' :
-                              'bg-slate-800 text-slate-500'
-                            }`}>
-                              {status === 'PENDING' && <Clock size={6} />}
-                              {status === 'PREPARING' && <Flame size={6} className="animate-pulse" />}
-                              {status === 'DONE' && <CheckCircle2 size={6} />}
-                              {status}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[9px] text-slate-500 font-mono italic leading-none">Rs. {item.unit_price}</div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-2 shrink-0">
-                       {/* Qty Controls (Hover) */}
-                       {isDraft && !isReadOnly && (
-                         <div className="flex items-center gap-0.5 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
-                           <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-5 h-5 rounded bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={10} /></button>
-                           <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-5 h-5 rounded bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={10} /></button>
-                         </div>
-                       )}
-
-                       <div className="font-mono text-xs font-bold text-white tracking-tighter w-14 text-right">
-                         {(item.quantity * item.unit_price).toLocaleString()}
-                       </div>
-                    </div>
+            currentOrderItems.map((item, idx) => (
+              <div key={`${item.menu_item_id}-${idx}`} className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-3 flex justify-between items-center group hover:bg-slate-900 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-slate-950 flex items-center justify-center text-white font-bold text-xs border border-slate-800">
+                    {item.quantity}
                   </div>
-                  {isDone && (['SERVER', 'WAITER', 'ADMIN', 'MANAGER'].includes(currentUser?.role || '')) && (
-                      <button 
-                        onClick={() => handleServeItem(item.id!)}
-                        className="mt-1 w-full py-1 bg-green-500/10 hover:bg-green-500 hover:text-black text-green-500 text-[8px] font-black uppercase tracking-widest rounded flex items-center justify-center gap-1 transition-all"
-                      >
-                        <CheckSquare size={10} /> Serve Item
-                      </button>
-                  )}
+                  <div>
+                    <div className="text-sm font-medium text-white">{item.item_name}</div>
+                    <div className="text-[10px] text-slate-500 font-mono">Rs. {item.unit_price}</div>
+                  </div>
                 </div>
-              );
-            })
+
+                {!isReadOnly && (
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
+                    <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                  </div>
+                )}
+                <div className="font-bold text-white text-sm font-mono tracking-tight">
+                  Rs. {(item.quantity * item.unit_price).toLocaleString()}
+                </div>
+              </div>
+            ))
           )}
         </div>
 
         {/* Footer / Breakdown */}
-        <div className="p-3 bg-[#0B0F19] border-t border-white/5 space-y-2 shrink-0">
-          <div className="space-y-1 text-[9px] tracking-widest uppercase font-bold">
-            <div className="flex justify-between text-slate-500 items-center">
+        <div className="p-6 bg-[#0B0F19] border-t border-white/5 space-y-4">
+          {/* Interactive Breakdown Details */}
+          <div className="space-y-3">
+            {/* Subtotal */}
+            <div className="flex justify-between text-[9px] font-black tracking-widest uppercase text-slate-500">
               <span className="opacity-60">Subtotal</span>
-              <span className="text-white font-mono tracking-normal text-right">Rs. {breakdown.subtotal.toLocaleString()}</span>
+              <span className="text-white font-mono tracking-normal text-xs italic">Rs. {breakdown.subtotal.toLocaleString()}</span>
             </div>
 
-            <div className="grid grid-cols-2 gap-x-2 gap-y-1 my-0.5">
-              <div className="flex justify-between items-center text-slate-500 group border-b border-white/5 pb-0.5 relative">
-                <div className="flex items-center gap-1">
-                  <span className="opacity-60 text-[8px]">Disc</span>
-                  {editingField === 'discount' ? (
-                    <div className="flex items-center bg-slate-900 rounded border border-white/10 ring-1 ring-blue-500/20">
-                      <input
-                        type="number"
-                        className="bg-transparent w-14 text-[8px] text-white px-1 outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        value={billConfig.discountValue || ''}
-                        onFocus={(e) => e.target.select()}
-                        onChange={(e) => setBillConfig(p => ({ ...p, discountValue: e.target.value === '' ? 0 : Number(e.target.value) }))}
-                        autoFocus
-                        onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
-                        onBlur={() => setEditingField(null)}
-                      />
-                      <button 
-                        onMouseDown={(e) => {
-                          e.preventDefault(); // Prevent blur
-                          setBillConfig(p => ({ 
-                            ...p, 
-                            discountType: p.discountType === 'percent' ? 'flat' : 'percent' 
-                          }));
-                        }}
-                        className={`px-1 py-0.5 rounded-r text-[6px] font-black h-full transition-colors ${billConfig.discountType === 'percent' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}
-                      >
-                        {billConfig.discountType === 'percent' ? '%' : 'Rs'}
-                      </button>
-                    </div>
-                  ) : (
-                    <button 
-                      onClick={() => setEditingField('discount')}
-                      className="px-1 py-0 rounded bg-slate-800 text-blue-400 text-[7px] hover:bg-slate-700 transition-colors"
-                    >
-                      {billConfig.discountValue > 0 ? (billConfig.discountType === 'percent' ? `${billConfig.discountValue}%` : `Rs.${billConfig.discountValue}`) : '+'}
-                    </button>
-                  )}
+            {/* Discount Row */}
+            <div className="flex items-center justify-between group">
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-black tracking-widest uppercase text-slate-500 opacity-60">Disc</span>
+                <div className="flex items-center bg-slate-900 border border-white/5 rounded-lg overflow-hidden h-6 ml-auto">
+                  <input 
+                    type="number" 
+                    value={discountValue === 0 ? '' : discountValue} 
+                    onChange={(e) => setDiscountValue(e.target.value === '' ? 0 : Number(e.target.value))}
+                    onFocus={(e) => e.target.select()}
+                    className="w-12 bg-transparent text-center text-[10px] font-bold text-white focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    placeholder="0"
+                  />
                 </div>
-                <span className="text-red-400 font-mono tracking-normal">{breakdown.discount > 0 ? `-${breakdown.discount.toLocaleString()}` : '0'}</span>
+                <button 
+                  onClick={() => setDiscountType(prev => prev === 'flat' ? 'percent' : 'flat')}
+                  className="px-1.5 py-0.5 rounded bg-slate-800 text-[8px] font-black text-gold-500 border border-white/5 hover:bg-slate-700 transition-colors uppercase"
+                >
+                  {discountType === 'flat' ? 'Rs' : '%'}
+                </button>
+              </div>
+              <span className="text-red-500 font-mono text-[11px] font-bold">-{Math.round(breakdown.discount).toLocaleString()}</span>
+            </div>
+
+            {/* Service Charge & Tax Toggles */}
+            <div className="flex gap-4">
+               {/* Tax Toggle */}
+               <div className="flex-1 flex items-center justify-between bg-slate-900/40 p-1 px-2 rounded-lg border border-white/5">
+                <span className={`text-[8px] font-black tracking-widest uppercase transition-colors ${taxEnabled ? 'text-gold-500' : 'text-slate-600'}`}>Tax</span>
+                <button 
+                  onClick={() => setTaxEnabled(!taxEnabled)}
+                  className={`w-6 h-3 rounded-full relative transition-all duration-300 ${taxEnabled ? 'bg-gold-500/20 border-gold-500/30' : 'bg-slate-800 border-slate-700'} border`}
+                >
+                  <div className={`absolute top-0.5 w-1.5 h-1.5 rounded-full transition-all duration-300 ${taxEnabled ? 'right-0.5 bg-gold-500' : 'left-0.5 bg-slate-600'}`} />
+                </button>
+                <span className="text-[9px] font-bold text-white ml-2">{Math.round(breakdown.tax).toLocaleString()}</span>
               </div>
 
-              <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
-                <div className="flex items-center gap-1">
-                  <span className="opacity-60 text-gold-500/80 text-[8px]">TAX</span>
-                  {editingField === 'tax' ? (
-                    <input
-                      type="number"
-                      className="bg-slate-900 border border-white/10 w-12 text-[8px] text-white px-1 rounded outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      value={billConfig.taxRate || ''}
+              {/* Service Toggle */}
+              <div className="flex-1 flex items-center justify-between bg-slate-900/40 p-1 px-2 rounded-lg border border-white/5">
+                <span className={`text-[8px] font-black tracking-widest uppercase transition-colors ${serviceChargeEnabled ? 'text-blue-400' : 'text-slate-600'}`}>Srv</span>
+                <button 
+                  onClick={() => setServiceChargeEnabled(!serviceChargeEnabled)}
+                  className={`w-6 h-3 rounded-full relative transition-all duration-300 ${serviceChargeEnabled ? 'bg-blue-400/20 border-blue-400/30' : 'bg-slate-800 border-slate-700'} border`}
+                >
+                  <div className={`absolute top-0.5 w-1.5 h-1.5 rounded-full transition-all duration-300 ${serviceChargeEnabled ? 'right-0.5 bg-blue-400' : 'left-0.5 bg-slate-600'}`} />
+                </button>
+                <span className="text-[9px] font-bold text-white ml-2">{Math.round(breakdown.serviceCharge).toLocaleString()}</span>
+              </div>
+            </div>
+
+            {deliveryFeeEnabled && (
+              <div className="flex items-center justify-between group">
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-black tracking-widest uppercase text-blue-400 opacity-60">Delivery Fee</span>
+                  <div className="flex items-center bg-slate-900 border border-white/5 rounded-lg overflow-hidden h-6 ml-auto">
+                    <input 
+                      type="number" 
+                      value={deliveryFeeValue === 0 ? '' : deliveryFeeValue} 
+                      onChange={(e) => setDeliveryFeeValue(e.target.value === '' ? 0 : Number(e.target.value))}
                       onFocus={(e) => e.target.select()}
-                      onChange={(e) => setBillConfig(p => ({ ...p, taxRate: e.target.value === '' ? 0 : Number(e.target.value), taxEnabled: true }))}
-                      autoFocus
-                      onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
-                      onBlur={() => setEditingField(null)}
+                      className="w-16 bg-transparent text-center text-[10px] font-bold text-white focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      placeholder="0"
                     />
-                  ) : (
-                    <button 
-                      onClick={() => setBillConfig(p => ({ ...p, taxEnabled: !p.taxEnabled }))}
-                      onDoubleClick={() => setEditingField('tax')}
-                      className={`px-1 py-0 rounded text-[7px] ${billConfig.taxEnabled ? 'bg-gold-500 text-black' : 'bg-slate-800 text-slate-500'}`}
-                      title="Toggle Tax (Double click to edit rate)"
-                    >
-                      {billConfig.taxEnabled ? `${billConfig.taxRate}%` : 'OFF'}
-                    </button>
-                  )}
+                  </div>
                 </div>
-                <span className="text-white font-mono tracking-normal">{breakdown.tax.toLocaleString()}</span>
+                <span className="text-white font-mono text-[11px] font-bold">Rs. {breakdown.deliveryFee.toLocaleString()}</span>
               </div>
-
-              {orderType === 'DINE_IN' && (
-                <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
-                  <div className="flex items-center gap-1">
-                    <span className="opacity-60 text-blue-400 text-[8px]">SRV</span>
-                    {editingField === 'service' ? (
-                      <input
-                        type="number"
-                        className="bg-slate-900 border border-white/10 w-12 text-[8px] text-white px-1 rounded outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        value={billConfig.serviceChargeRate || ''}
-                        onFocus={(e) => e.target.select()}
-                        onChange={(e) => setBillConfig(p => ({ ...p, serviceChargeRate: e.target.value === '' ? 0 : Number(e.target.value), serviceChargeEnabled: true }))}
-                        autoFocus
-                        onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
-                        onBlur={() => setEditingField(null)}
-                      />
-                    ) : (
-                      <button 
-                        onClick={() => setBillConfig(p => ({ ...p, serviceChargeEnabled: !p.serviceChargeEnabled }))}
-                        onDoubleClick={() => setEditingField('service')}
-                        className={`px-1 py-0 rounded text-[7px] ${billConfig.serviceChargeEnabled ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-500'}`}
-                        title="Toggle SC (Double click to edit rate)"
-                      >
-                        {billConfig.serviceChargeEnabled ? `${billConfig.serviceChargeRate}%` : 'OFF'}
-                      </button>
-                    )}
-                  </div>
-                  <span className="text-white font-mono tracking-normal">{breakdown.serviceCharge.toLocaleString()}</span>
-                </div>
-              )}
-
-              {orderType === 'DELIVERY' && (
-                <div className="flex justify-between items-center text-slate-500 border-b border-white/5 pb-0.5">
-                  <div className="flex items-center gap-1">
-                    <span className="opacity-60 text-purple-400 text-[8px]">DEL</span>
-                    {editingField === 'delivery' ? (
-                      <input
-                        type="number"
-                        className="bg-slate-900 border border-white/10 w-16 text-[8px] text-white px-1 rounded outline-none font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        value={billConfig.deliveryFee || ''}
-                        onFocus={(e) => e.target.select()}
-                        onChange={(e) => setBillConfig(p => ({ ...p, deliveryFee: e.target.value === '' ? 0 : Number(e.target.value), deliveryFeeEnabled: (e.target.value === '' ? 0 : Number(e.target.value)) >= 0 }))}
-                        autoFocus
-                        onKeyDown={(e) => e.key === 'Enter' && setEditingField(null)}
-                        onBlur={() => setEditingField(null)}
-                      />
-                    ) : (
-                      <button 
-                        onClick={() => setEditingField('delivery')}
-                        className="px-1 py-0 rounded bg-slate-800 text-purple-400 text-[7px]"
-                      >
-                        {billConfig.deliveryFee > 0 ? `Rs.${billConfig.deliveryFee}` : '±'}
-                      </button>
-                    )}
-                  </div>
-                  <span className="text-white font-mono tracking-normal">{breakdown.deliveryFee.toLocaleString()}</span>
-                </div>
-              )}
-            </div>
-
-            {breakdown.taxExemptAmount! > 0 && billConfig.taxEnabled && (
-                <div className="text-[7px] text-right text-slate-500 italic lowercase tracking-normal">
-                    *incl. Rs. {breakdown.taxExemptAmount!.toLocaleString()} exempt.
-                </div>
             )}
           </div>
 
-          <div className="flex justify-between items-baseline pt-1">
-            <span className="text-[9px] text-slate-500 font-black tracking-[0.2em] uppercase opacity-60">Total</span>
+          {/* Total Section */}
+          <div className="flex justify-between items-baseline border-t border-white/5 pt-4">
+            <span className="text-[9px] text-slate-500 font-black tracking-[0.3em] uppercase opacity-40 italic">Total</span>
             <div className="flex flex-col items-end leading-none">
-              <span className="text-xl font-black text-white italic tracking-tighter">
+              <span className="text-3xl font-black text-white italic tracking-tighter drop-shadow-[0_0_15px_rgba(255,255,255,0.1)]">
                 Rs. {breakdown.total.toLocaleString()}
               </span>
             </div>
@@ -1008,97 +721,144 @@ export const POSView: React.FC = () => {
 
           {/* Actions */}
           {isReadOnly ? (
-            <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-center">
-              <div className="text-green-500 font-black uppercase tracking-widest text-[10px] mb-1">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+              <div className="text-green-500 font-black uppercase tracking-widest text-xs mb-1">
                 {activeOrderData?.status.replace(/_/g, ' ')}
               </div>
-              <button onClick={resetPad} className="mt-1 text-[9px] text-white underline">Start New Order</button>
+              <div className="text-slate-500 text-[10px]">
+                This order is locked for editing.
+              </div>
+              <button onClick={resetPad} className="mt-2 text-xs text-white underline">Start New Order</button>
             </div>
           ) : (
-            <div className="flex gap-2 h-10 mt-2">
-              {/* Preview Button */}
+            <div className="flex gap-2">
               <button
-                onClick={() => {
-                  if (activeOrderData && activeOrderData.payment_status !== 'PAID') {
-                    updateOrder({ id: activeOrderId!, is_proforma_printed: true } as any);
-                  }
-                  setShowReceiptPreview(true);
-                }}
+                onClick={() => setShowReceiptPreview(true)}
                 disabled={currentOrderItems.length === 0}
-                className="w-10 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
-                title="Preview Receipt"
+                className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
+                title="Print Preview"
               >
-                <Eye size={16} />
+                <Printer size={18} />
               </button>
 
-              {/* Print Button */}
               <button
-                onClick={() => {
-                  if (activeOrderData && activeOrderData.payment_status !== 'PAID') {
-                    updateOrder({ id: activeOrderId!, is_proforma_printed: true } as any);
+                disabled={currentOrderItems.length === 0 || isSubmitting}
+                onClick={async () => {
+                  const payload: any = {
+                    type: orderType,
+                    items: currentOrderItems,
+                    total: breakdown.total,
+                    tax: breakdown.tax,
+                    service_charge: breakdown.serviceCharge,
+                    discount: breakdown.discount,
+                    delivery_fee: breakdown.deliveryFee,
+                    // Persist overrides for recovery
+                    tax_enabled: taxEnabled,
+                    service_charge_enabled: serviceChargeEnabled,
+                    delivery_fee_enabled: deliveryFeeEnabled,
+                    discount_type: discountType,
+                    discount_value: discountValue,
+                    discount_reason: discountReason || 'POS Adjustment',
+                    guest_count: guestCount,
+                    customer_phone: customerPhone,
+                    customer_name: customerName,
+                    delivery_address: deliveryAddress,
+                    table_id: selectedTableId,
+                    session_id: activeSession?.id
+                  };
+
+                  setIsSubmitting(true);
+                  try {
+                    if (activeOrderId) {
+                      await updateOrder({ ...payload, id: activeOrderId });
+                      addNotification('success', 'Order updated successfully');
+                    } else {
+                      const result = await addOrder(payload);
+                      if (result?.id) {
+                        setActiveOrderId(result.id);
+                        addNotification('success', 'Order saved successfully');
+                      }
+                    }
+                  } catch (err: any) {
+                    addNotification('error', err.message);
+                  } finally {
+                    setIsSubmitting(false);
                   }
-                  handlePrint();
                 }}
-                disabled={currentOrderItems.length === 0}
-                className="w-10 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
-                title="Print Receipt"
+                className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 disabled:opacity-20 uppercase"
               >
-                <Printer size={16} />
+                {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save / Update'}
               </button>
 
-              {/* Only show Fire/Save if there are DRAFT items */}
-              {currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
-                <>
-                  <button
-                    disabled={isSubmitting}
-                    onClick={() => handleOrderAction(false)}
-                    className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 uppercase disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-                  >
-                    {isSubmitting ? <Loader2 className="animate-spin mx-auto" size={14} /> : 'Save / Update'}
-                  </button>
+              <button
+                disabled={currentOrderItems.length === 0 || isSubmitting}
+                onClick={async () => {
+                  const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
 
-                  <button
-                    disabled={isSubmitting}
-                    onClick={() => handleOrderAction(true)}
-                    className="flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-xl shadow-orange-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase italic disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
-                  >
-                    {isSubmitting ? (
-                      <><Loader2 className="animate-spin" size={14} /><span>Firing...</span></>
+                  if (hasUnfiredItems) {
+                    // Quick fire logic
+                    const payload: any = {
+                      type: orderType,
+                      items: currentOrderItems,
+                      total: breakdown.total,
+                      tax: breakdown.tax,
+                      service_charge: breakdown.serviceCharge,
+                      discount: breakdown.discount,
+                      delivery_fee: breakdown.deliveryFee,
+                      tax_enabled: taxEnabled,
+                      service_charge_enabled: serviceChargeEnabled,
+                      delivery_fee_enabled: deliveryFeeEnabled,
+                      discount_type: discountType,
+                      discount_value: discountValue,
+                      discount_reason: 'Fire Order',
+                      guest_count: guestCount,
+                      customer_phone: customerPhone,
+                       customer_name: customerName,
+                       delivery_address: deliveryAddress,
+                       table_id: selectedTableId,
+                       session_id: activeSession?.id
+                    };
+                    
+                    setIsSubmitting(true);
+                    try {
+                      if (activeOrderId) {
+                        await updateOrder({ ...payload, id: activeOrderId, status: 'ACTIVE' });
+                        await fireOrder(activeOrderId, orderType);
+                      } else {
+                        const result = await addOrder({ ...payload, status: 'ACTIVE' });
+                        if (result?.id) {
+                          setActiveOrderId(result.id);
+                          await fireOrder(result.id, orderType);
+                        }
+                      }
+                      addNotification('success', 'Order fired to kitchen!');
+                    } catch (e: any) {
+                      addNotification('error', e.message);
+                    } finally {
+                      setIsSubmitting(false);
+                    }
+                  } else {
+                    setShowPaymentModal(true);
+                  }
+                }}
+                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+              >
+                {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
+                  <>
+                    {currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
+                      <>
+                        <Flame size={14} className="animate-pulse" />
+                        <span>Fire Order</span>
+                      </>
                     ) : (
-                      <><Flame size={14} className="animate-pulse" /><span>Fire Order</span></>
+                      <>
+                        <Banknote size={14} />
+                        <span>Process Payment</span>
+                      </>
                     )}
-                  </button>
-                </>
-              ) : (
-                <>
-                  {/* No draft items: Show role-based control buttons */}
-                  {['SERVER', 'WAITER'].includes(currentUser?.role || '') && activeOrderData?.status === 'READY' && (
-                    <button
-                      onClick={async () => {
-                        setIsSubmitting(true);
-                        await updateOrder({ id: activeOrderId!, status: 'BILL_REQUESTED' as any });
-                        addNotification('success', 'Bill Requested');
-                        setIsSubmitting(false);
-                      }}
-                      className="flex-1 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-[9px] tracking-[0.2em] shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
-                    >
-                      <CreditCard size={14} />
-                      <span>Request Bill</span>
-                    </button>
-                  )}
-
-                  {/* Payment button for Cashiers/Managers or if specifically ready */}
-                  {(['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') || activeOrderData?.status === 'BILL_REQUESTED') && (
-                    <button
-                      onClick={() => setShowPaymentModal(true)}
-                      className="flex-1 h-10 rounded-xl bg-green-600 hover:bg-green-500 text-white font-black text-[9px] tracking-[0.2em] shadow-xl shadow-green-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
-                    >
-                      <Banknote size={14} />
-                      <span>Settle & Pay</span>
-                    </button>
-                  )}
-                </>
-              )}
+                  </>
+                )}
+              </button>
             </div>
           )}
         </div>
@@ -1106,10 +866,9 @@ export const POSView: React.FC = () => {
         {showTokenBanner && generatedToken && (
           <TokenDisplayBanner
             token={generatedToken}
-            orderNumber={activeOrderNumber || undefined}
             orderType={orderType}
             estimatedReadyTime={estimatedPickupTime}
-            onPrintToken={handlePrintToken}
+            onPrintToken={() => addNotification('info', 'Printer not connected')}
             onNewOrder={() => {
               setShowTokenBanner(false);
               resetPad();
@@ -1117,26 +876,6 @@ export const POSView: React.FC = () => {
           />
         )}
       </div>
-
-      {/* HIDDEN PRINT AREA */}
-      {(activeOrderData || currentOrderItems.length > 0) && (
-        <ReceiptView 
-          order={(activeOrderData as any) || {
-            id: activeOrderId || 'NEW',
-            type: orderType,
-            order_number: 'NEW',
-            created_at: new Date(),
-            order_items: currentOrderItems,
-            status: 'ACTIVE',
-            table: tables.find(t => t.id === selectedTableId),
-            customer_name: customerName,
-            customer_phone: customerPhone
-          }}
-          breakdown={breakdown}
-          isProforma={!(activeOrderData?.payment_status === 'PAID' || activeOrderData?.status === 'CLOSED')}
-          invoiceSettings={operationsConfig || JSON.parse(localStorage.getItem(`fireflow_operations_config_${currentUser?.restaurant_id}`) || '{}')}
-        />
-      )}
 
       {/* MOBILE-ONLY: Cart Bottom Sheet Modal */}
       {isMobile && showMobileCart && (
@@ -1175,9 +914,9 @@ export const POSView: React.FC = () => {
                     </div>
 
                     {!isReadOnly && (
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 active:bg-red-500/30 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
-                        <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 active:bg-green-500/30 text-slate-400 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
+                        <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
                       </div>
                     )}
                     <div className="font-bold text-white text-sm font-mono tracking-tight">
@@ -1197,7 +936,7 @@ export const POSView: React.FC = () => {
                 </div>
                 {breakdown.tax > 0 && (
                   <div className="flex justify-between text-slate-500">
-                    <span className="opacity-60 text-gold-500/80">Tax ({operationsConfig?.taxRate ?? 0}%)</span>
+                    <span className="opacity-60 text-gold-500/80">Tax (16%)</span>
                     <span className="text-white font-mono tracking-normal">Rs. {breakdown.tax.toLocaleString()}</span>
                   </div>
                 )}
@@ -1210,66 +949,23 @@ export const POSView: React.FC = () => {
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => setShowReceiptPreview(true)}
-                  disabled={currentOrderItems.length === 0}
-                  className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-20 flex-shrink-0"
-                  title="Print Preview"
+                  disabled={currentOrderItems.length === 0 || isSubmitting}
+                  onClick={() => handleOrderAction(false)}
+                  className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 disabled:opacity-20 uppercase"
                 >
-                  <Printer size={18} />
+                  {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save'}
                 </button>
 
-                {currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
-                  <>
-                    <button
-                      disabled={isSubmitting}
-                      onClick={() => handleOrderAction(false)}
-                      className="flex-1 bg-slate-900 border border-slate-800/50 h-10 rounded-xl text-slate-500 font-black text-[9px] tracking-[0.2em] hover:bg-slate-800 hover:text-white transition-all active:scale-95 uppercase"
-                    >
-                      {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save'}
-                    </button>
-
-                    <button
-                      disabled={isSubmitting}
-                      onClick={() => handleOrderAction(true)}
-                      className="flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-xl shadow-orange-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase italic"
-                    >
-                      {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
-                        <>
-                          <Flame size={14} className="animate-pulse" />
-                          <span>Fire</span>
-                        </>
-                      )}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {/* Role-based mobile actions */}
-                    {['SERVER', 'WAITER'].includes(currentUser?.role || '') && activeOrderData?.status === 'READY' && (
-                      <button
-                        onClick={async () => {
-                          setIsSubmitting(true);
-                          await updateOrder({ id: activeOrderId!, status: 'BILL_REQUESTED' as any });
-                          addNotification('success', 'Bill Requested');
-                          setIsSubmitting(false);
-                        }}
-                        className="flex-1 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-[9px] tracking-[0.2em] shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
-                      >
-                        <CreditCard size={14} />
-                        <span>Bill</span>
-                      </button>
-                    )}
-
-                    {(['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') || activeOrderData?.status === 'BILL_REQUESTED') && (
-                      <button
-                        onClick={() => setShowPaymentModal(true)}
-                        className="flex-1 h-10 rounded-xl bg-green-600 hover:bg-green-500 text-white font-black text-[9px] tracking-[0.2em] shadow-xl shadow-green-900/40 transition-all active:scale-95 flex items-center justify-center gap-2 uppercase"
-                      >
-                        <Banknote size={14} />
-                        <span>Pay</span>
-                      </button>
-                    )}
-                  </>
-                )}
+                <button
+                  disabled={currentOrderItems.length === 0 || isSubmitting}
+                  onClick={() => {
+                    const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
+                    hasUnfiredItems ? handleOrderAction(true) : setShowPaymentModal(true);
+                  }}
+                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                >
+                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (currentOrderItems.some(i => i.item_status === 'DRAFT') ? <><Flame size={14} className="animate-pulse" /><span>Fire</span></> : <><Banknote size={14} /><span>Pay</span></>)}
+                </button>
               </div>
             </div>
           </div>
@@ -1286,116 +982,91 @@ export const POSView: React.FC = () => {
         />
       )}
 
-      {showPaymentModal && !activeOrderData && !orderToEdit && (
-        <PaymentModal
-          order={{ id: activeOrderId || 'NEW', total: breakdown.total, type: orderType } as any}
-          breakdown={breakdown}
-          customer={selectedCustomer}
-          onClose={() => setShowPaymentModal(false)}
-          onProcessPayment={async (total: number, method: string, tendered?: number, discountReason?: string, payments?: any[]) => {
-            const orderId = activeOrderId || `ORD-${Date.now()}`;
-
-            await processPayment(orderId, {
-              id: `txn_${Date.now()}`,
-              orderId,
-              amount: total,
-              payment_method: method,
-              payments: payments, // Full split breakdown
-              status: 'PAID',
-              timestamp: new Date(),
-              processedBy: 'POS',
-              tenderedAmount: tendered,
-              changeGiven: (tendered && tendered > total) ? tendered - total : 0,
-              breakdown: { ...breakdown, discountReason },
-              customer_id: selectedCustomer?.id 
-            } as any);
-          }}
-          onPrintReceipt={async () => {
-            await handlePrint();
-          }}
-          onPaymentCompleteClose={() => {
-            resetPad();
-            setShowPaymentModal(false);
-          }}
-        />
-      )}
-      {showPaymentModal && (activeOrderData || orderToEdit) && (
-        <PaymentModal
+      {/* Payment Modal */}
+      {showPaymentModal && (activeOrderData || orderToEdit) && (        <PaymentModal
           order={(activeOrderData || orderToEdit)!}
           breakdown={breakdown}
-          customer={selectedCustomer}
+          customer={customers.find(c => c.id === customerId) || { name: customerName, phone: customerPhone, id: customerId }}
           onClose={() => setShowPaymentModal(false)}
-          onProcessPayment={async (total, method, tendered, discountReason, payments) => {
+          onProcessPayment={async (total, method, tendered, _discountReason, payments, pCustomerId) => {
             const orderId = (activeOrderData || orderToEdit)?.id;
             if (!orderId) return;
 
-            await processPayment(orderId, {
-              id: `txn_${Date.now()}`,
-              orderId,
-              amount: total,
-              payment_method: method,
-              payments: payments, // Full split breakdown
-              status: 'PAID',
-              timestamp: new Date(),
-              processedBy: 'POS',
-              tenderedAmount: tendered,
-              changeGiven: (tendered && tendered > total) ? tendered - total : 0,
-              breakdown: { ...breakdown, discountReason },
-              customer_id: selectedCustomer?.id
-            } as any);
-          }}
-          onPrintReceipt={async () => {
-            await handlePrint();
-          }}
-          onPaymentCompleteClose={() => {
-            resetPad();
-            setShowPaymentModal(false);
+            try {
+              const finalCustomerId = pCustomerId || customerId;
+
+              await processPayment(orderId, {
+                id: `txn_${Date.now()}`,
+                orderId,
+                amount: total,
+                payment_method: method,
+                status: 'PAID',
+                timestamp: new Date(),
+                processedBy: 'POS',
+                tenderedAmount: tendered,
+                changeGiven: (tendered || 0) > total ? (tendered || 0) - total : 0,
+                payments: payments || [{ method, amount: total }],
+                customer_id: finalCustomerId,
+                // Include breakdown for backend accounting
+                tax: breakdown.tax,
+                service_charge: breakdown.serviceCharge,
+                discount: breakdown.discount,
+                delivery_fee: breakdown.deliveryFee
+              } as any);
+
+              // After successful payment
+              resetPad();
+              setShowPaymentModal(false);
+            } catch (error) {
+              console.error("Payment Error:", error);
+            }
           }}
         />
       )}
+      {showReceiptPreview && activeOrderId && (
+        <ReceiptPreviewModal
+          isOpen={showReceiptPreview}
+          onClose={() => setShowReceiptPreview(false)}
+          order={{
+            id: activeOrderId,
+            order_number: activeOrderData?.order_number || 'PREVIEW',
+            status: activeOrderData?.status || 'DRAFT',
+            type: orderType,
+            created_at: new Date(),
+            customer_name: customerName,
+            customer_phone: customerPhone,
+            delivery_address: deliveryAddress,
+            guest_count: guestCount,
+            table: tables.find(t => t.id === selectedTableId),
+            order_items: currentOrderItems,
+            total: breakdown.total,
+            tax: breakdown.tax,
+            service_charge: breakdown.serviceCharge,
+            delivery_fee: breakdown.deliveryFee,
+            discount: breakdown.discount,
+            restaurant_id: currentUser?.restaurant_id || ''
+          } as any}
+        />
+      )}
 
-      {isRecallOpen && (
-        <RecallModal
-          isOpen={isRecallOpen}
-          onClose={() => setIsRecallOpen(false)}
+      {showRecentOrders && (
+        <RecentOrdersModal 
+          isOpen={showRecentOrders}
+          onClose={() => setShowRecentOrders(false)}
           orders={orders}
-          onSelectOrder={(order) => {
+          activeSession={activeSession}
+          onEditOrder={(order) => {
             setOrderToEdit(order);
-            setIsRecallOpen(false);
+            setShowRecentOrders(false);
           }}
-          currentUser={currentUser}
+          onPrintReceipt={(order) => {
+             setActiveOrderId(order.id);
+             setShowReceiptPreview(true);
+             setShowRecentOrders(false);
+          }}
         />
       )}
 
-      {/* Receipt Preview Modal */}
-      <ReceiptPreviewModal
-        isOpen={showReceiptPreview}
-        onClose={() => setShowReceiptPreview(false)}
-        order={{
-          id: activeOrderId || 'NEW',
-          order_number: activeOrderData?.order_number || 'PREVIEW',
-          status: activeOrderData?.status || 'DRAFT',
-          type: orderType,
-          timestamp: new Date(),
-          customer_name: customerName,
-          customer_phone: customerPhone,
-          delivery_address: deliveryAddress,
-          guest_count: guestCount,
-          table: tables.find(t => t.id === selectedTableId),
-          table_id: selectedTableId,
-          order_items: currentOrderItems,
-          // Flatten breakdown for the receipt component
-          total: breakdown.total,
-          tax: breakdown.tax,
-          service_charge: breakdown.serviceCharge,
-          delivery_fee: breakdown.deliveryFee,
-          discount: breakdown.discount,
-          // Fill other required fields with defaults
-          created_at: new Date(),
-          updated_at: new Date(),
-          restaurant_id: currentUser?.restaurant_id || ''
-        } as Order}
-      />
 
       {/* Floating Details Modal */}
       {showDetailsModal && (
@@ -1415,11 +1086,6 @@ export const POSView: React.FC = () => {
           tables={tables}
           isCustomerLoading={isCustomerLoading}
           setShowDetailsModal={setShowDetailsModal}
-          currentUser={currentUser}
-          customers={customers}
-          activeOrderId={activeOrderId}
-          operationsConfig={operationsConfig}
-          addNotification={addNotification}
         />
       )}
     </div>
@@ -1444,177 +1110,127 @@ interface DetailsModalProps {
   tables: any[];
   isCustomerLoading: boolean;
   setShowDetailsModal: (s: boolean) => void;
-  currentUser: any;
-  customers: any[];
-  activeOrderId: string | null;
-  operationsConfig: any;
-  addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string, action?: { label: string, onClick: () => void }) => void;
 }
 
 const DetailsModal: React.FC<DetailsModalProps> = ({
   orderType, setOrderType, customerPhone, setCustomerPhone,
   customerName, setCustomerName, deliveryAddress, setDeliveryAddress,
   selectedTableId, setSelectedTableId, guestCount, setGuestCount,
-  tables, isCustomerLoading, setShowDetailsModal, currentUser, customers,
-  activeOrderId, operationsConfig, addNotification
+  tables, isCustomerLoading, setShowDetailsModal
 }) => {
-  const forceAvailableEnabled = operationsConfig?.force_table_available === true;
-
-  const handleTableClick = (table: any) => {
-    if (table.status === 'OCCUPIED' && table.id !== selectedTableId) {
-      if (!forceAvailableEnabled) {
-        addNotification('info', `Table ${table.name} is occupied. Select it from Order Hub to edit.`);
-        return;
-      }
-      
-      const confirmOverride = window.confirm(`Table ${table.name} is occupied. Force it to be available for this new order?`);
-      if (!confirmOverride) return;
-    }
-    setSelectedTableId(table.id);
-  };
-  const isWaiter = ['SERVER', 'WAITER'].includes(currentUser?.role || '');
-  const allowedTypes = isWaiter ? ['DINE_IN'] : ['DINE_IN', 'TAKEAWAY', 'DELIVERY'];
   return (
-    <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 backdrop-blur-md">
-      <div className="bg-[#0B0F19] p-8 rounded-[2rem] w-full max-w-lg border border-white/5 shadow-2xl animate-in zoom-in-95 duration-200">
-        <div className="flex justify-between items-center mb-8">
-           <div>
-             <h2 className="text-white font-serif text-2xl font-bold italic tracking-tight">
-               {activeOrderId ? 'Change Table / Context' : 'Booking Logic'}
-             </h2>
-             <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mt-1">Session Configuration Control</p>
-           </div>
-           <button onClick={() => setShowDetailsModal(false)} className="p-2 bg-slate-900 rounded-xl text-slate-400 hover:text-white transition-colors">
-             <X size={20} />
-           </button>
+    <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
+      <div className="bg-slate-900 p-8 rounded-3xl w-full max-w-lg border border-slate-800">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-white font-bold text-xl">Session Configuration</h2>
+          <X onClick={() => setShowDetailsModal(false)} className="text-slate-500 cursor-pointer" />
         </div>
 
-        <div className="space-y-8">
-          {/* Order Type Tabs */}
-          <div className="flex bg-slate-950 p-1.5 rounded-2xl border border-white/5">
-            {allowedTypes.map(t => (
+        <div className="space-y-6">
+          <div className="flex gap-2">
+            {['DINE_IN', 'TAKEAWAY', 'DELIVERY'].map(t => (
               <button
                 key={t}
                 onClick={() => setOrderType(t as any)}
-                className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${
-                  orderType === t 
-                  ? 'bg-gold-500 text-black shadow-lg shadow-gold-500/20' 
-                  : 'text-slate-500 hover:text-slate-300'
-                }`}
+                className={`flex-1 py-3 rounded-xl border font-bold text-xs transition-all ${orderType === t ? 'bg-gold-500 border-gold-500 text-black' : 'border-slate-800 text-slate-500 hover:border-slate-700'}`}
               >
-                {t.replace('_', ' ')}
+                {t}
               </button>
             ))}
           </div>
 
           {orderType === 'DINE_IN' ? (
-            <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Available Floor Tables</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {tables.map(table => (
-                    <button
-                      key={table.id}
-                      onClick={() => handleTableClick(table)}
-                      className={`h-11 rounded-xl text-[10px] font-black transition-all border relative overflow-hidden ${
-                        selectedTableId === table.id 
-                        ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20' 
-                        : table.status === 'OCCUPIED'
-                          ? 'bg-red-500/10 border-red-500/5 text-red-500 hover:bg-red-500/20'
-                          : 'bg-slate-950 border-white/5 text-slate-500 hover:border-white/10'
-                      }`}
-                    >
-                      {table.name}
-                      {table.status === 'OCCUPIED' && (
-                          <div className="absolute top-0 right-0 w-1.5 h-1.5 bg-red-500 rounded-bl-sm" title="Occupied" />
-                      )}
-                    </button>
-                  ))}
-                </div>
+                <label className="text-[10px] text-slate-500 uppercase font-bold">Table</label>
+                <select
+                  className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1"
+                  value={selectedTableId}
+                  onChange={e => setSelectedTableId(e.target.value)}
+                >
+                  <option value="">Select Table</option>
+                  {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
               </div>
-
               <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Guest Count</label>
-                <div className="flex items-center gap-4 bg-slate-950 p-2 rounded-2xl border border-white/5">
-                  <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="w-12 h-12 bg-slate-900 rounded-xl text-white flex items-center justify-center active:scale-90 transition-transform">
-                    <Minus size={20} />
-                  </button>
-                  <span className="flex-1 text-center font-black text-white text-3xl italic">{guestCount}</span>
-                  <button onClick={() => setGuestCount(guestCount + 1)} className="w-12 h-12 bg-slate-900 rounded-xl text-white flex items-center justify-center active:scale-90 transition-transform">
-                    <Plus size={20} />
-                  </button>
+                <label className="text-[10px] text-slate-500 uppercase font-bold">Guests</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700"><Minus size={14} /></button>
+                  <input 
+                    type="number"
+                    value={guestCount === 0 ? '' : guestCount}
+                    onChange={(e) => setGuestCount(e.target.value === '' ? 0 : Number(e.target.value))}
+                    onFocus={(e) => e.target.select()}
+                    className="flex-1 bg-black border border-slate-700 rounded-lg p-2 text-center font-bold text-white text-lg focus:border-gold-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    placeholder="0"
+                  />
+                  <button onClick={() => setGuestCount(guestCount + 1)} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700"><Plus size={14} /></button>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="space-y-5">
-              <div className="relative group">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">
-                  Customer Lookup (Phone)
-                  {isCustomerLoading && <Loader2 size={10} className="inline ml-2 animate-spin text-gold-500" />}
-                </label>
-                <input
-                  type="tel"
-                  placeholder="03xx xxxxxxx"
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-2xl px-5 py-4 text-sm font-bold text-white outline-none focus:border-gold-500 transition-all font-mono tracking-widest"
+            <div className="space-y-4">
+              {/* Use CustomerQuickAdd for TAKEAWAY orders */}
+              {orderType === 'TAKEAWAY' && (
+                <CustomerQuickAdd
+                  customerPhone={customerPhone}
+                  customerName={customerName}
+                  onPhoneChange={setCustomerPhone}
+                  onNameChange={setCustomerName}
+                  isLoading={isCustomerLoading}
+                  matchedCustomers={[]} // TODO: Implement customer matching
+                  onSelectCustomer={(customer: { phone: string; name?: string }) => {
+                    setCustomerPhone(customer.phone);
+                    setCustomerName(customer.name || '');
+                  }}
                 />
-                
-                {/* Search Results */}
-                {customerPhone.length >= 3 && customers?.filter(c => (c.phone || '').includes(customerPhone)).length > 0 && !customers.find(c => c.phone === customerPhone) && (
-                  <div className="absolute top-full left-0 right-0 mt-2 bg-slate-900 border border-white/10 rounded-2xl overflow-hidden z-50 shadow-2xl shadow-black/50">
-                    {customers
-                      .filter(c => (c.phone || '').includes(customerPhone))
-                      .slice(0, 4)
-                      .map(c => (
-                        <button
-                          key={c.id}
-                          onClick={() => {
-                            setCustomerPhone(c.phone || '');
-                            setCustomerName(c.name || '');
-                            setDeliveryAddress(c.address || '');
-                          }}
-                          className="w-full px-5 py-4 text-left hover:bg-slate-800 border-b border-white/5 last:border-0 transition-colors"
-                        >
-                          <div className="text-sm font-black text-white uppercase">{c.name}</div>
-                          <div className="text-[10px] text-slate-500 font-mono tracking-widest mt-1">{c.phone}</div>
-                        </button>
-                      ))}
-                  </div>
-                )}
-              </div>
+              )}
 
-              <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Registry Name</label>
-                <input
-                  type="text"
-                  placeholder="Guest Name"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-2xl px-5 py-4 text-sm font-bold text-white outline-none focus:border-gold-500 transition-all uppercase"
-                />
-              </div>
-
+              {/* Standard inputs for DELIVERY orders */}
               {orderType === 'DELIVERY' && (
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-2 block">Geographic Address</label>
-                  <textarea
-                    placeholder="Street, Block, House No..."
-                    value={deliveryAddress}
-                    onChange={(e) => setDeliveryAddress(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/5 rounded-2xl px-5 py-4 text-sm font-bold text-white outline-none focus:border-gold-500 transition-all h-28 resize-none"
-                  />
-                </div>
+                <>
+                  <div>
+                    <label className="text-[10px] text-slate-500 uppercase font-bold flex justify-between">
+                      Phone Number
+                      {isCustomerLoading && <Loader2 size={12} className="animate-spin text-gold-500" />}
+                    </label>
+                    <input
+                      autoFocus
+                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 font-mono tracking-widest focus:border-gold-500 outline-none"
+                      placeholder="03XXXXXXXXX"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      type="tel"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500 uppercase font-bold">Name</label>
+                    <input
+                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 focus:border-gold-500 outline-none"
+                      placeholder="Guest Name"
+                      value={customerName}
+                      onChange={e => setCustomerName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500 uppercase font-bold">Address</label>
+                    <textarea
+                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 min-h-[80px] focus:border-gold-500 outline-none"
+                      placeholder="Full Delivery Address..."
+                      value={deliveryAddress}
+                      onChange={e => setDeliveryAddress(e.target.value)}
+                    />
+                  </div>
+                </>
               )}
             </div>
           )}
 
           <button
             onClick={() => setShowDetailsModal(false)}
-            className="w-full py-5 bg-white text-black font-black uppercase tracking-[0.3em] rounded-2xl shadow-xl shadow-white/5 active:scale-95 transition-all mt-4 text-xs"
+            className="w-full py-4 bg-white text-black rounded-xl font-black tracking-widest hover:bg-slate-200"
           >
-            Confirm Configuration
+            CONFIRM CONFIGURATION
           </button>
         </div>
       </div>

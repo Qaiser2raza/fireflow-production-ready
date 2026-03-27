@@ -175,7 +175,7 @@ export const calculateBill = (
 
   // 4. Tax
   // Tax is calculated on: afterDiscount + serviceCharge (for items NOT tax-exempt)
-  // Items with is_tax_exempt flag are skipped
+  // If Tax-Inclusive: We strip the tax from the total to find the base.
   let taxExemptAmount = 0;
   let taxableBase = 0;
 
@@ -191,6 +191,7 @@ export const calculateBill = (
         taxableBase += lineAfterDiscount;
       }
     });
+
     // Pro-rate service charge on taxable portion only
     const taxableServiceCharge = taxableBase > 0 && serviceCharge > 0
       ? serviceCharge * (taxableBase / afterDiscount)
@@ -198,15 +199,34 @@ export const calculateBill = (
     taxableBase += taxableServiceCharge;
   }
 
-  const tax = config.taxEnabled
-    ? Math.round(taxableBase * (config.taxRate / 100) * 100) / 100
-    : 0;
+  let tax = 0;
+
+  if (config.taxEnabled && taxableBase > 0) {
+    if (config.taxInclusive) {
+      // Base = Total / (1 + Rate)
+      // Tax = Total - Base
+      const rate = config.taxRate / 100;
+      const baseWithTax = taxableBase;
+      const baseWithoutTax = baseWithTax / (1 + rate);
+      tax = baseWithTax - baseWithoutTax;
+    } else {
+      // Standard exclusive tax
+      tax = taxableBase * (config.taxRate / 100);
+    }
+    tax = Math.round(tax * 100) / 100;
+  }
 
   // 5. Delivery Fee
   const deliveryFee = config.deliveryFeeEnabled ? config.deliveryFee : 0;
 
   // 6. Grand Total
-  const total = Math.round((afterDiscount + serviceCharge + tax + deliveryFee) * 100) / 100;
+  // If inclusive: Tax is already part of subtotal/sc. 
+  // If exclusive: Tax is added.
+  const totalRaw = config.taxInclusive
+    ? (afterDiscount + serviceCharge + deliveryFee)
+    : (afterDiscount + serviceCharge + tax + deliveryFee);
+  
+  const total = Math.round(totalRaw * 100) / 100;
 
   return {
     subtotal,

@@ -50,7 +50,7 @@ router.get('/:id/statement', authMiddleware, async (req, res) => {
 });
 
 // POST /api/suppliers/bill - Record a new supplier bill
-router.post('/bill', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+router.post('/bill', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const { supplierId, amount, description, referenceId } = req.body;
         const restaurantId = req.restaurantId!;
@@ -95,6 +95,33 @@ router.post('/', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'),
         res.status(201).json(supplier);
     } catch (e: any) {
         console.error('POST /api/suppliers ERROR:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/suppliers/payment - Record a payment to a supplier
+router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+    try {
+        const { supplierId, amount, description, paymentMethod, referenceId } = req.body;
+        const restaurantId = req.restaurantId!;
+
+        if (!supplierId || !amount) {
+            return res.status(400).json({ error: 'Supplier ID and Amount are required' });
+        }
+
+        await accounting.recordSupplierPayment({
+            restaurantId,
+            supplierId,
+            amount,
+            description,
+            paymentMethod: paymentMethod || 'CASH',
+            processedBy: req.staffId!,
+            referenceId
+        });
+
+        res.json({ success: true, message: 'Supplier payment recorded successfully' });
+    } catch (e: any) {
+        console.error('POST /api/suppliers/payment ERROR:', e);
         res.status(500).json({ error: e.message });
     }
 });
