@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../src/shared/lib/prisma';
 
 async function main() {
     console.log('🗑️  Starting Full Order Cleanup...');
@@ -19,11 +17,14 @@ async function main() {
         await prisma.parked_orders.deleteMany({});
 
         console.log('   - Deleting finance & ledgers...');
+        await prisma.ledger_entries.deleteMany({});
         await prisma.customer_ledgers.deleteMany({});
         await prisma.supplier_ledgers.deleteMany({});
         await prisma.expenses.deleteMany({});
         await prisma.payouts.deleteMany({});
         await prisma.transactions.deleteMany({});
+        await prisma.cashier_sessions.deleteMany({});
+        await prisma.audit_logs.deleteMany({});
 
         console.log('   - Deleting rider shifts & settlements...');
         await prisma.rider_settlements.deleteMany({});
@@ -58,7 +59,7 @@ async function main() {
     } catch (error) {
         console.error('❌ Error during cleanup:', error);
     } finally {
-        await prisma.$disconnect();
+        // shared prisma instance — no disconnect
     }
 }
 
