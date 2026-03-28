@@ -39,6 +39,7 @@ export abstract class BaseOrderService implements IOrderService {
             const timestamp = new Date();
             const order_number = data.order_number || `ORD-${timestamp.getHours()}${timestamp.getMinutes()}${timestamp.getSeconds()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
 
+            const customerId = await this.resolveCustomerId(tx, data.restaurant_id, data.customer_phone, data.customer_name, data.customer_id);
             const order = await tx.orders.create({
                 data: {
                     restaurants: {
@@ -52,8 +53,8 @@ export abstract class BaseOrderService implements IOrderService {
                     guest_count: data.guest_count ? Number(data.guest_count) : undefined,
                     customer_name: data.customer_name,
                     customer_phone: data.customer_phone,
-                    customers: (await this.resolveCustomerId(tx, data.restaurant_id, data.customer_phone, data.customer_name, data.customer_id)) 
-                        ? { connect: { id: (await this.resolveCustomerId(tx, data.restaurant_id, data.customer_phone, data.customer_name, data.customer_id)) as string } } 
+                    customers: customerId 
+                        ? { connect: { id: customerId } } 
                         : undefined,
                     delivery_address: data.delivery_address,
                     // Standard Prisma connections for relations
@@ -162,6 +163,7 @@ export abstract class BaseOrderService implements IOrderService {
                 }
             }
 
+            const customerId = await this.resolveCustomerId(tx, currentOrder?.restaurant_id || data.restaurant_id || '', data.customer_phone, data.customer_name, data.customer_id);
             await tx.orders.update({
                 where: { id },
                 data: {
@@ -172,8 +174,8 @@ export abstract class BaseOrderService implements IOrderService {
                     guest_count: data.guest_count,
                     customer_name: data.customer_name,
                     customer_phone: data.customer_phone,
-                    customers: (await this.resolveCustomerId(tx, currentOrder?.restaurant_id || data.restaurant_id || '', data.customer_phone, data.customer_name, data.customer_id))
-                        ? { connect: { id: (await this.resolveCustomerId(tx, currentOrder?.restaurant_id || data.restaurant_id || '', data.customer_phone, data.customer_name, data.customer_id)) as string } }
+                    customers: customerId
+                        ? { connect: { id: customerId } }
                         : undefined,
                     delivery_address: data.delivery_address,
                     assigned_waiter_id: data.waiter_id || data.assigned_waiter_id || undefined,
