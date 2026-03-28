@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { 
     X, Printer, Edit2, Clock, 
     Phone, ShoppingBag, Utensils, Bike, 
@@ -23,11 +24,40 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
 }) => {
     const [search, setSearch] = useState('');
     const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'READY' | 'CLOSED'>('ALL');
+    const [localOrders, setLocalOrders] = useState<Order[]>(orders);
+    const [refreshing, setRefreshing] = useState(false);
+
+    const refreshOrders = async () => {
+        setRefreshing(true);
+        try {
+            const res = await fetchWithAuth('/api/orders');
+            if (res.ok) {
+                const data = await res.json();
+                setLocalOrders(data);
+            }
+        } catch (err) {
+            // Fallback to prop data silently
+        } finally {
+            setRefreshing(false);
+        }
+    };
+
+    useEffect(() => {
+        if (isOpen) {
+            setLocalOrders(orders); // Seed with prop data immediately
+            refreshOrders();        // Then fetch fresh data in background
+        }
+    }, [isOpen]);
 
     const filteredOrders = useMemo(() => {
-        return orders
+        return localOrders
             .filter(o => {
-                // 1. Filter by Active Session ID (Strict Shift Accountability)
+                // 1. Filter by Active Session (only show orders created after session opened)
+                if (activeSession?.opened_at) {
+                    const sessionStart = new Date(activeSession.opened_at).getTime();
+                    const orderTime = new Date(o.created_at || 0).getTime();
+                    if (orderTime < sessionStart) return false;
+                }
                 
                 // 2. Filter by search (Order # or Phone)
                 const searchLower = search.toLowerCase();
@@ -44,7 +74,7 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
                 return true;
             })
             .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-    }, [orders, activeSession, search, filterStatus]);
+    }, [localOrders, activeSession, search, filterStatus]);
 
     if (!isOpen) return null;
 
