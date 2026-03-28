@@ -843,6 +843,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             tax_enabled: transaction.tax_enabled ?? breakdown?.tax_enabled,
             service_charge_enabled: transaction.service_charge_enabled ?? breakdown?.service_charge_enabled,
             delivery_fee_enabled: transaction.delivery_fee_enabled ?? breakdown?.delivery_fee_enabled,
+            tax_type: transaction.tax_type ?? breakdown?.tax_type,
             restaurant_id: currentUser?.restaurant_id,
             staff_id: currentUser?.id
           };

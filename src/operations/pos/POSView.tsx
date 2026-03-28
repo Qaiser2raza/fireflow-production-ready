@@ -1041,7 +1041,8 @@ export const POSView: React.FC = () => {
                 delivery_fee: breakdown.deliveryFee,
                 tax_enabled: taxEnabled,
                 service_charge_enabled: serviceChargeEnabled,
-                delivery_fee_enabled: deliveryFeeEnabled
+                delivery_fee_enabled: deliveryFeeEnabled,
+                tax_type: breakdown.tax_type
               } as any);
 
               // After successful payment
