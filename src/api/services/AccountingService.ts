@@ -64,6 +64,15 @@ export class AccountingService {
 
         if (!order) return;
 
+        // Guard: Only journal orders that are in a settled state.
+        // CLOSED = fully paid dine-in/takeaway. DELIVERED = delivery revenue recognised at handoff.
+        // Partial or open orders must not be journalled — the imbalance guard would reject them anyway,
+        // but this guard prevents the error from bubbling up to the user.
+        if (order.status !== 'CLOSED' && order.status !== 'DELIVERED') {
+            console.warn(`[Accounting] recordOrderSale skipped — Order #${order.order_number} status is '${order.status}'. Only CLOSED or DELIVERED orders are journalled.`);
+            return;
+        }
+
         const totalAmount = new Decimal(order.total);
 
         // 1. CREDIT: Sales Revenue (Increase Revenue)
