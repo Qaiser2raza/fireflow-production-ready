@@ -2360,13 +2360,21 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                     payment_status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
                     closed_at: new Date(),
                     ...(( customer_id || order.customer_id) ? { customers: { connect: { id: customer_id || order.customer_id } } } : {}),
+                    // Sync final financial state from POS before journalling
+                    tax: req.body.tax !== undefined ? Number(req.body.tax) : undefined,
+                    service_charge: req.body.service_charge !== undefined ? Number(req.body.service_charge) : undefined,
+                    discount: req.body.discount !== undefined ? Number(req.body.discount) : undefined,
+                    delivery_fee: req.body.delivery_fee !== undefined ? Number(req.body.delivery_fee) : undefined,
+                    tax_type: req.body.tax_type || undefined,
+                    total: totalReceived > 0 ? totalReceived : undefined,
                     breakdown: {
                         ...(order.breakdown as any || {}),
                         paymentBreakdown: paymentList,
                         // Persist final flags from settlement request if provided
                         tax_enabled: req.body.tax_enabled ?? (order.breakdown as any)?.tax_enabled ?? (Number(order.tax) > 0),
                         service_charge_enabled: req.body.service_charge_enabled ?? (order.breakdown as any)?.service_charge_enabled ?? (Number(order.service_charge) > 0),
-                        delivery_fee_enabled: req.body.delivery_fee_enabled ?? (order.breakdown as any)?.delivery_fee_enabled ?? (Number(order.delivery_fee) > 0)
+                        delivery_fee_enabled: req.body.delivery_fee_enabled ?? (order.breakdown as any)?.delivery_fee_enabled ?? (Number(order.delivery_fee) > 0),
+                        tax_type: req.body.tax_type || (order.breakdown as any)?.tax_type
                     }
                 }
             });
