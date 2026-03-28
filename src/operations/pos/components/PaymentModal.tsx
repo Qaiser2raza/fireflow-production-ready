@@ -350,12 +350,20 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                                         <span>-Rs. {breakdown.discount.toLocaleString()}</span>
                                     </div>
                                 )}
-                                {breakdown.tax > 0 && (
-                                    <div className="flex justify-between text-[10px] font-bold text-slate-500">
-                                        <span>SALES TAX (GST)</span>
-                                        <span>Rs. {breakdown.tax.toLocaleString()}</span>
-                                    </div>
-                                )}
+                                  {breakdown.tax > 0 && (
+                                      <div className="flex justify-between text-[10px] font-bold text-slate-500">
+                                          <span>
+                                              {breakdown.tax_type === 'INCLUSIVE'
+                                                  ? 'INCL. TAX (GST 16%)'
+                                                  : 'SALES TAX (GST)'}
+                                          </span>
+                                          <span>
+                                              {breakdown.tax_type === 'INCLUSIVE'
+                                                  ? `[Rs. ${Math.round(breakdown.tax).toLocaleString()}]`
+                                                  : `Rs. ${Math.round(breakdown.tax).toLocaleString()}`}
+                                          </span>
+                                      </div>
+                                  )}
                                 {breakdown.serviceCharge > 0 && (
                                     <div className="flex justify-between text-[10px] font-bold text-slate-500">
                                         <span>SERVICE CHARGE</span>

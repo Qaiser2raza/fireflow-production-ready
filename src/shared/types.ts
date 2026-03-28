@@ -428,6 +428,7 @@ export interface PaymentBreakdown {
     taxableSubtotal?: number;
     taxExemptAmount?: number;
     discountReason?: string;
+    tax_type?: 'INCLUSIVE' | 'EXCLUSIVE';
 }
 
 // Backwards-compatible alias names expected elsewhere in the codebase

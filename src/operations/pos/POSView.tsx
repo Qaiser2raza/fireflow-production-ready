@@ -1005,6 +1005,17 @@ export const POSView: React.FC = () => {
           breakdown={breakdown}
           customer={customers.find(c => c.id === customerId) || { name: customerName, phone: customerPhone, id: customerId }}
           onClose={() => setShowPaymentModal(false)}
+          onPrintReceipt={async () => {
+              const orderId = (activeOrderData || orderToEdit)?.id;
+              if (orderId) {
+                  setActiveOrderId(orderId);
+                  setShowReceiptPreview(true);
+              }
+          }}
+          onPaymentCompleteClose={() => {
+              setShowPaymentModal(false);
+              resetPad();
+          }}
           onProcessPayment={async (total, method, tendered, _discountReason, payments, pCustomerId) => {
             const orderId = (activeOrderData || orderToEdit)?.id;
             if (!orderId) return;

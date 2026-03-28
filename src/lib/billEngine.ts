@@ -153,5 +153,6 @@ export const calculateBill = (
     tax,
     deliveryFee,
     total,
+    tax_type: config.tax_type
   };
 };
