@@ -333,25 +333,32 @@ export class JournalEntryService {
 
         console.log(`[ROUNDING_DEBUG] Order: ${order.order_number}, DR: ${totalDebit}, CR: ${totalCredit}, Diff: ${diff}, RoundAcc_Found: ${!!roundingAcc}`);
 
-        if (!diff.isZero() && roundingAcc) {
-            if (diff.isPositive()) {
-                // We received more than the subtotal -> Credit rounding (Revenue-like)
-                lines.push({
-                    accountId: roundingAcc.id,
-                    description: `Rounding adjustment – Order #${order.order_number}`,
-                    credit: diff,
-                    referenceType: 'ORDER',
-                    referenceId: orderId,
-                });
+        const ROUNDING_TOLERANCE = new Decimal(2);
+        if (!diff.isZero()) {
+            if (diff.abs().lte(ROUNDING_TOLERANCE)) {
+                if (roundingAcc) {
+                    if (diff.isPositive()) {
+                        // We received more than the subtotal -> Credit rounding (Revenue-like)
+                        lines.push({
+                            accountId: roundingAcc.id,
+                            description: `Rounding adjustment – Order #${order.order_number}`,
+                            credit: diff,
+                            referenceType: 'ORDER',
+                            referenceId: orderId,
+                        });
+                    } else {
+                        // We received less than the subtotal -> Debit rounding (Expense-like)
+                        lines.push({
+                            accountId: roundingAcc.id,
+                            description: `Rounding adjustment – Order #${order.order_number}`,
+                            debit: diff.abs(),
+                            referenceType: 'ORDER',
+                            referenceId: orderId,
+                        });
+                    }
+                }
             } else {
-                // We received less than the subtotal -> Debit rounding (Expense-like)
-                lines.push({
-                    accountId: roundingAcc.id,
-                    description: `Rounding adjustment – Order #${order.order_number}`,
-                    debit: diff.abs(),
-                    referenceType: 'ORDER',
-                    referenceId: orderId,
-                });
+                throw new Error(`JOURNAL_IMBALANCE: Order #${order.order_number} has a imbalance of ${diff.toFixed(2)} PKR exceeding tolerance. Check tax/SC calculation.`);
             }
         }
 
