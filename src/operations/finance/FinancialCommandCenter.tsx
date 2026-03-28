@@ -40,6 +40,8 @@ const FinancialCommandCenter: React.FC = () => {
         todaySales: 0,
         totalPayouts: 0
     });
+    const [glBalance, setGlBalance] = useState(0);
+    const [glRevenue, setGlRevenue] = useState(0);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [ledger, setLedger] = useState<any[]>([]);
     const [metrics, setMetrics] = useState<any>({});
@@ -161,6 +163,24 @@ const FinancialCommandCenter: React.FC = () => {
         }
     };
 
+    const fetchGLStats = async () => {
+        try {
+            const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
+            const [balanceRes, revenueRes] = await Promise.all([
+                fetchWithAuth(`${apiBase}/accounting/gl-balance?date=${selectedDate}`),
+                fetchWithAuth(`${apiBase}/accounting/gl-revenue?date=${selectedDate}`)
+            ]);
+            
+            const balanceData = await balanceRes.json();
+            const revenueData = await revenueRes.json();
+            
+            if (balanceData.success) setGlBalance(balanceData.cash_balance);
+            if (revenueData.success) setGlRevenue(revenueData.revenue);
+        } catch (err) {
+            console.error('Failed to fetch GL stats', err);
+        }
+    };
+
     const handleFetchReport = async (endpoint: string, title: string, riderIdOverride?: string) => {
         setReportLoading(true);
         try {
@@ -188,7 +208,7 @@ const FinancialCommandCenter: React.FC = () => {
 
     useEffect(() => {
         setLoading(true);
-        Promise.all([fetchSession(), fetchLedger(), fetchIntelligence(), fetchCOA()])
+        Promise.all([fetchSession(), fetchLedger(), fetchIntelligence(), fetchCOA(), fetchGLStats()])
             .finally(() => setLoading(false));
     }, [selectedDate, restaurantId]);
 
@@ -417,7 +437,7 @@ const FinancialCommandCenter: React.FC = () => {
             </div>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
                 {/* Expected Cash Card */}
                 <div className="bg-gradient-to-br from-slate-900 to-slate-950 border-2 border-slate-800/50 rounded-[2.5rem] p-8 relative overflow-hidden group">
                     <div className="absolute top-0 right-0 p-8 text-white/5 group-hover:text-white/10 transition-colors">
@@ -467,6 +487,38 @@ const FinancialCommandCenter: React.FC = () => {
                     </h3>
                     <div className="mt-4 flex gap-4 text-xs font-bold text-slate-500">
                         <span>Suppliers, Expenses, SCA</span>
+                    </div>
+                </div>
+
+                {/* GL Cash Position */}
+                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 group hover:border-slate-700 transition-all">
+                    <div className="flex justify-between items-start mb-6">
+                        <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 group-hover:scale-110 transition-transform">
+                            <Wallet size={24} strokeWidth={3} />
+                        </div>
+                    </div>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">GL Cash Position</p>
+                    <h3 className="text-3xl font-black text-white tracking-tight">
+                        Rs. {glBalance.toLocaleString()}
+                    </h3>
+                    <div className="mt-4 flex gap-4 text-xs font-bold text-slate-500">
+                        <span>Account Code: 1000</span>
+                    </div>
+                </div>
+
+                {/* GL Revenue (4000) */}
+                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 group hover:border-slate-700 transition-all">
+                    <div className="flex justify-between items-start mb-6">
+                        <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform">
+                            <TrendingUp size={24} strokeWidth={3} />
+                        </div>
+                    </div>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">GL Revenue (4000)</p>
+                    <h3 className="text-3xl font-black text-white tracking-tight">
+                        Rs. {glRevenue.toLocaleString()}
+                    </h3>
+                    <div className="mt-4 flex gap-4 text-xs font-bold text-slate-500">
+                        <span>Net Account Balance</span>
                     </div>
                 </div>
             </div>

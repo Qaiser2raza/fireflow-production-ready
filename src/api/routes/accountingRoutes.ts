@@ -336,4 +336,83 @@ router.post('/manual-journal', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, 
     }
 });
 
+/**
+ * GET /api/accounting/gl-balance
+ * Returns the net cash balance (Current Assets 1000)
+ */
+router.get('/gl-balance', async (req, res) => {
+    try {
+        const { date } = req.query;
+        const restaurantId = req.restaurantId!;
+        const { prisma } = await import('../../shared/lib/prisma');
+
+        const dateFilter: any = {};
+        if (date) {
+            const d = new Date(date as string);
+            const start = new Date(d); start.setHours(0, 0, 0, 0);
+            const end = new Date(d); end.setHours(23, 59, 59, 999);
+            dateFilter.gte = start;
+            dateFilter.lte = end;
+        }
+
+        const lines = await prisma.journal_entry_lines.findMany({
+            where: {
+                chart_of_accounts: { 
+                    restaurant_id: restaurantId,
+                    code: '1000'
+                },
+                ...(date ? { journal_entries: { date: dateFilter } } : {})
+            },
+            select: { debit: true, credit: true }
+        });
+
+        const totalDebit = lines.reduce((acc, l) => acc + Number(l.debit), 0);
+        const totalCredit = lines.reduce((acc, l) => acc + Number(l.credit), 0);
+
+        res.json({ success: true, cash_balance: totalDebit - totalCredit });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * GET /api/accounting/gl-revenue
+ * Returns net revenue (Sales 4000)
+ */
+router.get('/gl-revenue', async (req, res) => {
+    try {
+        const { date } = req.query;
+        const restaurantId = req.restaurantId!;
+        const { prisma } = await import('../../shared/lib/prisma');
+
+        const dateFilter: any = {};
+        if (date) {
+            const d = new Date(date as string);
+            const start = new Date(d); start.setHours(0, 0, 0, 0);
+            const end = new Date(d); end.setHours(23, 59, 59, 999);
+            dateFilter.gte = start;
+            dateFilter.lte = end;
+        }
+
+        const lines = await prisma.journal_entry_lines.findMany({
+            where: {
+                chart_of_accounts: { 
+                    restaurant_id: restaurantId,
+                    code: '4000'
+                },
+                ...(date ? { journal_entries: { date: dateFilter } } : {})
+            },
+            select: { debit: true, credit: true }
+        });
+
+        const totalDebit = lines.reduce((acc, l) => acc + Number(l.debit), 0);
+        const totalCredit = lines.reduce((acc, l) => acc + Number(l.credit), 0);
+
+        // Revenue is Credit-normal
+        res.json({ success: true, revenue: totalCredit - totalDebit });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 export default router;
