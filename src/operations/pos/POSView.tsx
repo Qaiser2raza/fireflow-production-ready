@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { MenuItem, OrderItem, OrderType } from '../../shared/types';
 import { useAppContext } from '../../client/contexts/AppContext';
 import { Search, X, Edit2, Plus, Minus, Loader2, Utensils, Flame, ShoppingBag, Bike, Users, Banknote, Printer, History } from 'lucide-react';
@@ -53,6 +53,7 @@ export const POSView: React.FC = () => {
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [isCustomerLoading, setIsCustomerLoading] = useState(false);
   const [activeSession, setActiveSession] = useState<any>(null);
+  const defaultsAppliedRef = useRef(false);
 
   const debouncedPhone = useDebounce(customerPhone, 400);
 
@@ -173,6 +174,7 @@ export const POSView: React.FC = () => {
     const defaultDelivery = typeDefaults ? (Number(typeDefaults.delivery_fee) > 0) : (baseType === 'DELIVERY');
 
     if (orderToEdit) {
+      defaultsAppliedRef.current = false; // Reset for edit mode
       setOrderType(orderToEdit.type);
       if (orderToEdit.type === 'DINE_IN') setSelectedTableId(orderToEdit.tableId || orderToEdit.table_id || '');
       
@@ -190,14 +192,17 @@ export const POSView: React.FC = () => {
       
       setDeliveryFeeValue(Number(orderToEdit.delivery_fee || savedBreakdown.deliveryFee || typeDefaults?.delivery_fee || cfg.default_delivery_fee || 0));
     } else {
-      // New Order - strictly follow defaults
-      setTaxEnabled(defaultTax);
-      setServiceChargeEnabled(defaultSrv);
-      setDiscountValue(defaultDisc);
-      setDiscountType(defaultDiscType);
-      setDiscountReason('');
-      setDeliveryFeeEnabled(defaultDelivery);
-      setDeliveryFeeValue(Number(typeDefaults?.delivery_fee || cfg.default_delivery_fee || cfg.defaultDeliveryFee || 0));
+      // New Order - strictly follow defaults ONLY ONCE per session
+      if (!defaultsAppliedRef.current) {
+        setTaxEnabled(defaultTax);
+        setServiceChargeEnabled(defaultSrv);
+        setDiscountValue(defaultDisc);
+        setDiscountType(defaultDiscType);
+        setDiscountReason('');
+        setDeliveryFeeEnabled(defaultDelivery);
+        setDeliveryFeeValue(Number(typeDefaults?.delivery_fee || cfg.default_delivery_fee || cfg.defaultDeliveryFee || 0));
+        defaultsAppliedRef.current = true;
+      }
     }
   }, [orderToEdit, orderType, operationsConfig]);
 
