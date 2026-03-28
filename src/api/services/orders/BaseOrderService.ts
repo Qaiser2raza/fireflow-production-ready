@@ -331,8 +331,8 @@ export abstract class BaseOrderService implements IOrderService {
             where: { order_id: orderId }
         });
 
-        // 2. Fetch order_type_defaults for fallback
-        const orderDefaults = await tx.order_type_defaults.findUnique({
+        // 2. Fetch order_type_defaults for mandatory charge config
+        const config = await tx.order_type_defaults.findUnique({
             where: {
                 restaurant_id_order_type: {
                     restaurant_id: order.restaurant_id,
@@ -340,6 +340,10 @@ export abstract class BaseOrderService implements IOrderService {
                 }
             }
         });
+
+        if (!config) {
+            throw new Error(`Critical Error: No order type defaults found for restaurant ${order.restaurant_id} and type ${order.type}`);
+        }
 
         // Step 1 - Subtotal from items
         const subtotal = orderItems.reduce((sum, item) => sum + Number(item.total_price || 0), 0);
@@ -349,11 +353,11 @@ export abstract class BaseOrderService implements IOrderService {
         const taxable_amount = Math.max(0, subtotal - discountAmount);
 
         // Step 3 - Tax
-        // Override Priority: order.tax_exempt > override > defaults
+        // Override Priority: order.tax_exempt (manual override) > config defaults
         const isTaxExempt = overrideBreakdown?.tax_exempt ?? order.tax_exempt ?? false;
-        const currentTaxType = overrideBreakdown?.tax_type ?? order.tax_type ?? orderDefaults?.tax_type ?? 'INCLUSIVE';
-        const taxRate = Number(orderDefaults?.tax_rate ?? order.restaurants.tax_rate ?? 16);
-        const taxEnabled = orderDefaults?.tax_enabled ?? order.restaurants.tax_enabled ?? true;
+        const currentTaxType = overrideBreakdown?.tax_type ?? order.tax_type ?? (config.tax_type as TaxType);
+        const taxRate = Number(config.tax_rate);
+        const taxEnabled = config.tax_enabled;
 
         let tax_amount = 0;
         if (isTaxExempt || !taxEnabled) {
@@ -369,8 +373,9 @@ export abstract class BaseOrderService implements IOrderService {
         }
 
         // Step 4 - SVC on taxable_amount (not on tax)
-        const svcEnabled = orderDefaults?.svc_enabled ?? order.restaurants.service_charge_enabled ?? (order.type === 'DINE_IN');
-        const svcRate = Number(orderDefaults?.svc_rate ?? order.restaurants.service_charge_rate ?? 6);
+        // Override Priority: override flag > config defaults
+        const svcEnabled = overrideBreakdown?.service_charge_enabled ?? config.svc_enabled;
+        const svcRate = Number(config.svc_rate);
         let svc_amount = 0;
         if (svcEnabled) {
             svc_amount = (taxable_amount * svcRate) / 100;
@@ -379,7 +384,8 @@ export abstract class BaseOrderService implements IOrderService {
         // Step 5 - Delivery fee added flat at end (not taxable)
         let delivery_fee = 0;
         if (order.type === 'DELIVERY') {
-            delivery_fee = Number(overrideBreakdown?.deliveryFee ?? orderDefaults?.delivery_fee ?? 0);
+            const deliveryFeeEnabled = overrideBreakdown?.delivery_fee_enabled ?? true;
+            delivery_fee = deliveryFeeEnabled ? Number(overrideBreakdown?.deliveryFee ?? config.delivery_fee) : 0;
         }
 
         // Step 6 - Total
