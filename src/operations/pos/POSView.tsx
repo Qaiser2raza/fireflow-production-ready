@@ -37,7 +37,7 @@ export const POSView: React.FC = () => {
   const [serviceChargeEnabled, setServiceChargeEnabled] = useState(true);
   const [discountValue, setDiscountValue] = useState(0);
   const [discountType, setDiscountType] = useState<'flat' | 'percent'>('flat');
-  const [discountReason, setDiscountReason] = useState('');
+  const [discountReason, setDiscountReason] = useState<string>('');
   const [deliveryFeeEnabled, setDeliveryFeeEnabled] = useState(false);
   const [deliveryFeeValue, setDeliveryFeeValue] = useState(0);
 
@@ -238,7 +238,7 @@ export const POSView: React.FC = () => {
       svcRate: config.svcRate,
       discountValue: resolvedDiscount,
       deliveryFee: deliveryFeeEnabled ? deliveryFeeValue : 0,
-      taxExempt: false // Main view doesn't handle exempt override, SettlementModal does
+      tax_exempt: false // Main view doesn't handle exempt override, SettlementModal does
     });
   }, [currentOrderItems, orderType, operationsConfig, taxEnabled, serviceChargeEnabled, discountType, discountValue, deliveryFeeEnabled, deliveryFeeValue]);
 
@@ -433,7 +433,8 @@ export const POSView: React.FC = () => {
         customer_phone: customerPhone,
         customer_id: customerId,
         delivery_address: deliveryAddress,
-        total: breakdown.total
+        total: breakdown.total,
+        discount_reason: discountReason
       };
 
       const result = activeOrderId

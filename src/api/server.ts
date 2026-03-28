@@ -1862,7 +1862,7 @@ app.patch('/api/operations/order-settings', authMiddleware, requireRole('MANAGER
                     where: {
                         restaurant_id_order_type: {
                             restaurant_id: restaurantId,
-                            order_type: type
+                            order_type: type as import('@prisma/client').OrderType
                         }
                     },
                     update: {
@@ -1877,7 +1877,7 @@ app.patch('/api/operations/order-settings', authMiddleware, requireRole('MANAGER
                     },
                     create: {
                         restaurant_id: restaurantId,
-                        order_type: type,
+                        order_type: type as import('@prisma/client').OrderType,
                         tax_enabled: settings[type].tax_enabled,
                         tax_rate: settings[type].tax_rate,
                         tax_type: settings[type].tax_type,
