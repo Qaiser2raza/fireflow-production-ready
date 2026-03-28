@@ -560,7 +560,8 @@ app.post('/api/pairing/generate',
     requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'),
     pairingGenerateLimiter, 
     async (req, res) => {
-    const { restaurantId, targetStaffId, durationHours } = req.body;
+    const { targetStaffId, durationHours } = req.body;
+    const restaurantId = req.restaurantId!;
     const staffId = req.staffId; // manager generating the code
 
     // Input validation

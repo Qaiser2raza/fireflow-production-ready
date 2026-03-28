@@ -48,6 +48,7 @@ export async function generatePairingCode(
   session_duration_hours: number;
 }> {
   // 1. Validate targetStaffId exists and belongs to restaurant
+  console.log('[DEBUG] staff lookup for targetStaffId:', targetStaffId, 'and restaurantId:', restaurantId);
   const targetStaff = await prisma.staff.findFirst({
     where: { id: targetStaffId, restaurant_id: restaurantId }
   });

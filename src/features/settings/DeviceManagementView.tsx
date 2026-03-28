@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 import { useAppContext } from '../../client/contexts/AppContext';
 import { Monitor, Smartphone, Tablet, Trash2, RefreshCw, Shield, CheckCircle2, XCircle } from 'lucide-react';
 
@@ -22,10 +23,7 @@ export const DeviceManagementView: React.FC = () => {
     const fetchDevices = async () => {
         setLoading(true);
         try {
-            const token = sessionStorage.getItem('accessToken');
-            const res = await fetch('/api/devices', {
-                headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-            });
+            const res = await fetchWithAuth('/api/devices');
             if (!res.ok) throw new Error('Failed to fetch devices');
             const data = await res.json();
             setDevices(data);
@@ -41,10 +39,8 @@ export const DeviceManagementView: React.FC = () => {
     const revokeDevice = async (deviceId: string) => {
         setRevoking(deviceId);
         try {
-            const token = sessionStorage.getItem('accessToken');
-            const res = await fetch(`/api/devices/${deviceId}`, {
+            const res = await fetchWithAuth(`/api/devices/${deviceId}`, {
                 method: 'DELETE',
-                headers: token ? { 'Authorization': `Bearer ${token}` } : {}
             });
             if (!res.ok) throw new Error('Failed to revoke device');
             addNotification('success', 'Device revoked successfully');
