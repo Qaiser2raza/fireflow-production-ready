@@ -136,7 +136,25 @@ import {
 // Removed: const prisma = new PrismaClient();
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+    : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:3000'];
+
+const io = new Server(server, {
+    cors: {
+        origin: (origin, callback) => {
+            // Allow requests with no origin (Electron app, curl, same-origin)
+            if (!origin) return callback(null, true);
+            if (allowedOrigins.includes(origin)) return callback(null, true);
+            // Allow any local network IP (192.168.x.x, 10.x.x.x) for LAN POS terminals
+            if (/^https?:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(origin)) {
+                return callback(null, true);
+            }
+            return callback(new Error('Not allowed by CORS'));
+        },
+        credentials: true
+    }
+});
 
 // Initialize health monitor
 const healthMonitor = HealthMonitor.initialize(prisma);
@@ -306,19 +324,7 @@ app.get('/api/health', async (_req, res) => {
     }
 });
 
-app.get('/api/debug/paths', (_req, res) => {
-    res.json({
-        cwd: process.cwd(),
-        dirname: _dirname,
-        execPath: process.execPath,
-        distPath,
-        possiblePaths: possibleDistPaths,
-        env: {
-            NODE_ENV: process.env.NODE_ENV,
-            RESTAURANT_ID: !!process.env.RESTAURANT_ID
-        }
-    });
-});
+
 
 app.get('/api/connectivity', (_req, res) => {
     const hostname = os.hostname();
@@ -544,6 +550,14 @@ const pairingVerifyLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 10, // 10 attempts per minute
     message: 'Too many pairing attempts, please wait',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+const verifyPinLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minute window
+    max: 10, // 10 attempts per 15 minutes per IP
+    message: 'Too many PIN attempts. Please wait 15 minutes.',
     standardHeaders: true,
     legacyHeaders: false,
 });
@@ -1491,7 +1505,7 @@ app.delete('/api/restaurants/:id', authMiddleware, requireRole('SUPER_ADMIN'), a
  * POST /api/auth/verify-pin
  * Verify a PIN for specific action authorization (Manager PIN override)
  */
-app.post('/api/auth/verify-pin', async (req, res) => {
+app.post('/api/auth/verify-pin', verifyPinLimiter, async (req, res) => {
     const { pin, requiredRole } = req.body;
 
     if (!pin || typeof pin !== 'string') {
