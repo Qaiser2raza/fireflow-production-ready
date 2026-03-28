@@ -9,6 +9,7 @@ import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { prisma } from '../shared/lib/prisma';
+import { Decimal } from '@prisma/client/runtime/library';
 import rateLimit from 'express-rate-limit';
 import { logger, LogLevel, requestLoggerMiddleware } from '../shared/lib/logger';
 import { config, isCloudEnabled } from '../config/env';
@@ -472,7 +473,39 @@ app.post('/api/setup/activate', async (req, res) => {
             }
         });
 
-        // Step 5: Activate the license key in Supabase (marks it as used)
+        // Step 5: Seed order_type_defaults for the new restaurant (v3.2 requirement)
+        await prisma.order_type_defaults.createMany({
+            data: [
+                { 
+                    restaurant_id: restaurantId, 
+                    order_type: 'DINE_IN', 
+                    tax_enabled: true, 
+                    tax_rate: 16.0, 
+                    tax_type: 'INCLUSIVE', 
+                    svc_enabled: true, 
+                    svc_rate: 6.0 
+                },
+                { 
+                    restaurant_id: restaurantId, 
+                    order_type: 'TAKEAWAY', 
+                    tax_enabled: true, 
+                    tax_rate: 16.0, 
+                    tax_type: 'INCLUSIVE', 
+                    svc_enabled: false 
+                },
+                { 
+                    restaurant_id: restaurantId, 
+                    order_type: 'DELIVERY', 
+                    tax_enabled: true, 
+                    tax_rate: 16.0, 
+                    tax_type: 'INCLUSIVE', 
+                    svc_enabled: false, 
+                    delivery_fee: 150.0 
+                }
+            ]
+        });
+
+        // Step 6: Activate the license key in Supabase (marks it as used)
         await activateLicenseKey(licenseKey.trim().toUpperCase(), restaurantId);
 
         // The .env write and process.env update is moved to create-manager 
@@ -1701,6 +1734,25 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
 
         const extendedFeatures = (features?.features as any) || {};
 
+        // Fetch order type defaults from the new table
+        const orderDefaults = await prisma.order_type_defaults.findMany({
+            where: { restaurant_id: restaurantId }
+        });
+
+        // Convert the array to a record for the config response
+        const orderTypeDefaultsRecord = orderDefaults.reduce((acc: any, curr) => {
+            acc[curr.order_type] = {
+                tax_enabled: curr.tax_enabled,
+                tax_rate: curr.tax_rate,
+                tax_type: curr.tax_type,
+                svc_enabled: curr.svc_enabled,
+                svc_rate: curr.svc_rate,
+                delivery_fee: curr.delivery_fee,
+                discount_max: curr.discount_max
+            };
+            return acc;
+        }, {});
+
         // Merge DB restaurant fields into the config response
         const fullConfig = parseFullConfigFromAPI({
             ...extendedFeatures,
@@ -1721,6 +1773,7 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
             fbrNtn: restaurant.fbr_ntn,
             fbr_enabled: restaurant.fbr_enabled,
             fbr_pos_id: restaurant.fbr_pos_id,
+            order_type_defaults: orderTypeDefaultsRecord
         });
 
         if (!fullConfig) {
@@ -1772,48 +1825,108 @@ app.get('/api/operations/features/:restaurantId', authMiddleware, async (req, re
 });
 
 /**
+ * GET /api/operations/order-settings
+ * Fetch order type defaults from database table
+ */
+app.get('/api/operations/order-settings', authMiddleware, async (req, res) => {
+    const restaurantId = req.restaurantId!;
+    try {
+        const settings = await prisma.order_type_defaults.findMany({
+            where: { restaurant_id: restaurantId }
+        });
+        res.json({ success: true, settings });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
  * PATCH /api/operations/order-settings
  * Update order type defaults (DINE_IN, TAKEAWAY, DELIVERY)
  */
 app.patch('/api/operations/order-settings', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     const restaurantId = req.restaurantId!;
-    const { settings } = req.body;
+    const { settings } = req.body; // Map of order_type -> config
 
     if (!settings) {
         return res.status(400).json({ error: 'Settings object required' });
     }
 
     try {
-        // Fetch current features
-        const entry = await prisma.restaurant_features.findUnique({
+        const types = Object.keys(settings);
+        
+        // Use a transaction to update all types
+        await prisma.$transaction(
+            types.map(type => 
+                prisma.order_type_defaults.upsert({
+                    where: {
+                        restaurant_id_order_type: {
+                            restaurant_id: restaurantId,
+                            order_type: type
+                        }
+                    },
+                    update: {
+                        tax_enabled: settings[type].tax_enabled,
+                        tax_rate: settings[type].tax_rate,
+                        tax_type: settings[type].tax_type,
+                        svc_enabled: settings[type].svc_enabled,
+                        svc_rate: settings[type].svc_rate,
+                        delivery_fee: settings[type].delivery_fee,
+                        discount_max: settings[type].discount_max,
+                        updated_at: new Date()
+                    },
+                    create: {
+                        restaurant_id: restaurantId,
+                        order_type: type,
+                        tax_enabled: settings[type].tax_enabled,
+                        tax_rate: settings[type].tax_rate,
+                        tax_type: settings[type].tax_type,
+                        svc_enabled: settings[type].svc_enabled,
+                        svc_rate: settings[type].svc_rate,
+                        delivery_fee: settings[type].delivery_fee,
+                        discount_max: settings[type].discount_max
+                    }
+                })
+            )
+        );
+
+        // Also update guest count if provided (stays in restaurant_features for now as it's not per-order-type)
+        if (req.body.default_guest_count !== undefined || req.body.default_rider_float !== undefined) {
+             const entry = await prisma.restaurant_features.findUnique({
+                where: { restaurant_id: restaurantId }
+            });
+            const currentFeatures = (entry?.features as any) || {};
+            await prisma.restaurant_features.upsert({
+                where: { restaurant_id: restaurantId },
+                update: {
+                    features: {
+                        ...currentFeatures,
+                        default_guest_count: req.body.default_guest_count !== undefined ? Number(req.body.default_guest_count) : currentFeatures.default_guest_count,
+                        default_rider_float: req.body.default_rider_float !== undefined ? Number(req.body.default_rider_float) : currentFeatures.default_rider_float
+                    }
+                },
+                create: {
+                    restaurant_id: restaurantId,
+                    features: {
+                        default_guest_count: Number(req.body.default_guest_count || 2),
+                        default_rider_float: Number(req.body.default_rider_float || 5000)
+                    }
+                }
+            });
+        }
+
+        const updatedSettings = await prisma.order_type_defaults.findMany({
             where: { restaurant_id: restaurantId }
-        });
-
-        const currentFeatures = (entry?.features as any) || {};
-        const updatedFeatures = {
-            ...currentFeatures,
-            order_type_defaults: settings || currentFeatures.order_type_defaults,
-            default_guest_count: req.body.default_guest_count !== undefined ? Number(req.body.default_guest_count) : currentFeatures.default_guest_count,
-            default_rider_float: req.body.default_rider_float !== undefined ? Number(req.body.default_rider_float) : currentFeatures.default_rider_float
-        };
-
-        const result = await prisma.restaurant_features.upsert({
-            where: { restaurant_id: restaurantId },
-            update: { features: updatedFeatures },
-            create: {
-                restaurant_id: restaurantId,
-                features: updatedFeatures
-            }
         });
 
         // Broadcast to clients
         io.to(`restaurant:${restaurantId}`).emit('db_change', { 
-            table: 'restaurant_features', 
+            table: 'order_type_defaults', 
             eventType: 'UPDATE', 
-            data: result 
+            data: updatedSettings 
         });
 
-        res.json({ success: true, settings: result.features });
+        res.json({ success: true, settings: updatedSettings });
     } catch (e: any) {
         console.error('[OrderSettings] Update failed:', e);
         res.status(500).json({ error: e.message || 'Internal Server Error' });
@@ -2224,7 +2337,7 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
             const orderTotal = Number(order.total);
             const isFullyPaid = totalReceived >= orderTotal;
 
-            // 1. Update Order
+            // 1. Update Order with final breakdown and flags
             const updatedOrder = await tx.orders.update({
                 where: { id },
                 data: {
@@ -2234,7 +2347,11 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                     ...(( customer_id || order.customer_id) ? { customers: { connect: { id: customer_id || order.customer_id } } } : {}),
                     breakdown: {
                         ...(order.breakdown as any || {}),
-                        paymentBreakdown: paymentList
+                        paymentBreakdown: paymentList,
+                        // Persist final flags from settlement request if provided
+                        tax_enabled: req.body.tax_enabled ?? (order.breakdown as any)?.tax_enabled ?? (Number(order.tax) > 0),
+                        service_charge_enabled: req.body.service_charge_enabled ?? (order.breakdown as any)?.service_charge_enabled ?? (Number(order.service_charge) > 0),
+                        delivery_fee_enabled: req.body.delivery_fee_enabled ?? (order.breakdown as any)?.delivery_fee_enabled ?? (Number(order.delivery_fee) > 0)
                     }
                 }
             });
@@ -2617,9 +2734,9 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
             where: {
                 restaurant_id: String(restaurant_id),
                 created_at: { gte: todayStart },
-                NOT: { status: 'CANCELLED' } // Exclude cancelled from revenue
+                NOT: { status: { in: ['CANCELLED', 'VOIDED'] } } // Exclude cancelled and voided from revenue
             },
-            select: { type: true, status: true, total: true, tax: true, discount: true, service_charge: true }
+            select: { type: true, status: true, total: true, tax: true, discount: true, service_charge: true, breakdown: true }
         });
 
         const breakdown = {
@@ -2632,17 +2749,22 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
         };
 
         todaysOrders.forEach(o => {
+            const b = (o.breakdown as any) || {};
+            const taxVal = Number(o.tax || 0) || Number(b.tax || 0);
+            const scVal = Number(o.service_charge || 0) || Number(b.serviceCharge || 0);
+            const discountVal = Number(o.discount || 0) || Number(b.discount || 0);
+
             // Formula: Net Revenue = Grand Total - Tax - SC
-            const netVal = Number(o.total || 0) - Number(o.tax || 0) - Number(o.service_charge || 0);
+            const netVal = Number(o.total || 0) - taxVal - scVal;
 
             if (o.type === 'DINE_IN') breakdown.dineIn += netVal;
             if (o.type === 'TAKEAWAY') breakdown.takeaway += netVal;
             if (o.type === 'DELIVERY') breakdown.delivery += netVal;
             
             // Separate components
-            breakdown.tax += Number(o.tax || 0);
-            breakdown.discount += Number(o.discount || 0);
-            breakdown.serviceCharge += Number(o.service_charge || 0);
+            breakdown.tax += taxVal;
+            breakdown.discount += discountVal;
+            breakdown.serviceCharge += scVal;
         });
 
         // v3.0 analytics logic
@@ -2735,6 +2857,67 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
     }
 });
 
+// Finance Analytics Summary (Today) - For Dashboard Cards
+app.get('/api/analytics/finance/summary', authMiddleware, async (req, res) => {
+    try {
+        const { restaurant_id } = req.query;
+        if (!restaurant_id) return res.status(400).json({ error: 'restaurant_id required' });
+
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        // 1. Total Inventory Purchases (Today)
+        const purchasesRaw = await prisma.purchase_orders.aggregate({
+            where: {
+                restaurant_id: String(restaurant_id),
+                status: { in: ['RECEIVED', 'COMPLETED'] }, // Broad statuses for received goods
+                received_date: { gte: todayStart }
+            },
+            _sum: { total_amount: true }
+        });
+
+        // 2. Total Expenses (Today)
+        const expensesRaw = await prisma.expenses.aggregate({
+            where: {
+                restaurant_id: String(restaurant_id),
+                created_at: { gte: todayStart }
+            },
+            _sum: { amount: true }
+        });
+
+        // 3. COGS (Today)
+        // Calculated based on unit_cost stored at time of order item creation
+        const orderItems = await prisma.order_items.findMany({
+            where: {
+                orders: {
+                    restaurant_id: String(restaurant_id),
+                    status: 'CLOSED',
+                    closed_at: { gte: todayStart }
+                },
+                unit_cost: { not: null }
+            },
+            select: {
+                unit_cost: true,
+                quantity: true
+            }
+        });
+
+        let totalCogs = new Decimal(0);
+        orderItems.forEach(item => {
+            const unitCost = item.unit_cost ? new Decimal(item.unit_cost.toString()) : new Decimal(0);
+            totalCogs = totalCogs.plus(unitCost.mul(item.quantity));
+        });
+
+        res.json({
+            totalInventoryPurchases: Number(purchasesRaw._sum.total_amount || 0),
+            totalExpenses: Number(expensesRaw._sum.amount || 0),
+            cogs: Number(totalCogs)
+        });
+    } catch (e: any) {
+        console.error("[FinanceAnalytics] Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // ==========================================
 // 📜 4. MENU & CATEGORIES

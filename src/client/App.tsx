@@ -831,14 +831,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       processPayment: async (orderId: string, transaction: any) => {
         try {
-          // Flatten breakdown for API consistency
-          const { breakdown } = transaction;
+          // Extract breakdown and flags for API consistency
+          const breakdown = transaction.breakdown || {};
           const payload = {
             ...transaction,
-            tax: breakdown?.tax,
-            service_charge: breakdown?.serviceCharge,
-            discount: breakdown?.discount,
-            delivery_fee: breakdown?.deliveryFee,
+            tax: transaction.tax ?? breakdown?.tax,
+            service_charge: transaction.service_charge ?? breakdown?.serviceCharge,
+            discount: transaction.discount ?? breakdown?.discount,
+            delivery_fee: transaction.delivery_fee ?? breakdown?.deliveryFee,
+            // Include flags
+            tax_enabled: transaction.tax_enabled ?? breakdown?.tax_enabled,
+            service_charge_enabled: transaction.service_charge_enabled ?? breakdown?.service_charge_enabled,
+            delivery_fee_enabled: transaction.delivery_fee_enabled ?? breakdown?.delivery_fee_enabled,
             restaurant_id: currentUser?.restaurant_id,
             staff_id: currentUser?.id
           };

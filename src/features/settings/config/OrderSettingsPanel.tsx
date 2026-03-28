@@ -7,15 +7,12 @@ const API_BASE_URL = (typeof window !== 'undefined' ? window.location.origin + '
 
 interface OrderTypeSettings {
   tax_enabled: boolean;
-  default_tax_rate: number;
-  tax_inclusive: boolean;
-  service_charge_enabled: boolean;
-  default_service_charge_rate: number;
-  discount_enabled: boolean;
-  default_discount_value: number;
-  discount_type: 'flat' | 'percent';
-  delivery_fee_enabled?: boolean;
-  default_delivery_fee?: number;
+  tax_rate: number;
+  tax_type: 'INCLUSIVE' | 'EXCLUSIVE';
+  svc_enabled: boolean;
+  svc_rate: number;
+  discount_max: number;
+  delivery_fee?: number;
 }
 
 interface OrderDefaults {
@@ -27,35 +24,28 @@ interface OrderDefaults {
 const DEFAULT_SETTINGS: OrderDefaults = {
   DINE_IN: {
     tax_enabled: true,
-    default_tax_rate: 16,
-    tax_inclusive: false,
-    service_charge_enabled: true,
-    default_service_charge_rate: 5,
-    discount_enabled: true,
-    default_discount_value: 0,
-    discount_type: 'flat'
+    tax_rate: 16,
+    tax_type: 'INCLUSIVE',
+    svc_enabled: true,
+    svc_rate: 6,
+    discount_max: 0
   },
   TAKEAWAY: {
     tax_enabled: true,
-    default_tax_rate: 16,
-    tax_inclusive: false,
-    service_charge_enabled: false,
-    default_service_charge_rate: 0,
-    discount_enabled: true,
-    default_discount_value: 0,
-    discount_type: 'flat'
+    tax_rate: 16,
+    tax_type: 'INCLUSIVE',
+    svc_enabled: false,
+    svc_rate: 0,
+    discount_max: 0
   },
   DELIVERY: {
     tax_enabled: true,
-    default_tax_rate: 16,
-    tax_inclusive: false,
-    service_charge_enabled: false,
-    default_service_charge_rate: 0,
-    discount_enabled: true,
-    default_discount_value: 0,
-    discount_type: 'flat',
-    delivery_fee_enabled: true,
-    default_delivery_fee: 250
+    tax_rate: 16,
+    tax_type: 'INCLUSIVE',
+    svc_enabled: false,
+    svc_rate: 0,
+    discount_max: 0,
+    delivery_fee: 150
   }
 };
 
@@ -85,15 +75,25 @@ export const OrderSettingsPanel: React.FC = () => {
         setGuestCount(operationsConfig.default_guest_count || operationsConfig.defaultGuestCount || 2);
         setRiderFloat(operationsConfig.default_rider_float || operationsConfig.defaultRiderFloat || 5000);
       } else {
-        // Fallback: Fetch directly from features API
-        const response = await fetchWithAuth(`${API_BASE_URL}/operations/features/${restaurantId}`);
+        // Fallback: Fetch directly from dedicated settings API
+        const response = await fetchWithAuth(`${API_BASE_URL}/operations/order-settings`);
         if (response.ok) {
           const data = await response.json();
-          if (data.features?.order_type_defaults) {
-            setSettings({
-                ...DEFAULT_SETTINGS,
-                ...data.features.order_type_defaults
+          if (data.settings) {
+            // Map array back to the record object
+            const record: any = {};
+            data.settings.forEach((s: any) => {
+                record[s.order_type] = {
+                    tax_enabled: s.tax_enabled,
+                    tax_rate: Number(s.tax_rate),
+                    tax_type: s.tax_type,
+                    svc_enabled: s.svc_enabled,
+                    svc_rate: Number(s.svc_rate),
+                    delivery_fee: Number(s.delivery_fee),
+                    discount_max: Number(s.discount_max)
+                };
             });
+            setSettings(prev => ({ ...prev, ...record }));
           }
         }
       }
@@ -220,23 +220,23 @@ export const OrderSettingsPanel: React.FC = () => {
                         <div className="relative w-24">
                             <input
                                 type="number"
-                                value={settings[section.id].default_tax_rate}
-                                onChange={(e) => updateSection(section.id, 'default_tax_rate', Number(e.target.value))}
+                                value={settings[section.id].tax_rate}
+                                onChange={(e) => updateSection(section.id, 'tax_rate', Number(e.target.value))}
                                 className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs text-white text-right outline-none focus:border-green-500"
                             />
                             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-500">%</span>
                         </div>
                     </div>
                     <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-slate-500 uppercase font-black text-left">Inclusive Tax</span>
-                        <button
-                            onClick={() => updateSection(section.id, 'tax_inclusive', !settings[section.id].tax_inclusive)}
-                            className={`px-3 py-1 rounded-md text-[9px] font-black uppercase transition-all ${
-                                settings[section.id].tax_inclusive ? 'bg-green-500/20 text-green-500 border border-green-500/30' : 'bg-slate-800 text-slate-500 border border-transparent'
-                            }`}
+                        <span className="text-[10px] text-slate-500 uppercase font-black text-left">Tax Type</span>
+                        <select
+                            value={settings[section.id].tax_type}
+                            onChange={(e) => updateSection(section.id, 'tax_type', e.target.value)}
+                            className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[9px] text-white outline-none font-black uppercase"
                         >
-                            {settings[section.id].tax_inclusive ? 'Inclusive' : 'Exclusive'}
-                        </button>
+                            <option value="INCLUSIVE">Inclusive</option>
+                            <option value="EXCLUSIVE">Exclusive</option>
+                        </select>
                     </div>
                   </div>
                 )}
@@ -250,21 +250,21 @@ export const OrderSettingsPanel: React.FC = () => {
                     <span>Service Charge</span>
                   </div>
                   <button
-                    onClick={() => updateSection(section.id, 'service_charge_enabled', !settings[section.id].service_charge_enabled)}
-                    className={`w-10 h-5 rounded-full transition-all relative ${settings[section.id].service_charge_enabled ? 'bg-blue-600' : 'bg-slate-800'}`}
+                    onClick={() => updateSection(section.id, 'svc_enabled', !settings[section.id].svc_enabled)}
+                    className={`w-10 h-5 rounded-full transition-all relative ${settings[section.id].svc_enabled ? 'bg-blue-600' : 'bg-slate-800'}`}
                   >
-                    <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${settings[section.id].service_charge_enabled ? 'right-1' : 'left-1'}`} />
+                    <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${settings[section.id].svc_enabled ? 'right-1' : 'left-1'}`} />
                   </button>
                 </div>
-                {settings[section.id].service_charge_enabled && (
+                {settings[section.id].svc_enabled && (
                   <div className="bg-black/40 p-3 rounded-xl border border-slate-800/50">
                     <div className="flex items-center justify-between gap-4">
                         <span className="text-[10px] text-slate-500 uppercase font-black">S.C. Rate (%)</span>
                         <div className="relative w-24">
                             <input
                                 type="number"
-                                value={settings[section.id].default_service_charge_rate}
-                                onChange={(e) => updateSection(section.id, 'default_service_charge_rate', Number(e.target.value))}
+                                value={settings[section.id].svc_rate}
+                                onChange={(e) => updateSection(section.id, 'svc_rate', Number(e.target.value))}
                                 className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs text-white text-right outline-none focus:border-blue-500"
                             />
                         </div>
@@ -277,22 +277,15 @@ export const OrderSettingsPanel: React.FC = () => {
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-400">
                   <ShieldCheck size={14} className="text-gold-500" />
-                  <span>Default Discount</span>
+                  <span>Max Discount (%)</span>
                 </div>
                 <div className="bg-black/40 p-3 rounded-xl border border-slate-800/50 space-y-3">
                   <div className="flex items-center justify-between gap-4">
-                      <select 
-                        value={settings[section.id].discount_type}
-                        onChange={(e) => updateSection(section.id, 'discount_type', e.target.value)}
-                        className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[10px] text-white outline-none font-bold uppercase"
-                      >
-                        <option value="flat">Flat Amount</option>
-                        <option value="percent">Percentage</option>
-                      </select>
+                      <span className="text-[10px] text-slate-500 uppercase font-black">Max %</span>
                       <input
                           type="number"
-                          value={settings[section.id].default_discount_value}
-                          onChange={(e) => updateSection(section.id, 'default_discount_value', Number(e.target.value))}
+                          value={settings[section.id].discount_max}
+                          onChange={(e) => updateSection(section.id, 'discount_max', Number(e.target.value))}
                           className="w-20 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs text-white text-right outline-none focus:border-gold-500"
                           placeholder="0"
                       />
@@ -308,23 +301,18 @@ export const OrderSettingsPanel: React.FC = () => {
                         <Truck size={14} className="text-purple-500" />
                         <span>Delivery Fee</span>
                     </div>
-                    <button
-                        onClick={() => updateSection('DELIVERY', 'delivery_fee_enabled', !settings.DELIVERY.delivery_fee_enabled)}
-                        className={`w-10 h-5 rounded-full transition-all relative ${settings.DELIVERY.delivery_fee_enabled ? 'bg-purple-600' : 'bg-slate-800'}`}
-                    >
-                        <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${settings.DELIVERY.delivery_fee_enabled ? 'right-1' : 'left-1'}`} />
-                    </button>
+                     <div className="w-10 h-5" />
                     </div>
-                    {settings.DELIVERY.delivery_fee_enabled && (
+                    {true && (
                     <div className="bg-black/40 p-3 rounded-xl border border-slate-800/50">
                         <div className="flex items-center justify-between gap-4">
-                            <span className="text-[10px] text-slate-500 uppercase font-black text-left">Fee Amount (Rs)</span>
-                            <input
-                                type="number"
-                                value={settings.DELIVERY.default_delivery_fee}
-                                onChange={(e) => updateSection('DELIVERY', 'default_delivery_fee', Number(e.target.value))}
-                                className="w-24 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs text-white text-right outline-none focus:border-purple-500"
-                            />
+                             <span className="text-[10px] text-slate-500 uppercase font-black text-left">Fee Amount (Rs)</span>
+                             <input
+                                 type="number"
+                                 value={settings.DELIVERY.delivery_fee}
+                                 onChange={(e) => updateSection('DELIVERY', 'delivery_fee', Number(e.target.value))}
+                                 className="w-24 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs text-white text-right outline-none focus:border-purple-500"
+                             />
                         </div>
                     </div>
                     )}

@@ -167,24 +167,28 @@ export const POSView: React.FC = () => {
     const typeDefaults = cfg.order_type_defaults?.[baseType];
 
     const defaultTax = typeDefaults ? Boolean(typeDefaults.tax_enabled) : Boolean(cfg.taxEnabled ?? cfg.tax_enabled ?? true);
-    const defaultSrv = typeDefaults ? Boolean(typeDefaults.service_charge_enabled) : (baseType === 'DINE_IN');
-    const defaultDisc = Number(typeDefaults?.default_discount_value ?? 0);
-    const defaultDiscType = typeDefaults?.discount_type || 'flat';
-    const defaultDelivery = typeDefaults ? Boolean(typeDefaults.delivery_fee_enabled) : (baseType === 'DELIVERY');
+    const defaultSrv = typeDefaults ? Boolean(typeDefaults.svc_enabled) : (baseType === 'DINE_IN');
+    const defaultDisc = Number(typeDefaults?.discount_max ?? 0);
+    const defaultDiscType = 'percent'; // discount_max is always percent in settings
+    const defaultDelivery = typeDefaults ? (Number(typeDefaults.delivery_fee) > 0) : (baseType === 'DELIVERY');
 
     if (orderToEdit) {
       setOrderType(orderToEdit.type);
       if (orderToEdit.type === 'DINE_IN') setSelectedTableId(orderToEdit.tableId || orderToEdit.table_id || '');
       
-      // Load persisting overrides OR fallback to system defaults (NOT tax > 0)
+      // Load persisting overrides OR fallback to system defaults (Enriched breakdown v4.2)
       const editOrder = orderToEdit as any;
-      setTaxEnabled(editOrder.tax_enabled ?? (orderToEdit.tax && orderToEdit.tax > 0 ? true : defaultTax));
-      setServiceChargeEnabled(editOrder.service_charge_enabled ?? (orderToEdit.service_charge && orderToEdit.service_charge > 0 ? true : defaultSrv));
-      setDiscountValue(editOrder.discount_value || orderToEdit.discount || defaultDisc);
-      setDiscountType(editOrder.discount_type || defaultDiscType);
+      const savedBreakdown = editOrder.breakdown || {};
+      
+      setTaxEnabled(savedBreakdown.tax_enabled ?? (Number(orderToEdit.tax) > 0 ? true : defaultTax));
+      setServiceChargeEnabled(savedBreakdown.service_charge_enabled ?? (Number(orderToEdit.service_charge) > 0 ? true : defaultSrv));
+      setDeliveryFeeEnabled(savedBreakdown.delivery_fee_enabled ?? (Number(orderToEdit.delivery_fee) > 0 ? true : (orderToEdit.type === 'DELIVERY')));
+      
+      setDiscountValue(savedBreakdown.discount_value ?? (editOrder.discount_value || (Number(orderToEdit.discount || 0)) || defaultDisc));
+      setDiscountType(savedBreakdown.discount_type ?? (editOrder.discount_type || defaultDiscType));
       setDiscountReason(editOrder.discount_reason || editOrder.discountReason || '');
-      setDeliveryFeeEnabled(editOrder.delivery_fee_enabled ?? (orderToEdit.delivery_fee && orderToEdit.delivery_fee > 0 ? true : defaultDelivery));
-      setDeliveryFeeValue(orderToEdit.delivery_fee || Number(typeDefaults?.default_delivery_fee ?? cfg.default_delivery_fee ?? 0));
+      
+      setDeliveryFeeValue(Number(orderToEdit.delivery_fee || savedBreakdown.deliveryFee || typeDefaults?.delivery_fee || cfg.default_delivery_fee || 0));
     } else {
       // New Order - strictly follow defaults
       setTaxEnabled(defaultTax);
@@ -193,7 +197,7 @@ export const POSView: React.FC = () => {
       setDiscountType(defaultDiscType);
       setDiscountReason('');
       setDeliveryFeeEnabled(defaultDelivery);
-      setDeliveryFeeValue(Number(typeDefaults?.default_delivery_fee ?? cfg.default_delivery_fee ?? cfg.defaultDeliveryFee ?? 0));
+      setDeliveryFeeValue(Number(typeDefaults?.delivery_fee || cfg.default_delivery_fee || cfg.defaultDeliveryFee || 0));
     }
   }, [orderToEdit, orderType, operationsConfig]);
 
@@ -220,14 +224,21 @@ export const POSView: React.FC = () => {
   const breakdown = useMemo(() => {
     const cfg = operationsConfig || {};
     const config = getDefaultBillConfig(orderType, cfg);
+    
+    // Resolve discount to flat amount (BillEngine now expects flat)
+    const subtotal = currentOrderItems.reduce((acc, item) => acc + (Number(item.unit_price) * item.quantity), 0);
+    const resolvedDiscount = discountType === 'percent' 
+      ? (subtotal * (discountValue / 100))
+      : discountValue;
+
     return calculateBill(currentOrderItems, {
       ...config,
       taxEnabled,
-      serviceChargeEnabled,
-      discountType,
-      discountValue,
-      deliveryFeeEnabled,
-      deliveryFee: deliveryFeeValue
+      svcEnabled: serviceChargeEnabled,
+      svcRate: config.svcRate,
+      discountValue: resolvedDiscount,
+      deliveryFee: deliveryFeeEnabled ? deliveryFeeValue : 0,
+      taxExempt: false // Main view doesn't handle exempt override, SettlementModal does
     });
   }, [currentOrderItems, orderType, operationsConfig, taxEnabled, serviceChargeEnabled, discountType, discountValue, deliveryFeeEnabled, deliveryFeeValue]);
 
@@ -747,24 +758,22 @@ export const POSView: React.FC = () => {
                   const payload: any = {
                     type: orderType,
                     items: currentOrderItems,
-                    total: breakdown.total,
-                    tax: breakdown.tax,
-                    service_charge: breakdown.serviceCharge,
-                    discount: breakdown.discount,
-                    delivery_fee: breakdown.deliveryFee,
-                    // Persist overrides for recovery
-                    tax_enabled: taxEnabled,
-                    service_charge_enabled: serviceChargeEnabled,
-                    delivery_fee_enabled: deliveryFeeEnabled,
-                    discount_type: discountType,
-                    discount_value: discountValue,
-                    discount_reason: discountReason || 'POS Adjustment',
-                    guest_count: guestCount,
-                    customer_phone: customerPhone,
                     customer_name: customerName,
                     delivery_address: deliveryAddress,
                     table_id: selectedTableId,
-                    session_id: activeSession?.id
+                    session_id: activeSession?.id,
+                    breakdown: {
+                      total: breakdown.total,
+                      tax: breakdown.tax,
+                      serviceCharge: breakdown.serviceCharge,
+                      discount: breakdown.discount,
+                      deliveryFee: breakdown.deliveryFee,
+                      tax_enabled: taxEnabled,
+                      service_charge_enabled: serviceChargeEnabled,
+                      delivery_fee_enabled: deliveryFeeEnabled,
+                      discount_type: discountType,
+                      discount_value: discountValue
+                    }
                   };
 
                   setIsSubmitting(true);
@@ -800,23 +809,25 @@ export const POSView: React.FC = () => {
                     const payload: any = {
                       type: orderType,
                       items: currentOrderItems,
-                      total: breakdown.total,
-                      tax: breakdown.tax,
-                      service_charge: breakdown.serviceCharge,
-                      discount: breakdown.discount,
-                      delivery_fee: breakdown.deliveryFee,
-                      tax_enabled: taxEnabled,
-                      service_charge_enabled: serviceChargeEnabled,
-                      delivery_fee_enabled: deliveryFeeEnabled,
-                      discount_type: discountType,
-                      discount_value: discountValue,
                       discount_reason: 'Fire Order',
                       guest_count: guestCount,
                       customer_phone: customerPhone,
-                       customer_name: customerName,
-                       delivery_address: deliveryAddress,
-                       table_id: selectedTableId,
-                       session_id: activeSession?.id
+                      customer_name: customerName,
+                      delivery_address: deliveryAddress,
+                      table_id: selectedTableId,
+                      session_id: activeSession?.id,
+                      breakdown: {
+                        total: breakdown.total,
+                        tax: breakdown.tax,
+                        serviceCharge: breakdown.serviceCharge,
+                        discount: breakdown.discount,
+                        deliveryFee: breakdown.deliveryFee,
+                        tax_enabled: taxEnabled,
+                        service_charge_enabled: serviceChargeEnabled,
+                        delivery_fee_enabled: deliveryFeeEnabled,
+                        discount_type: discountType,
+                        discount_value: discountValue
+                      }
                     };
                     
                     setIsSubmitting(true);
@@ -1007,11 +1018,13 @@ export const POSView: React.FC = () => {
                 changeGiven: (tendered || 0) > total ? (tendered || 0) - total : 0,
                 payments: payments || [{ method, amount: total }],
                 customer_id: finalCustomerId,
-                // Include breakdown for backend accounting
                 tax: breakdown.tax,
                 service_charge: breakdown.serviceCharge,
                 discount: breakdown.discount,
-                delivery_fee: breakdown.deliveryFee
+                delivery_fee: breakdown.deliveryFee,
+                tax_enabled: taxEnabled,
+                service_charge_enabled: serviceChargeEnabled,
+                delivery_fee_enabled: deliveryFeeEnabled
               } as any);
 
               // After successful payment

@@ -9,6 +9,8 @@ export const orderUpsertSchema = z.object({
     table_id: z.string().uuid().nullable().optional(),
     customer_name: z.string().optional(),
     customer_phone: z.string().optional(),
+    tax_type: z.enum(['INCLUSIVE', 'EXCLUSIVE']).optional(),
+    tax_exempt: z.boolean().optional(),
     order_items: z.array(z.object({
         menu_item_id: z.string().uuid(),
         quantity: z.number().int().min(1),

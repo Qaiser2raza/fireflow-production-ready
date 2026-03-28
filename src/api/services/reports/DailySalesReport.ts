@@ -60,7 +60,8 @@ export async function getDailySalesReport(restaurantId: string, dateRange: DateR
         hourlyData[hour].revenue += total;
     });
 
-    const netSales = grossSales.minus(totalDiscounts);
+    // Net Sales = Revenue after discounts, excluding tax, service charge, and delivery fees.
+    const netSales = grossSales.minus(totalTax).minus(totalSC).minus(totalDeliveryFees);
     const avgTicket = orders.length > 0 ? grossSales.dividedBy(orders.length) : new Decimal(0);
 
     // --- Comparison: Yesterday ---
@@ -95,14 +96,14 @@ export async function getDailySalesReport(restaurantId: string, dateRange: DateR
     return {
         period: { start: dateRange.start, end: dateRange.end },
         summary: {
-            gross_sales: grossSales,
-            net_sales: netSales,
-            total_tax: totalTax,
-            total_service_charge: totalSC,
-            total_delivery_fees: totalDeliveryFees,
-            total_discounts: totalDiscounts,
+            gross_sales: Math.round(Number(grossSales) * 100) / 100,
+            net_sales: Math.round(Number(netSales) * 100) / 100,
+            total_tax: Math.round(Number(totalTax) * 100) / 100,
+            total_service_charge: Math.round(Number(totalSC) * 100) / 100,
+            total_delivery_fees: Math.round(Number(totalDeliveryFees) * 100) / 100,
+            total_discounts: Math.round(Number(totalDiscounts) * 100) / 100,
             order_count: orders.length,
-            avg_ticket: avgTicket,
+            avg_ticket: Math.round(Number(avgTicket) * 100) / 100,
         },
         payment_methods: paymentMethods,
         order_types: orderTypes,

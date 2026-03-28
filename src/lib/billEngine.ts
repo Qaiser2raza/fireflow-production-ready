@@ -19,21 +19,21 @@ import { OrderItem, OrderType, PaymentBreakdown } from '../shared/types';
 
 export interface BillConfig {
   // Discount
-  discountType: 'flat' | 'percent';
-  discountValue: number;          // Amount (Rs) or Percent (%)
+  discountValue: number;          // Resolved flat Rs amount
+  discountMax: number;            // Max % allowed (v3.2)
 
-  // Service Charge — only DINE_IN typically
-  serviceChargeEnabled: boolean;
-  serviceChargeRate: number;      // Percentage, e.g. 6 = 6%
+  // Service Charge
+  svcEnabled: boolean;
+  svcRate: number;                // Percentage, e.g. 6 = 6%
 
   // Tax
   taxEnabled: boolean;
   taxRate: number;                // Percentage, e.g. 16 = 16%
+  tax_type: 'INCLUSIVE' | 'EXCLUSIVE';
   taxLabel: string;               // 'GST', 'VAT', 'Tax', etc.
-  taxInclusive: boolean;          // If true, price already includes tax
+  tax_exempt: boolean;             // Whole order exemption
 
   // Delivery
-  deliveryFeeEnabled: boolean;
   deliveryFee: number;            // Flat Rs amount (0 = free)
 }
 
@@ -52,89 +52,47 @@ export const getDefaultBillConfig = (
   orderType: OrderType,
   operationsConfig: any
 ): BillConfig => {
-  // Check both naming conventions for robustness
-  const scRate = Number(operationsConfig?.serviceChargeRate ?? operationsConfig?.service_charge_rate ?? 5);
-  const scEnabled = Boolean(operationsConfig?.serviceChargeEnabled ?? operationsConfig?.service_charge_enabled ?? false);
-  const taxEnabled = Boolean(operationsConfig?.taxEnabled ?? operationsConfig?.tax_enabled ?? false);
-  
-  const taxRate = Number(operationsConfig?.taxRate ?? operationsConfig?.tax_rate ?? 16);
-  
-  const taxLabel = operationsConfig?.taxLabel || operationsConfig?.tax_label || 'GST';
-  const defaultDeliveryFee = Number(operationsConfig?.defaultDeliveryFee ?? operationsConfig?.default_delivery_fee ?? 0);
+  const taxLabel = operationsConfig?.tax_label || operationsConfig?.taxLabel || 'GST';
+  const defaultDeliveryFee = Number(operationsConfig?.default_delivery_fee ?? operationsConfig?.defaultDeliveryFee ?? 0);
 
-  // Check for specific order type defaults (v3.2)
+  // Default fallback if no specific order defaults found
+  const baseConfig: BillConfig = {
+    discountValue: 0,
+    discountMax: 0,
+    svcEnabled: false,
+    svcRate: 0,
+    taxEnabled: true,
+    taxRate: 16,
+    tax_type: 'INCLUSIVE',
+    taxLabel: taxLabel,
+    tax_exempt: false,
+    deliveryFee: 0
+  };
+
   const orderDefaults = operationsConfig?.order_type_defaults?.[orderType];
+  
   if (orderDefaults) {
     return {
-      discountType: orderDefaults.discount_type || 'flat',
-      discountValue: Number(orderDefaults.default_discount_value ?? 0),
-      serviceChargeEnabled: Boolean(orderDefaults.service_charge_enabled),
-      serviceChargeRate: Number(orderDefaults.default_service_charge_rate ?? scRate),
+      ...baseConfig,
       taxEnabled: Boolean(orderDefaults.tax_enabled),
-      taxRate: Number(orderDefaults.default_tax_rate ?? taxRate),
-      taxLabel: taxLabel,
-      taxInclusive: Boolean(orderDefaults.tax_inclusive),
-      deliveryFeeEnabled: Boolean(orderDefaults.delivery_fee_enabled),
-      deliveryFee: Number(orderDefaults.default_delivery_fee ?? defaultDeliveryFee),
+      taxRate: Number(orderDefaults.tax_rate ?? 16),
+      tax_type: orderDefaults.tax_type || 'INCLUSIVE',
+      svcEnabled: Boolean(orderDefaults.svc_enabled),
+      svcRate: Number(orderDefaults.svc_rate ?? 0),
+      deliveryFee: Number(orderDefaults.delivery_fee ?? 0),
+      discountMax: Number(orderDefaults.discount_max ?? 0),
+      tax_exempt: Boolean(orderDefaults.tax_exempt)
     };
   }
 
+  // Legacy switch statements for backwards compatibility
   switch (orderType) {
     case 'DINE_IN':
-      return {
-        discountType: 'flat',
-        discountValue: 0,
-        serviceChargeEnabled: scEnabled, // Respect global setting
-        serviceChargeRate: scRate,
-        taxEnabled, // Respect global setting
-        taxRate,
-        taxLabel,
-        taxInclusive: false,
-        deliveryFeeEnabled: false,
-        deliveryFee: 0,
-      };
-
-    case 'TAKEAWAY':
-      return {
-        discountType: 'flat',
-        discountValue: 0,
-        serviceChargeEnabled: false, // Takeaway usually no service charge
-        serviceChargeRate: scRate,
-        taxEnabled, // Respect global setting
-        taxRate,
-        taxLabel,
-        taxInclusive: false,
-        deliveryFeeEnabled: false,
-        deliveryFee: 0,
-      };
-
+      return { ...baseConfig, svcEnabled: true, svcRate: 6 };
     case 'DELIVERY':
-      return {
-        discountType: 'flat',
-        discountValue: 0,
-        serviceChargeEnabled: false,
-        serviceChargeRate: scRate,
-        taxEnabled, // Respect global setting
-        taxRate,
-        taxLabel,
-        taxInclusive: false,
-        deliveryFeeEnabled: true,
-        deliveryFee: defaultDeliveryFee,
-      };
-
+      return { ...baseConfig, deliveryFee: defaultDeliveryFee };
     default:
-      return {
-        discountType: 'flat',
-        discountValue: 0,
-        serviceChargeEnabled: false,
-        serviceChargeRate: 5,
-        taxEnabled, // Respect global setting
-        taxRate: 16,
-        taxLabel: 'GST',
-        taxInclusive: false,
-        deliveryFeeEnabled: false,
-        deliveryFee: 0,
-      };
+      return baseConfig;
   }
 };
 
@@ -146,85 +104,41 @@ export const calculateBill = (
   items: OrderItem[],
   config: BillConfig
 ): BillResult => {
-  // 1. Subtotal from all items
+  // 1. Subtotal (items)
   const subtotal = items.reduce(
     (acc, item) => acc + Number(item.unit_price) * item.quantity,
     0
   );
 
-  // 2. Discount
-  let discountAmount = 0;
-  let discountPercent = 0;
-  if (config.discountValue > 0) {
-    if (config.discountType === 'percent') {
-      discountPercent = Math.min(config.discountValue, 100);
-      discountAmount = (subtotal * discountPercent) / 100;
+  // 2. Discount -> Taxable Amount
+  const discountAmount = Math.min(config.discountValue || 0, subtotal);
+  const taxableAmount = subtotal - discountAmount;
+  const discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
+
+  // 3. Tax
+  let tax = 0;
+  if (config.taxEnabled && !config.tax_exempt) {
+    if (config.tax_type === 'INCLUSIVE') {
+      const rate = config.taxRate / 100;
+      tax = taxableAmount - (taxableAmount / (1 + rate));
     } else {
-      discountAmount = Math.min(config.discountValue, subtotal);
-      discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
+      tax = taxableAmount * (config.taxRate / 100);
     }
   }
-  discountAmount = Math.round(discountAmount * 100) / 100;
+  tax = Math.round(tax * 100) / 100;
 
-  const afterDiscount = subtotal - discountAmount;
-
-  // 3. Service Charge (applied to post-discount subtotal, only if enabled)
-  const serviceCharge = config.serviceChargeEnabled
-    ? Math.round(afterDiscount * (config.serviceChargeRate / 100) * 100) / 100
+  // 4. Service Charge (on taxable amount)
+  const serviceCharge = config.svcEnabled
+    ? Math.round(taxableAmount * (config.svcRate / 100) * 100) / 100
     : 0;
 
-  // 4. Tax
-  // Tax is calculated on: afterDiscount + serviceCharge (for items NOT tax-exempt)
-  // If Tax-Inclusive: We strip the tax from the total to find the base.
-  let taxExemptAmount = 0;
-  let taxableBase = 0;
-
-  if (config.taxEnabled) {
-    items.forEach(item => {
-      const lineTotal = Number(item.unit_price) * item.quantity;
-      const lineDiscount = subtotal > 0 ? (lineTotal / subtotal) * discountAmount : 0;
-      const lineAfterDiscount = lineTotal - lineDiscount;
-
-      if ((item as any).is_tax_exempt || (item as any).menu_item?.is_tax_exempt) {
-        taxExemptAmount += lineAfterDiscount;
-      } else {
-        taxableBase += lineAfterDiscount;
-      }
-    });
-
-    // Pro-rate service charge on taxable portion only
-    const taxableServiceCharge = taxableBase > 0 && serviceCharge > 0
-      ? serviceCharge * (taxableBase / afterDiscount)
-      : 0;
-    taxableBase += taxableServiceCharge;
-  }
-
-  let tax = 0;
-
-  if (config.taxEnabled && taxableBase > 0) {
-    if (config.taxInclusive) {
-      // Base = Total / (1 + Rate)
-      // Tax = Total - Base
-      const rate = config.taxRate / 100;
-      const baseWithTax = taxableBase;
-      const baseWithoutTax = baseWithTax / (1 + rate);
-      tax = baseWithTax - baseWithoutTax;
-    } else {
-      // Standard exclusive tax
-      tax = taxableBase * (config.taxRate / 100);
-    }
-    tax = Math.round(tax * 100) / 100;
-  }
-
   // 5. Delivery Fee
-  const deliveryFee = config.deliveryFeeEnabled ? config.deliveryFee : 0;
+  const deliveryFee = config.deliveryFee || 0;
 
-  // 6. Grand Total
-  // If inclusive: Tax is already part of subtotal/sc. 
-  // If exclusive: Tax is added.
-  const totalRaw = config.taxInclusive
-    ? (afterDiscount + serviceCharge + deliveryFee)
-    : (afterDiscount + serviceCharge + tax + deliveryFee);
+  // 6. Total
+  const totalRaw = config.tax_type === 'INCLUSIVE'
+    ? (taxableAmount + serviceCharge + deliveryFee)
+    : (taxableAmount + tax + serviceCharge + deliveryFee);
   
   const total = Math.round(totalRaw * 100) / 100;
 
@@ -234,8 +148,8 @@ export const calculateBill = (
     discountAmount,
     discountPercent,
     serviceCharge,
-    taxableSubtotal: taxableBase,
-    taxExemptAmount,
+    taxableSubtotal: taxableAmount,
+    taxExemptAmount: config.tax_exempt ? taxableAmount : 0,
     tax,
     deliveryFee,
     total,

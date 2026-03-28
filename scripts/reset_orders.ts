@@ -16,9 +16,18 @@ async function main() {
         await prisma.delivery_orders.deleteMany({});
         await prisma.reservation_orders.deleteMany({});
         await prisma.order_items.deleteMany({});
+        await prisma.parked_orders.deleteMany({});
 
-        console.log('   - Deleting transactions...');
+        console.log('   - Deleting finance & ledgers...');
+        await prisma.customer_ledgers.deleteMany({});
+        await prisma.supplier_ledgers.deleteMany({});
+        await prisma.expenses.deleteMany({});
+        await prisma.payouts.deleteMany({});
         await prisma.transactions.deleteMany({});
+
+        console.log('   - Deleting rider shifts & settlements...');
+        await prisma.rider_settlements.deleteMany({});
+        await prisma.rider_shifts.deleteMany({});
 
         console.log('   - Deleting journal entries & lines...');
         await prisma.journal_entry_lines.deleteMany({});
@@ -27,11 +36,12 @@ async function main() {
         console.log('   - Deleting core orders...');
         await prisma.orders.deleteMany({});
 
-        console.log('   - Resetting active orders on tables...');
+        console.log('   - Resetting tables...');
         await prisma.tables.updateMany({
             data: {
                 active_order_id: null,
-                status: 'AVAILABLE'
+                status: 'AVAILABLE',
+                merge_id: null
             }
         });
 

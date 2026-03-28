@@ -165,7 +165,7 @@ export const TrialBalanceModal: React.FC<TrialBalanceModalProps> = ({ isOpen, on
                                 ))}
 
                                 {/* Totals Row */}
-                                <tr className="bg-slate-900 border-t-2 border-slate-700">
+                                <tr key="totals-row" className="bg-slate-900 border-t-2 border-slate-700">
                                     <td colSpan={3} className="px-4 py-5 text-right font-black text-white uppercase tracking-widest text-[10px]">
                                         Grand Totals
                                     </td>

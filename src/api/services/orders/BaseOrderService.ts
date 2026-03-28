@@ -1,4 +1,4 @@
-import { orders, Prisma } from '@prisma/client';
+import { orders, Prisma, TaxType } from '@prisma/client';
 import { IOrderService, CreateOrderDTO, UpdateOrderDTO } from './IOrderService.js';
 import { prisma } from '../../../shared/lib/prisma';
 
@@ -93,7 +93,10 @@ export abstract class BaseOrderService implements IOrderService {
                 tax: breakdown.tax,
                 serviceCharge: breakdown.serviceCharge,
                 deliveryFee: breakdown.deliveryFee,
-                discount: breakdown.discount
+                discount: breakdown.discount,
+                tax_enabled: breakdown.tax_enabled,
+                service_charge_enabled: breakdown.service_charge_enabled,
+                delivery_fee_enabled: breakdown.delivery_fee_enabled
             } : undefined);
 
             // 5. Return full order with items for frontend sync
@@ -230,7 +233,10 @@ export abstract class BaseOrderService implements IOrderService {
                 tax: breakdown.tax,
                 serviceCharge: breakdown.serviceCharge,
                 deliveryFee: breakdown.deliveryFee,
-                discount: breakdown.discount
+                discount: breakdown.discount,
+                tax_enabled: breakdown.tax_enabled,
+                service_charge_enabled: breakdown.service_charge_enabled,
+                delivery_fee_enabled: breakdown.delivery_fee_enabled
             } : undefined);
 
             // 5. Return full order with items for frontend sync
@@ -298,82 +304,129 @@ export abstract class BaseOrderService implements IOrderService {
     protected async recalculateTotals(
         tx: Prisma.TransactionClient,
         orderId: string,
-        overrideBreakdown?: { tax?: number; serviceCharge?: number; deliveryFee?: number; discount?: number; total?: number }
+        overrideBreakdown?: { 
+          tax?: number; 
+          serviceCharge?: number; 
+          deliveryFee?: number; 
+          discount?: number; 
+          total?: number;
+          tax_enabled?: boolean;
+          service_charge_enabled?: boolean;
+          delivery_fee_enabled?: boolean;
+          tax_type?: TaxType;
+          tax_exempt?: boolean;
+        }
     ): Promise<void> {
-        // 1. Fetch Order with Items and Restaurant Config
+        // 1. Fetch Order and its Items
         const order = await tx.orders.findUnique({
             where: { id: orderId },
-            include: {
-                order_items: true,
-                restaurants: true
-            }
+            include: { restaurants: true }
         });
 
         if (!order || !order.restaurants) return;
 
-        const config = order.restaurants;
-        const subtotal = order.order_items.reduce((sum, item) => sum + Number(item.total_price), 0);
-        const discount = Number(order.discount || 0);
+        const orderItems = await tx.order_items.findMany({
+            where: { order_id: orderId }
+        });
 
-        let tax = 0;
-        let serviceCharge = 0;
-        let deliveryFee = 0;
+        // 2. Fetch order_type_defaults for fallback
+        const orderDefaults = await tx.order_type_defaults.findUnique({
+            where: {
+                restaurant_id_order_type: {
+                    restaurant_id: order.restaurant_id,
+                    order_type: order.type
+                }
+            }
+        });
 
-        if (overrideBreakdown) {
-            // Use POS-level values (respects user toggles for tax, SC, discount)
-            tax = overrideBreakdown.tax ?? 0;
-            serviceCharge = overrideBreakdown.serviceCharge ?? 0;
-            deliveryFee = overrideBreakdown.deliveryFee ?? 0;
+        // Step 1 - Subtotal from items
+        const subtotal = orderItems.reduce((sum, item) => sum + Number(item.total_price || 0), 0);
+        
+        // Step 2 - Apply discount → taxable_amount
+        const discountAmount = Number(overrideBreakdown?.discount ?? order.discount ?? 0);
+        const taxable_amount = Math.max(0, subtotal - discountAmount);
+
+        // Step 3 - Tax
+        // Override Priority: order.tax_exempt > override > defaults
+        const isTaxExempt = overrideBreakdown?.tax_exempt ?? order.tax_exempt ?? false;
+        const currentTaxType = overrideBreakdown?.tax_type ?? order.tax_type ?? orderDefaults?.tax_type ?? 'INCLUSIVE';
+        const taxRate = Number(orderDefaults?.tax_rate ?? order.restaurants.tax_rate ?? 16);
+        const taxEnabled = orderDefaults?.tax_enabled ?? order.restaurants.tax_enabled ?? true;
+
+        let tax_amount = 0;
+        if (isTaxExempt || !taxEnabled) {
+            tax_amount = 0;
         } else {
-            // Fallback: derive from restaurant_features config
-            // Then fall back to restaurants table config
-            const features = await tx.restaurant_features.findUnique({
-              where: { restaurant_id: order.restaurant_id }
-            });
-
-            const orderTypeCharges = (features?.features as any)
-              ?.order_type_charges?.[order.type] || {};
-
-            // Tax
-            const taxEnabled = orderTypeCharges.tax_enabled ?? config.tax_enabled;
-            if (taxEnabled) {
-              tax = (subtotal * Number(config.tax_rate)) / 100;
-            }
-
-            // Service Charge (DINE_IN only by default)
-            const scEnabled = orderTypeCharges.service_charge_enabled ?? 
-              (order.type === 'DINE_IN' && config.service_charge_enabled);
-            if (scEnabled) {
-              serviceCharge = (subtotal * Number(config.service_charge_rate)) / 100;
-            }
-
-            // Delivery Fee (DELIVERY only)
-            if (order.type === 'DELIVERY') {
-              const dfEnabled = orderTypeCharges.delivery_fee_enabled ?? true;
-              if (dfEnabled) {
-                deliveryFee = Number(orderTypeCharges.delivery_fee_amount || 0);
-              }
+            if (currentTaxType === 'INCLUSIVE') {
+                // taxAmount = taxableAmount × rate / (100 + rate)
+                tax_amount = (taxable_amount * taxRate) / (100 + taxRate);
+            } else {
+                // taxAmount = taxableAmount × rate / 100
+                tax_amount = (taxable_amount * taxRate) / 100;
             }
         }
 
-        const grandTotal = subtotal + tax + serviceCharge + deliveryFee - discount;
+        // Step 4 - SVC on taxable_amount (not on tax)
+        const svcEnabled = orderDefaults?.svc_enabled ?? order.restaurants.service_charge_enabled ?? (order.type === 'DINE_IN');
+        const svcRate = Number(orderDefaults?.svc_rate ?? order.restaurants.service_charge_rate ?? 6);
+        let svc_amount = 0;
+        if (svcEnabled) {
+            svc_amount = (taxable_amount * svcRate) / 100;
+        }
+
+        // Step 5 - Delivery fee added flat at end (not taxable)
+        let delivery_fee = 0;
+        if (order.type === 'DELIVERY') {
+            delivery_fee = Number(overrideBreakdown?.deliveryFee ?? orderDefaults?.delivery_fee ?? 0);
+        }
+
+        // Step 6 - Total
+        // If INCLUSIVE: taxable_amount already includes tax_amount.
+        // If EXCLUSIVE: taxable_amount needs tax_amount added.
+        let total = 0;
+        if (currentTaxType === 'INCLUSIVE') {
+            total = taxable_amount + svc_amount + delivery_fee;
+        } else {
+            total = taxable_amount + tax_amount + svc_amount + delivery_fee;
+        }
+
+        // Rounding
+        const rounded = {
+            subtotal: Math.round(subtotal * 100) / 100,
+            discount_amount: Math.round(discountAmount * 100) / 100,
+            taxable_amount: Math.round(taxable_amount * 100) / 100,
+            tax_amount: Math.round(tax_amount * 100) / 100,
+            svc_amount: Math.round(svc_amount * 100) / 100,
+            delivery_fee: Math.round(delivery_fee * 100) / 100,
+            total: Math.round(total * 100) / 100
+        };
+
+        const breakdown = {
+            subtotal: rounded.subtotal,
+            discount_amount: rounded.discount_amount,
+            taxable_amount: rounded.taxable_amount,
+            tax_rate: taxRate,
+            tax_type: currentTaxType,
+            tax_amount: rounded.tax_amount,
+            tax_exempt: isTaxExempt,
+            svc_rate: svcRate,
+            svc_amount: rounded.svc_amount,
+            delivery_fee: rounded.delivery_fee,
+            total: rounded.total
+        };
 
         // 3. Update Order Record
         await tx.orders.update({
             where: { id: orderId },
             data: {
-                tax: tax,
-                service_charge: serviceCharge,
-                delivery_fee: deliveryFee,
-                total: grandTotal,
-                breakdown: {
-                    subtotal,
-                    tax,
-                    serviceCharge,
-                    deliveryFee,
-                    discount,
-                    grandTotal
-                } as any
+                tax: rounded.tax_amount,
+                service_charge: rounded.svc_amount,
+                delivery_fee: rounded.delivery_fee,
+                discount: rounded.discount_amount,
+                total: rounded.total,
+                tax_type: currentTaxType,
+                tax_exempt: isTaxExempt,
+                breakdown: breakdown as any
             }
         });
     }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, CreditCard, Banknote, QrCode, Smartphone, ArrowRight, Loader2, CheckCircle2 } from 'lucide-react';
 import { Order, PaymentBreakdown } from '../../../shared/types';
 
@@ -7,27 +7,43 @@ interface SettlementModalProps {
     onClose: () => void;
     order: Order;
     breakdown: PaymentBreakdown;
-    onConfirm: (method: string, amount: number, reference?: string) => Promise<boolean>;
+    onConfirm: (payload: { method: string, amount: number, reference?: string, tax_exempt?: boolean, tax_type?: string }) => Promise<boolean>;
 }
 
+import { useAppContext } from '../../../client/contexts/AppContext';
+import { calculateBill, getDefaultBillConfig } from '../../../lib/billEngine';
+
 export const SettlementModal: React.FC<SettlementModalProps> = ({
-    isOpen, onClose, order, breakdown, onConfirm
+    isOpen, onClose, order, breakdown: initialBreakdown, onConfirm
 }) => {
+    const { currentUser, operationsConfig } = useAppContext();
+    const [tax_exempt, setTaxExempt] = useState(false);
     const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA'>('CASH');
-    const [tenderedAmount, setTenderedAmount] = useState<string>(Math.round(breakdown.total).toString());
+    const [tenderedAmount, setTenderedAmount] = useState<string>(Math.round(initialBreakdown.total).toString());
     const [reference, setReference] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
 
     useEffect(() => {
-        setTenderedAmount(Math.round(breakdown.total).toString());
-    }, [breakdown.total]);
+        setTenderedAmount(Math.round(initialBreakdown.total).toString());
+    }, [initialBreakdown.total]);
 
     if (!isOpen) return null;
 
-    const total = Math.round(breakdown.total);
+    const liveBreakdown = useMemo(() => {
+        if (!tax_exempt) return initialBreakdown;
+        const config = getDefaultBillConfig(order.type as any, operationsConfig);
+        return calculateBill(order.order_items as any || [], {
+            ...config,
+            tax_exempt: true
+        });
+    }, [tax_exempt, initialBreakdown, order.type, order.order_items, operationsConfig]);
+
+    const total = Math.round(liveBreakdown.total);
     const tendered = parseFloat(tenderedAmount) || 0;
     const change = Math.max(0, tendered - total);
+
+    const isManager = currentUser?.role === 'MANAGER' || currentUser?.role === 'ADMIN';
 
     const handleConfirm = async () => {
         if (tendered < total && paymentMethod === 'CASH') {
@@ -36,7 +52,13 @@ export const SettlementModal: React.FC<SettlementModalProps> = ({
         }
 
         setIsProcessing(true);
-        const success = await onConfirm(paymentMethod, total, reference);
+        const success = await onConfirm({
+            method: paymentMethod,
+            amount: total,
+            reference,
+            tax_exempt,
+            tax_type: (operationsConfig?.order_type_defaults?.[order.type]?.tax_type || 'INCLUSIVE')
+        });
         setIsProcessing(false);
 
         if (success) {
@@ -78,18 +100,30 @@ export const SettlementModal: React.FC<SettlementModalProps> = ({
                             <div className="space-y-3">
                                 <div className="flex justify-between text-xs text-slate-400 font-bold uppercase">
                                     <span>Subtotal</span>
-                                    <span>Rs. {breakdown.subtotal.toLocaleString()}</span>
+                                    <span>Rs. {liveBreakdown.subtotal.toLocaleString()}</span>
                                 </div>
-                                {breakdown.tax > 0 && (
+                                {liveBreakdown.tax > 0 && (
                                     <div className="flex justify-between text-xs text-slate-500 font-bold uppercase">
                                         <span>Tax</span>
-                                        <span>Rs. {Math.round(breakdown.tax).toLocaleString()}</span>
+                                        <span>Rs. {Math.round(liveBreakdown.tax).toLocaleString()}</span>
                                     </div>
                                 )}
-                                {breakdown.serviceCharge > 0 && (
+                                {liveBreakdown.serviceCharge > 0 && (
                                     <div className="flex justify-between text-xs text-slate-500 font-bold uppercase">
                                         <span>Service</span>
-                                        <span>Rs. {Math.round(breakdown.serviceCharge).toLocaleString()}</span>
+                                        <span>Rs. {Math.round(liveBreakdown.serviceCharge).toLocaleString()}</span>
+                                    </div>
+                                )}
+                                
+                                {isManager && (
+                                    <div className="flex justify-between items-center py-2 border-t border-white/5 mt-2">
+                                        <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Tax Exempt</span>
+                                        <button 
+                                            onClick={() => setTaxExempt(!tax_exempt)}
+                                            className={`w-8 h-4 rounded-full relative transition-all ${tax_exempt ? 'bg-amber-500' : 'bg-slate-800'}`}
+                                        >
+                                            <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${tax_exempt ? 'right-0.5' : 'left-0.5'}`} />
+                                        </button>
                                     </div>
                                 )}
                                 <div className="h-[1px] bg-slate-800 my-4" />
