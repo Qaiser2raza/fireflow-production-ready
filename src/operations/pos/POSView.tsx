@@ -156,7 +156,21 @@ export const POSView: React.FC = () => {
       setDeliveryAddress('');
       setCustomerId(null);
     }
-  }, [debouncedPhone, orderType]); // Removed customers/addNotification from deps to prevent re-runs resetting manual name input
+  }, [debouncedPhone, orderType]); 
+  
+  const matchedCustomers = useMemo(() => {
+    const cleanPhone = customerPhone.replace(/\D/g, '');
+    if (cleanPhone.length < 3) return [];
+    return (customers || []).filter(c => 
+      (c.phone || '').replace(/\D/g, '').includes(cleanPhone) ||
+      (c.name || '').toLowerCase().includes(customerPhone.toLowerCase())
+    ).map(c => ({
+      id: c.id,
+      name: c.name,
+      phone: c.phone,
+      address: c.address
+    }));
+  }, [customerPhone, customers]);
 
 
 
@@ -169,7 +183,6 @@ export const POSView: React.FC = () => {
 
     const defaultTax = typeDefaults ? Boolean(typeDefaults.tax_enabled) : Boolean(cfg.taxEnabled ?? cfg.tax_enabled ?? true);
     const defaultSrv = typeDefaults ? Boolean(typeDefaults.svc_enabled) : (baseType === 'DINE_IN');
-    const defaultDisc = Number(typeDefaults?.discount_max ?? 0);
     const defaultDiscType = 'percent'; // discount_max is always percent in settings
     const defaultDelivery = typeDefaults ? (Number(typeDefaults.delivery_fee) > 0) : (baseType === 'DELIVERY');
 
@@ -186,17 +199,22 @@ export const POSView: React.FC = () => {
       setServiceChargeEnabled(savedBreakdown.service_charge_enabled ?? (Number(orderToEdit.service_charge) > 0 ? true : defaultSrv));
       setDeliveryFeeEnabled(savedBreakdown.delivery_fee_enabled ?? (Number(orderToEdit.delivery_fee) > 0 ? true : (orderToEdit.type === 'DELIVERY')));
       
-      setDiscountValue(savedBreakdown.discount_value ?? (editOrder.discount_value || (Number(orderToEdit.discount || 0)) || defaultDisc));
+      setDiscountValue(savedBreakdown.discount_value ?? (editOrder.discount_value || (Number(orderToEdit.discount || 0)) || 0));
       setDiscountType(savedBreakdown.discount_type ?? (editOrder.discount_type || defaultDiscType));
       setDiscountReason(editOrder.discount_reason || editOrder.discountReason || '');
       
       setDeliveryFeeValue(Number(orderToEdit.delivery_fee || savedBreakdown.deliveryFee || typeDefaults?.delivery_fee || cfg.default_delivery_fee || 0));
     } else {
-      // New Order - strictly follow defaults ONLY ONCE per session
-      if (!defaultsAppliedRef.current) {
+      // New Order - strictly follow defaults
+      // Reset defaults when orderType changes even if defaultsAppliedRef is true,
+      // but only if it's truly a "new" session (no items or just started)
+      // or if the user explicitly switched types.
+      const shouldApply = !defaultsAppliedRef.current || (currentOrderItems.length === 0);
+      
+      if (shouldApply) {
         setTaxEnabled(defaultTax);
         setServiceChargeEnabled(defaultSrv);
-        setDiscountValue(defaultDisc);
+        setDiscountValue(0);
         setDiscountType(defaultDiscType);
         setDiscountReason('');
         setDeliveryFeeEnabled(defaultDelivery);
@@ -204,7 +222,7 @@ export const POSView: React.FC = () => {
         defaultsAppliedRef.current = true;
       }
     }
-  }, [orderToEdit, orderType, operationsConfig]);
+  }, [orderToEdit, orderType, operationsConfig, currentOrderItems.length === 0]);
 
   // Session Management
   useEffect(() => {
@@ -1035,6 +1053,7 @@ export const POSView: React.FC = () => {
                 changeGiven: (tendered || 0) > total ? (tendered || 0) - total : 0,
                 payments: payments || [{ method, amount: total }],
                 customer_id: finalCustomerId,
+                total: breakdown.total, // SYNC FIX: Explicitly pass grand total
                 tax: breakdown.tax,
                 service_charge: breakdown.serviceCharge,
                 discount: breakdown.discount,
@@ -1054,12 +1073,12 @@ export const POSView: React.FC = () => {
           }}
         />
       )}
-      {showReceiptPreview && activeOrderId && (
+      {showReceiptPreview && (currentOrderItems.length > 0) && (
         <ReceiptPreviewModal
           isOpen={showReceiptPreview}
           onClose={() => setShowReceiptPreview(false)}
           order={{
-            id: activeOrderId,
+            id: activeOrderId || 'PREVIEW',
             order_number: activeOrderData?.order_number || 'PREVIEW',
             status: activeOrderData?.status || 'DRAFT',
             type: orderType,
@@ -1116,6 +1135,7 @@ export const POSView: React.FC = () => {
           setGuestCount={setGuestCount}
           tables={tables}
           isCustomerLoading={isCustomerLoading}
+          matchedCustomers={matchedCustomers}
           setShowDetailsModal={setShowDetailsModal}
         />
       )}
@@ -1140,6 +1160,7 @@ interface DetailsModalProps {
   setGuestCount: (c: number) => void;
   tables: any[];
   isCustomerLoading: boolean;
+  matchedCustomers: any[];
   setShowDetailsModal: (s: boolean) => void;
 }
 
@@ -1147,7 +1168,7 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
   orderType, setOrderType, customerPhone, setCustomerPhone,
   customerName, setCustomerName, deliveryAddress, setDeliveryAddress,
   selectedTableId, setSelectedTableId, guestCount, setGuestCount,
-  tables, isCustomerLoading, setShowDetailsModal
+  tables, isCustomerLoading, matchedCustomers, setShowDetailsModal
 }) => {
   return (
     <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
@@ -1201,58 +1222,23 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Use CustomerQuickAdd for TAKEAWAY orders */}
-              {orderType === 'TAKEAWAY' && (
+              {/* Use CustomerQuickAdd for TAKEAWAY and DELIVERY orders */}
+              {(orderType === 'TAKEAWAY' || orderType === 'DELIVERY') && (
                 <CustomerQuickAdd
                   customerPhone={customerPhone}
                   customerName={customerName}
+                  customerAddress={deliveryAddress}
                   onPhoneChange={setCustomerPhone}
                   onNameChange={setCustomerName}
+                  onAddressChange={orderType === 'DELIVERY' ? setDeliveryAddress : undefined}
                   isLoading={isCustomerLoading}
-                  matchedCustomers={[]} // TODO: Implement customer matching
-                  onSelectCustomer={(customer: { phone: string; name?: string }) => {
+                  matchedCustomers={matchedCustomers}
+                  onSelectCustomer={(customer: { phone: string; name?: string; address?: string }) => {
                     setCustomerPhone(customer.phone);
                     setCustomerName(customer.name || '');
+                    if (customer.address) setDeliveryAddress(customer.address);
                   }}
                 />
-              )}
-
-              {/* Standard inputs for DELIVERY orders */}
-              {orderType === 'DELIVERY' && (
-                <>
-                  <div>
-                    <label className="text-[10px] text-slate-500 uppercase font-bold flex justify-between">
-                      Phone Number
-                      {isCustomerLoading && <Loader2 size={12} className="animate-spin text-gold-500" />}
-                    </label>
-                    <input
-                      autoFocus
-                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 font-mono tracking-widest focus:border-gold-500 outline-none"
-                      placeholder="03XXXXXXXXX"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      type="tel"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Name</label>
-                    <input
-                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 focus:border-gold-500 outline-none"
-                      placeholder="Guest Name"
-                      value={customerName}
-                      onChange={e => setCustomerName(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500 uppercase font-bold">Address</label>
-                    <textarea
-                      className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1 min-h-[80px] focus:border-gold-500 outline-none"
-                      placeholder="Full Delivery Address..."
-                      value={deliveryAddress}
-                      onChange={e => setDeliveryAddress(e.target.value)}
-                    />
-                  </div>
-                </>
               )}
             </div>
           )}

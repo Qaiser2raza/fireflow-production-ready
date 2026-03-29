@@ -2366,7 +2366,9 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                     discount: req.body.discount !== undefined ? Number(req.body.discount) : undefined,
                     delivery_fee: req.body.delivery_fee !== undefined ? Number(req.body.delivery_fee) : undefined,
                     tax_type: req.body.tax_type || undefined,
-                    total: totalReceived > 0 ? totalReceived : undefined,
+                    // FIXED: Sync grand total from POS or fallback to current order total. 
+                    // Do NOT use totalReceived as it might only be a partial payment.
+                    total: req.body.total !== undefined ? Number(req.body.total) : order.total,
                     breakdown: {
                         ...(order.breakdown as any || {}),
                         paymentBreakdown: paymentList,
