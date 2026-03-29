@@ -409,7 +409,18 @@ export abstract class BaseOrderService implements IOrderService {
             total: Math.round(total * 100) / 100
         };
 
+        // Fetch existing breakdown to preserve UI-only fields
+        const existingBreakdown = (order.breakdown as any) || {};
+
         const breakdown = {
+            // Preserve UI-only fields from previous save
+            discount_type: existingBreakdown.discount_type || 'flat',
+            discount_value: existingBreakdown.discount_value ?? rounded.discount_amount,
+            discountReason: existingBreakdown.discountReason || '',
+            tax_enabled: existingBreakdown.tax_enabled ?? true,
+            service_charge_enabled: existingBreakdown.service_charge_enabled ?? false,
+            delivery_fee_enabled: existingBreakdown.delivery_fee_enabled ?? false,
+            // Financial fields (always recalculated)
             subtotal: rounded.subtotal,
             discount_amount: rounded.discount_amount,
             taxable_amount: rounded.taxable_amount,
