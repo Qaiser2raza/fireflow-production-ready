@@ -112,7 +112,7 @@ export const calculateBill = (
 
   // 2. Discount -> Taxable Amount
   const discountAmount = Math.min(config.discountValue || 0, subtotal);
-  const taxableAmount = subtotal - discountAmount;
+  const taxableAmount = Math.max(0, subtotal - discountAmount);
   const discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
 
   // 3. Tax
@@ -140,7 +140,7 @@ export const calculateBill = (
     ? (taxableAmount + serviceCharge + deliveryFee)
     : (taxableAmount + tax + serviceCharge + deliveryFee);
   
-  const total = Math.round(totalRaw * 100) / 100;
+  const total = Math.max(0, Math.round(totalRaw * 100) / 100);
 
   return {
     subtotal,

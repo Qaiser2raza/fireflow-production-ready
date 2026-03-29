@@ -240,11 +240,32 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         {/* Numpad & Input Zone */}
                         <div className="flex-1 flex gap-6">
                                 <div className="flex-1 flex flex-col gap-2 min-h-0">
-                                    <div className="h-16 lg:h-20 shrink-0 bg-black/40 border-2 rounded-2xl px-6 flex justify-between items-center transition-all">
+                                    <div className={`h-16 lg:h-20 shrink-0 bg-black/40 border-2 rounded-2xl px-6 flex justify-between items-center transition-all ${
+                                        parsedTendered === 0 ? 'border-white/5' :
+                                        parsedTendered === remainingBalance ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]' :
+                                        parsedTendered > remainingBalance ? 'border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.1)]' :
+                                        'border-white/10'
+                                    }`}>
                                         <div className="flex flex-col">
                                             <span className="text-slate-600 font-black uppercase tracking-widest text-[8px]">{method} Input</span>
-                                            <span className={`text-[10px] font-bold ${remainingBalance === 0 ? 'text-green-500' : 'text-slate-500'}`}>
-                                                {remainingBalance === 0 ? 'PAID' : `Rs. ${remainingBalance.toLocaleString()} Left`}
+                                            <span className={`text-[10px] font-bold transition-colors ${
+                                                remainingBalance === 0 ? 'text-green-500' :
+                                                parsedTendered === 0 ? 'text-slate-500' :
+                                                parsedTendered === remainingBalance ? 'text-green-400' :
+                                                parsedTendered > remainingBalance ? 'text-indigo-400' :
+                                                'text-amber-400'
+                                            }`}>
+                                                {remainingBalance === 0 ? (
+                                                    'PAID IN FULL'
+                                                ) : parsedTendered === 0 ? (
+                                                    `Enter ${method} Amount`
+                                                ) : parsedTendered === remainingBalance ? (
+                                                    'Exact Amount - Ready to Settle'
+                                                ) : parsedTendered > remainingBalance ? (
+                                                    `Return Change: Rs. ${change.toLocaleString()}`
+                                                ) : (
+                                                    `Partial: Rs. ${(remainingBalance - parsedTendered).toLocaleString()} Left`
+                                                )}
                                             </span>
                                         </div>
                                         <input

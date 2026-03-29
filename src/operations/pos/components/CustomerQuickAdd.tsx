@@ -4,18 +4,22 @@ import { ChevronDown, ChevronUp, User, Phone } from 'lucide-react';
 interface CustomerQuickAddProps {
     customerPhone: string;
     customerName: string;
+    customerAddress?: string;
     onPhoneChange: (phone: string) => void;
     onNameChange: (name: string) => void;
+    onAddressChange?: (address: string) => void;
     isLoading?: boolean;
-    matchedCustomers?: Array<{ id: string; name?: string; phone: string }>;
-    onSelectCustomer?: (customer: { phone: string; name?: string }) => void;
+    matchedCustomers?: Array<{ id: string; name?: string; phone: string; address?: string }>;
+    onSelectCustomer?: (customer: { phone: string; name?: string; address?: string }) => void;
 }
 
 export const CustomerQuickAdd: React.FC<CustomerQuickAddProps> = ({
     customerPhone,
     customerName,
+    customerAddress,
     onPhoneChange,
     onNameChange,
+    onAddressChange,
     isLoading,
     matchedCustomers,
     onSelectCustomer
@@ -124,6 +128,21 @@ export const CustomerQuickAdd: React.FC<CustomerQuickAddProps> = ({
                             </input>
                         </div>
                     </div>
+
+                    {/* Address Input (Optional/For Delivery) */}
+                    {onAddressChange && (
+                        <div>
+                            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                                Delivery Address
+                            </label>
+                            <textarea
+                                placeholder="Enter delivery address..."
+                                value={customerAddress || ''}
+                                onChange={(e) => onAddressChange(e.target.value)}
+                                className="w-full min-h-[80px] bg-slate-950/50 border border-slate-800 rounded-xl p-4 text-slate-200 text-sm font-bold placeholder:text-slate-700 focus:outline-none focus:border-blue-500 transition-colors resize-none">
+                            </textarea>
+                        </div>
+                    )}
 
                     {/* Helper Text */}
                     <p className="text-[10px] text-slate-600 italic">
