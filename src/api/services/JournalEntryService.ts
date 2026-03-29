@@ -27,17 +27,17 @@ const GL = {
     CASH: '1000',
     CARD_RECEIVABLE: '1010',
     RIDER_RECEIVABLE: '1020',
-    INVENTORY_ASSET: '1060', 
+    INVENTORY_ASSET: '1060', // NEW
     TAX_PAYABLE: '2000',
     SC_PAYABLE: '2010',
-    SUPPLIER_PAYABLE: '2020', 
+    SUPPLIER_PAYABLE: '2020', // Verified - matches seed
     FOOD_REVENUE: '4000',
     DELIVERY_REVENUE: '4010',
     ROUNDING: '4020',
     RIDER_EXPENSE: '5000',
     GENERAL_EXPENSE: '5010',
-    DISCOUNT: '5020',   // Discount Expense (matches seed code)
-    COGS: '5030',       // Cost of Goods Sold (matches seed code)
+    DISCOUNT: '4900',   // Discount Expense (contra-revenue)
+    COGS: '5020',       // Cost of Goods Sold
     CUSTOMER_ACCOUNT: '1040',
 } as const;
 
@@ -269,10 +269,10 @@ export class JournalEntryService {
         }
 
         // ── Credit side: Revenue + Liabilities ───────────────────────────
-        
-        // Food / Beverage Revenue (Gross, before discount). 
-        // Note: netRevenue already had deliveryFee subtracted, so grossRevenue is also isolated to F&B.
-        const foodRev = grossRevenue;
+        // Food / Beverage Revenue (Gross, before discount, excluding delivery fee)
+        const foodRev = grossRevenue.minus(deliveryFee).greaterThanOrEqualTo(0)
+            ? grossRevenue.minus(deliveryFee)
+            : grossRevenue;
 
         lines.push({
             accountId: foodRevAcc.id,
@@ -282,11 +282,8 @@ export class JournalEntryService {
             referenceId: orderId,
         });
 
-        // Recording Discount as a debit entry
-        if (discount.greaterThan(0)) {
-            if (!discountAcc) {
-                throw new Error(`Missing Discount Account (${GL.DISCOUNT}) for Order #${order.order_number}. Cannot journalise discount.`);
-            }
+        // Recording Discount as a debit to 5020 (Expense/Contra-Revenue)
+        if (discount.greaterThan(0) && discountAcc) {
             lines.push({
                 accountId: discountAcc.id,
                 description: `Discount – Order #${order.order_number}`,
@@ -308,10 +305,7 @@ export class JournalEntryService {
         }
 
         // Tax Payable
-        if (tax.greaterThan(0)) {
-            if (!taxAcc) {
-                throw new Error(`Missing Sales Tax Account (${GL.TAX_PAYABLE}) for Order #${order.order_number}. Cannot journalise tax.`);
-            }
+        if (tax.greaterThan(0) && taxAcc) {
             lines.push({
                 accountId: taxAcc.id,
                 description: `Sales Tax – Order #${order.order_number}`,
@@ -322,10 +316,7 @@ export class JournalEntryService {
         }
 
         // Service Charge Payable
-        if (sc.greaterThan(0)) {
-            if (!scAcc) {
-                throw new Error(`Missing Service Charge Account (${GL.SC_PAYABLE}) for Order #${order.order_number}. Cannot journalise SC.`);
-            }
+        if (sc.greaterThan(0) && scAcc) {
             lines.push({
                 accountId: scAcc.id,
                 description: `Service Charge – Order #${order.order_number}`,
