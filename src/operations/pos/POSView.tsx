@@ -1064,9 +1064,8 @@ export const POSView: React.FC = () => {
                 tax_type: breakdown.tax_type
               } as any);
 
-              // After successful payment
-              resetPad();
-              setShowPaymentModal(false);
+              // Payment succeeded — let PaymentModal show its success screen.
+              // resetPad + modal close will happen via onPaymentCompleteClose.
             } catch (error) {
               console.error("Payment Error:", error);
             }
@@ -1195,33 +1194,49 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
           </div>
 
           {orderType === 'DINE_IN' ? (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-[10px] text-slate-500 uppercase font-bold">Table</label>
-                <select
-                  className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1"
-                  value={selectedTableId}
-                  onChange={e => setSelectedTableId(e.target.value)}
-                >
-                  <option value="">Select Table</option>
-                  {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] text-slate-500 uppercase font-bold">Guests</label>
-                <div className="flex items-center gap-2 mt-1">
-                  <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700"><Minus size={14} /></button>
-                  <input 
-                    type="number"
-                    value={guestCount === 0 ? '' : guestCount}
-                    onChange={(e) => setGuestCount(e.target.value === '' ? 0 : Number(e.target.value))}
-                    onFocus={(e) => e.target.select()}
-                    className="flex-1 bg-black border border-slate-700 rounded-lg p-2 text-center font-bold text-white text-lg focus:border-gold-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                    placeholder="0"
-                  />
-                  <button onClick={() => setGuestCount(guestCount + 1)} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700"><Plus size={14} /></button>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase font-bold">Table</label>
+                  <select
+                    className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1"
+                    value={selectedTableId}
+                    onChange={e => setSelectedTableId(e.target.value)}
+                  >
+                    <option value="">Select Table</option>
+                    {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase font-bold">Guests</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700 shrink-0"><Minus size={14} /></button>
+                    <input 
+                      type="number"
+                      value={guestCount === 0 ? '' : guestCount}
+                      onChange={(e) => setGuestCount(e.target.value === '' ? 0 : Number(e.target.value))}
+                      onFocus={(e) => e.target.select()}
+                      className="flex-1 min-w-0 bg-black border border-slate-700 rounded-lg p-2 text-center font-bold text-white text-lg focus:border-gold-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      placeholder="0"
+                    />
+                    <button onClick={() => setGuestCount(guestCount + 1)} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700 shrink-0"><Plus size={14} /></button>
+                  </div>
                 </div>
               </div>
+              {/* Optional customer for dine-in (for Khata/credit bills) */}
+              <CustomerQuickAdd
+                customerPhone={customerPhone}
+                customerName={customerName}
+                onPhoneChange={setCustomerPhone}
+                onNameChange={setCustomerName}
+                isLoading={isCustomerLoading}
+                matchedCustomers={matchedCustomers}
+                defaultExpanded={false}
+                onSelectCustomer={(customer: { phone: string; name?: string; address?: string }) => {
+                  setCustomerPhone(customer.phone);
+                  setCustomerName(customer.name || '');
+                }}
+              />
             </div>
           ) : (
             <div className="space-y-4">

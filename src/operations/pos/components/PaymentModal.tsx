@@ -60,6 +60,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     const canComplete = remainingBalance === 0 || 
         (method === 'CASH' && parsedTendered >= remainingBalance) || 
         (method === 'CREDIT' && !!selectedCustomer && remainingBalance > 0) ||
+        (method !== 'CASH' && method !== 'CREDIT' && parsedTendered === remainingBalance) || // CARD, RAAST, etc.
         (parsedTendered > 0 && !!selectedCustomer && (alreadyPaid + parsedTendered) < finalTotal);
 
     // Initialize tendered to exact amount when switching (if not cash)
@@ -136,6 +137,17 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         }
     };
 
+    // Auto-print receipt when payment completes
+    useEffect(() => {
+        if (completed && onPrintReceipt) {
+            // Small delay to let the success UI render before triggering print
+            const timer = setTimeout(() => {
+                onPrintReceipt().catch(err => console.error('[AutoPrint] Failed:', err));
+            }, 600);
+            return () => clearTimeout(timer);
+        }
+    }, [completed]); // intentionally exclude onPrintReceipt to avoid re-triggers
+
     if (completed) {
         return (
             <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
@@ -152,24 +164,25 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                             "Transaction completed successfully"
                         )}
                     </p>
+                    <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest mb-6 animate-pulse">
+                        🖨️ Receipt sent to printer...
+                    </p>
                     
                     <div className="flex gap-4 w-full">
                         <button
                             onClick={async () => {
                                 if (onPrintReceipt) await onPrintReceipt();
-                                if (onPaymentCompleteClose) onPaymentCompleteClose();
-                                else onClose();
                             }}
-                            className="flex-1 bg-white hover:bg-slate-200 text-black font-black py-5 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl"
+                            className="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-black py-5 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl border border-slate-800"
                         >
-                            Print Receipt
+                            Reprint
                         </button>
                         <button
                             onClick={() => {
                                 if (onPaymentCompleteClose) onPaymentCompleteClose();
                                 else onClose();
                             }}
-                            className="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-black py-5 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl border border-slate-800"
+                            className="flex-[2] bg-white hover:bg-slate-200 text-black font-black py-5 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl"
                         >
                             Done
                         </button>
@@ -206,9 +219,23 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                             </div>
                         </div>
                     </div>
-                    <button onClick={onClose} className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 text-slate-500 hover:text-white transition-all">
-                        <X size={20} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {/* Add/Change Customer — available for ALL payment methods */}
+                        <button 
+                            onClick={() => setShowCustomerLookup(true)} 
+                            className={`h-10 px-4 flex items-center gap-2 rounded-xl border text-xs font-black uppercase tracking-wider transition-all ${
+                                selectedCustomer 
+                                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' 
+                                    : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-white hover:border-slate-600'
+                            }`}
+                        >
+                            <User size={14} />
+                            {selectedCustomer ? selectedCustomer.name?.split(' ')[0] || 'Customer' : 'Add Customer'}
+                        </button>
+                        <button onClick={onClose} className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 text-slate-500 hover:text-white transition-all">
+                            <X size={20} />
+                        </button>
+                    </div>
                 </div>
 
                 <div className="flex-1 flex overflow-hidden">
@@ -311,7 +338,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         <button
                             onClick={handleSubmit}
                             disabled={isProcessing || !canComplete}
-                            className={`h-24 rounded-[2rem] text-xl font-black uppercase tracking-[0.2em] flex items-center justify-center gap-4 transition-all relative overflow-hidden group shrink-0 ${
+                            className={`h-24 rounded-[2rem] text-xl font-black uppercase tracking-[0.2em] flex flex-col items-center justify-center gap-1 transition-all relative overflow-hidden group shrink-0 ${
                                 isProcessing || !canComplete
                                 ? 'bg-slate-900 text-slate-700 border border-white/5'
                                 : 'bg-indigo-600 hover:bg-slate-100 hover:text-indigo-600 text-white shadow-2xl shadow-indigo-900/40 active:scale-95'
@@ -319,8 +346,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         >
                             {isProcessing ? <Loader2 className="animate-spin" /> : (
                                 <>
-                                    <span>{remainingBalance === 0 ? 'Complete Transaction' : 'Settle Amount'}</span>
-                                    <ChevronRight size={24} className="group-hover:translate-x-2 transition-transform" />
+                                    <div className="flex items-center gap-4">
+                                        <span>{remainingBalance === 0 ? 'Complete Transaction' : 'Settle Amount'}</span>
+                                        <ChevronRight size={24} className="group-hover:translate-x-2 transition-transform" />
+                                    </div>
+                                    {(method === 'CREDIT' && !selectedCustomer) && (
+                                        <span className="text-[10px] text-amber-500 font-bold tracking-widest normal-case animate-pulse">
+                                            ⚠️ Attach Patron account to settle Khata
+                                        </span>
+                                    )}
                                 </>
                             )}
                         </button>

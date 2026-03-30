@@ -11,6 +11,7 @@ interface CustomerQuickAddProps {
     isLoading?: boolean;
     matchedCustomers?: Array<{ id: string; name?: string; phone: string; address?: string }>;
     onSelectCustomer?: (customer: { phone: string; name?: string; address?: string }) => void;
+    defaultExpanded?: boolean;
 }
 
 export const CustomerQuickAdd: React.FC<CustomerQuickAddProps> = ({
@@ -22,9 +23,10 @@ export const CustomerQuickAdd: React.FC<CustomerQuickAddProps> = ({
     onAddressChange,
     isLoading,
     matchedCustomers,
-    onSelectCustomer
+    onSelectCustomer,
+    defaultExpanded = true
 }) => {
-    const [isExpanded, setIsExpanded] = useState(true); // Start expanded for better UX
+    const [isExpanded, setIsExpanded] = useState(defaultExpanded);
     const [showDropdown, setShowDropdown] = useState(false);
 
     const handlePhoneInput = (value: string) => {

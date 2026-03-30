@@ -23,21 +23,74 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
     if (!isOpen || !order) return null;
 
     const handlePrint = () => {
-        // In a real scenario with no printer, this might just open the browser print dialog
-        // where the user can 'Save as PDF'
         const content = receiptRef.current;
-        if (content) {
-            const printWindow = window.open('', '', 'height=600,width=400');
-            if (printWindow) {
-                printWindow.document.write('<html><head><title>Receipt</title>');
-                printWindow.document.write('</head><body >');
-                printWindow.document.write(content.innerHTML);
-                printWindow.document.write('</body></html>');
-                printWindow.document.close();
-                printWindow.focus();
-                printWindow.print();
+        if (!content) return;
+
+        const printWindow = window.open('', '', 'height=700,width=450');
+        if (!printWindow) return;
+
+        // Collect all stylesheets from the parent document
+        const stylesheets = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'));
+        let styleHTML = '';
+        stylesheets.forEach(el => {
+            styleHTML += el.outerHTML + '\n';
+        });
+
+        // Build a self-contained print document with all CSS
+        printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Receipt</title>
+    ${styleHTML}
+    <link href="https://fonts.googleapis.com/css2?family=Libre+Barcode+128&display=swap" rel="stylesheet">
+    <style>
+        @media print {
+            @page {
+                size: ${receiptWidth === '280px' ? '58mm' : '80mm'} auto;
+                margin: 2mm;
+            }
+            html, body {
+                width: ${receiptWidth === '280px' ? '58mm' : '80mm'};
+                margin: 0;
+                padding: 0;
+                background: #fff !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            * {
+                color: #000 !important;
+                background: transparent !important;
             }
         }
+        body {
+            margin: 0;
+            padding: 8px;
+            background: #fff;
+            display: flex;
+            justify-content: center;
+        }
+        .receipt-container {
+            width: ${receiptWidth};
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="receipt-container">
+        ${content.innerHTML}
+    </div>
+</body>
+</html>`);
+        printWindow.document.close();
+
+        // Wait for stylesheets and fonts to load before triggering print
+        printWindow.onload = () => {
+            setTimeout(() => {
+                printWindow.focus();
+                printWindow.print();
+            }, 400);
+        };
     };
 
     const handleDownloadImage = () => {

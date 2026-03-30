@@ -25,7 +25,7 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
     const [search, setSearch] = useState('');
     const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'READY' | 'CLOSED'>('ALL');
     const [localOrders, setLocalOrders] = useState<Order[]>(orders);
-    const [refreshing, setRefreshing] = useState(false);
+    const [, setRefreshing] = useState(false);
 
     const refreshOrders = async () => {
         setRefreshing(true);

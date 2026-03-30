@@ -273,10 +273,41 @@ export class JournalEntryService {
 
         // ── Credit side: Revenue + Liabilities ───────────────────────────
         // Food / Beverage Revenue (Gross, before discount, excluding delivery fee)
-        const foodRev = grossRevenue.minus(deliveryFee).greaterThanOrEqualTo(0)
-            ? grossRevenue.minus(deliveryFee)
-            : grossRevenue;
+        let foodRev = grossRevenue;
 
+        // Tax Payable
+        if (tax.greaterThan(0)) {
+            if (taxAcc) {
+                lines.push({
+                    accountId: taxAcc.id,
+                    description: `Sales Tax – Order #${order.order_number}`,
+                    credit: tax,
+                    referenceType: 'ORDER',
+                    referenceId: orderId,
+                });
+            } else {
+                console.warn(`[JE] WARNING: Tax account missing for Order #${order.order_number}. Tax amount ${tax} fallback to Food Revenue.`);
+                foodRev = foodRev.plus(tax);
+            }
+        }
+
+        // Service Charge Payable
+        if (sc.greaterThan(0)) {
+            if (scAcc) {
+                lines.push({
+                    accountId: scAcc.id,
+                    description: `Service Charge – Order #${order.order_number}`,
+                    credit: sc,
+                    referenceType: 'ORDER',
+                    referenceId: orderId,
+                });
+            } else {
+                console.warn(`[JE] WARNING: Service Charge account missing for Order #${order.order_number}. SC amount ${sc} fallback to Food Revenue.`);
+                foodRev = foodRev.plus(sc);
+            }
+        }
+
+        // Push finalized Food Revenue
         lines.push({
             accountId: foodRevAcc.id,
             description: `F&B Revenue (Gross) – Order #${order.order_number}`,
@@ -302,28 +333,6 @@ export class JournalEntryService {
                 accountId: delivRevAcc.id,
                 description: `Delivery Fee – Order #${order.order_number}`,
                 credit: deliveryFee,
-                referenceType: 'ORDER',
-                referenceId: orderId,
-            });
-        }
-
-        // Tax Payable
-        if (tax.greaterThan(0) && taxAcc) {
-            lines.push({
-                accountId: taxAcc.id,
-                description: `Sales Tax – Order #${order.order_number}`,
-                credit: tax,
-                referenceType: 'ORDER',
-                referenceId: orderId,
-            });
-        }
-
-        // Service Charge Payable
-        if (sc.greaterThan(0) && scAcc) {
-            lines.push({
-                accountId: scAcc.id,
-                description: `Service Charge – Order #${order.order_number}`,
-                credit: sc,
                 referenceType: 'ORDER',
                 referenceId: orderId,
             });

@@ -1,6 +1,7 @@
 import { Decimal } from '@prisma/client/runtime/library';
 import { journalEntryService } from './JournalEntryService';
 import { prisma } from '../../shared/lib/prisma';
+import { toUTCRange } from '../../shared/utils/dateUtils';
 
 export type TransactionType = 'DEBIT' | 'CREDIT';
 export type ReferenceType = 'ORDER' | 'SETTLEMENT' | 'PAYOUT' | 'STOCK_IN' | 'OPENING_BALANCE' | 'ADJUSTMENT' | 'RIDER_SHIFT' | 'VOID_ORDER';
@@ -599,42 +600,6 @@ export class AccountingService {
      * CASH SESSION (Z-REPORT) LOGIC
      */
 
-    /**
-     * Retrieves all cashier sessions for a specific business date, timezone-aware.
-     */
-    async getSessionsForDate(restaurantId: string, date: string) {
-        const restaurant = await prisma.restaurants.findUnique({
-            where: { id: restaurantId },
-            select: { timezone: true }
-        });
-        const tz = restaurant?.timezone || 'Asia/Karachi';
-
-        const toUTC = (localStr: string, timeZone: string, endOfDay = false) => {
-            const d = new Date(localStr + (endOfDay ? 'T23:59:59.999' : 'T00:00:00'));
-            const localeStr = d.toLocaleString('en-US', { timeZone });
-            const diff = d.getTime() - new Date(localeStr).getTime();
-            return new Date(d.getTime() + diff);
-        };
-
-        const startDate = toUTC(date, tz);
-        const endDate = toUTC(date, tz, true);
-
-        return await prisma.cashier_sessions.findMany({
-            where: {
-                restaurant_id: restaurantId,
-                opened_at: {
-                    gte: startDate,
-                    lte: endDate
-                }
-            },
-            include: {
-                staff_cashier_sessions_opened_byTostaff: { select: { name: true } },
-                staff_cashier_sessions_closed_byTostaff: { select: { name: true } }
-            },
-            orderBy: { opened_at: 'desc' }
-        });
-    }
-
     async openCashSession(data: {
         restaurantId: string;
         staffId: string;
@@ -770,13 +735,13 @@ export class AccountingService {
         let session;
         
         if (businessDate) {
-            const startOfDay = new Date(new Date(businessDate).setHours(0, 0, 0, 0));
-            const endOfDay = new Date(new Date(businessDate).setHours(23, 59, 59, 999));
-            
+            // Use restaurant timezone for correct day boundary calculation
+            const { start, end } = await toUTCRange(restaurantId, businessDate);
+
             session = await prisma.cashier_sessions.findFirst({
                 where: {
                     restaurant_id: restaurantId,
-                    opened_at: { gte: startOfDay, lte: endOfDay }
+                    opened_at: { gte: start, lte: end }
                 },
                 orderBy: { opened_at: 'desc' }
             });
@@ -897,13 +862,17 @@ export class AccountingService {
      * Retrieves an array of all sessions and their metrics for a given date.
      */
     async getSessionsForDate(restaurantId: string, businessDate: string) {
-        const startOfDay = new Date(new Date(businessDate).setHours(0, 0, 0, 0));
-        const endOfDay = new Date(new Date(businessDate).setHours(23, 59, 59, 999));
+        // Use restaurant timezone for correct day boundary calculation
+        const { start: startOfDay, end: endOfDay } = await toUTCRange(restaurantId, businessDate);
         
         const sessions = await prisma.cashier_sessions.findMany({
             where: {
                 restaurant_id: restaurantId,
                 opened_at: { gte: startOfDay, lte: endOfDay }
+            },
+            include: {
+                opened_by_staff: { select: { name: true } },
+                closed_by_staff: { select: { name: true } }
             },
             orderBy: { opened_at: 'asc' }
         });
@@ -1303,30 +1272,33 @@ export class AccountingService {
     }
 
     /**
-     * Exports the ledger to a CSV string, supporting date ranges.
+     * Export Ledger to CSV
+     * Accepts optional date filters: { date, startDate, endDate }
+     * Falls back to the most recent 1000 entries if no filter supplied.
      */
-    async exportLedgerToCSV(restaurantId: string, options?: { date?: string; startDate?: string; endDate?: string }) {
-        const { prisma } = await import('../../shared/lib/prisma');
+    async exportLedgerToCSV(restaurantId: string, filters: {
+        date?: string;
+        startDate?: string;
+        endDate?: string;
+        limit?: number;
+    } = {}) {
+        const { date, startDate, endDate, limit = 1000 } = filters;
+
+        // Fetch timezone for formatting
         const restaurant = await prisma.restaurants.findUnique({
             where: { id: restaurantId },
             select: { timezone: true }
         });
         const tz = restaurant?.timezone || 'Asia/Karachi';
 
-        const toUTC = (localStr: string, timeZone: string, endOfDay = false) => {
-            const d = new Date(localStr + (endOfDay ? 'T23:59:59.999' : 'T00:00:00'));
-            const localeStr = d.toLocaleString('en-US', { timeZone });
-            const diff = d.getTime() - new Date(localeStr).getTime();
-            return new Date(d.getTime() + diff);
-        };
-
-        const dateFilter: any = {};
-        if (options?.startDate && options?.endDate) {
-            dateFilter.gte = toUTC(options.startDate, tz);
-            dateFilter.lte = toUTC(options.endDate, tz, true);
-        } else if (options?.date) {
-            dateFilter.gte = toUTC(options.date, tz);
-            dateFilter.lte = toUTC(options.date, tz, true);
+        let dateFilter: any = {};
+        if (startDate && endDate) {
+            const { start } = await toUTCRange(restaurantId, startDate);
+            const { end }   = await toUTCRange(restaurantId, endDate);
+            dateFilter = { gte: start, lte: end };
+        } else if (date) {
+            const { start, end } = await toUTCRange(restaurantId, date);
+            dateFilter = { gte: start, lte: end };
         }
 
         const lines = await prisma.journal_entry_lines.findMany({
@@ -1340,13 +1312,14 @@ export class AccountingService {
                 },
                 chart_of_accounts: { select: { code: true, name: true } }
             },
-            orderBy: [{ journal_entries: { date: 'desc' } }, { id: 'asc' }]
+            orderBy: [{ journal_entries: { date: 'desc' } }, { id: 'asc' }],
+            take: limit
         });
 
         const headers = ['Date', 'Time', 'Account Code', 'Account Name', 'Description', 'Reference', 'Debit', 'Credit', 'Amount', 'Type'];
         const rows = lines.map(l => {
-            const date = (l.journal_entries as any)?.date || (l.journal_entries as any)?.created_at;
-            const localDate = new Date(date).toLocaleString('en-US', { timeZone: tz });
+            const entryDate = (l.journal_entries as any)?.date || (l.journal_entries as any)?.created_at;
+            const localDate = new Date(entryDate).toLocaleString('en-US', { timeZone: tz });
             const [d, t] = localDate.split(', ');
             
             return [

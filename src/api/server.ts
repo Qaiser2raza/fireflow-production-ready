@@ -9,7 +9,6 @@ import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { prisma } from '../shared/lib/prisma';
-import { Decimal } from '@prisma/client/runtime/library';
 import rateLimit from 'express-rate-limit';
 import { logger, LogLevel, requestLoggerMiddleware } from '../shared/lib/logger';
 import { config, isCloudEnabled } from '../config/env';
@@ -44,7 +43,7 @@ import { updateService } from './services/UpdateService';
 import { NetworkDiscoveryService } from './services/NetworkDiscoveryService';
 import financeRoutes from './routes/financeRoutes';
 import cashierRoutes from './routes/cashierRoutes.js';
-// Removed missing analyticsRoutes
+import analyticsRoutes from './routes/analyticsRoutes';
 
 // ==========================================
 // 📁 LOCAL FILE UPLOAD — Menu Item Images
@@ -2340,6 +2339,22 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
 
         const totalReceived = paymentList.reduce((sum, p) => sum + p.amount, 0);
 
+        // 1.5 Strict Validation: CREDIT (Khata) requires a customer
+        const hasKhata = paymentList.some(p => p.method === 'CREDIT');
+        if (hasKhata) {
+            // Check if customer_id is provided in the request or already exists on the order
+            const orderCheck = await prisma.orders.findFirst({
+                where: { id, restaurant_id: req.restaurantId },
+                select: { customer_id: true }
+            });
+            
+            if (!customer_id && !orderCheck?.customer_id) {
+                return res.status(400).json({ 
+                    error: 'Customer assignment required for Khata (Credit) payments. Please attach a customer to this order first.' 
+                });
+            }
+        }
+
         const result = await prisma.$transaction(async (tx) => {
             const order = await tx.orders.findFirst({
                 where: {
@@ -2882,67 +2897,8 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
     }
 });
 
-// Finance Analytics Summary (Today) - For Dashboard Cards
-app.get('/api/analytics/finance/summary', authMiddleware, async (req, res) => {
-    try {
-        const { restaurant_id } = req.query;
-        if (!restaurant_id) return res.status(400).json({ error: 'restaurant_id required' });
-
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
-        // 1. Total Inventory Purchases (Today)
-        const purchasesRaw = await prisma.purchase_orders.aggregate({
-            where: {
-                restaurant_id: String(restaurant_id),
-                status: { in: ['RECEIVED', 'COMPLETED'] }, // Broad statuses for received goods
-                received_date: { gte: todayStart }
-            },
-            _sum: { total_amount: true }
-        });
-
-        // 2. Total Expenses (Today)
-        const expensesRaw = await prisma.expenses.aggregate({
-            where: {
-                restaurant_id: String(restaurant_id),
-                created_at: { gte: todayStart }
-            },
-            _sum: { amount: true }
-        });
-
-        // 3. COGS (Today)
-        // Calculated based on unit_cost stored at time of order item creation
-        const orderItems = await prisma.order_items.findMany({
-            where: {
-                orders: {
-                    restaurant_id: String(restaurant_id),
-                    status: 'CLOSED',
-                    closed_at: { gte: todayStart }
-                },
-                unit_cost: { not: null }
-            },
-            select: {
-                unit_cost: true,
-                quantity: true
-            }
-        });
-
-        let totalCogs = new Decimal(0);
-        orderItems.forEach(item => {
-            const unitCost = item.unit_cost ? new Decimal(item.unit_cost.toString()) : new Decimal(0);
-            totalCogs = totalCogs.plus(unitCost.mul(item.quantity));
-        });
-
-        res.json({
-            totalInventoryPurchases: Number(purchasesRaw._sum.total_amount || 0),
-            totalExpenses: Number(expensesRaw._sum.amount || 0),
-            cogs: Number(totalCogs)
-        });
-    } catch (e: any) {
-        console.error("[FinanceAnalytics] Error:", e);
-        res.status(500).json({ error: e.message });
-    }
-});
+// Use robust analytics routes
+app.use('/api/analytics', analyticsRoutes);
 
 // ==========================================
 // 📜 4. MENU & CATEGORIES

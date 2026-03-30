@@ -199,33 +199,41 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
             <div className="mt-4 p-2 border border-black bg-slate-50 uppercase font-black text-[10px] tracking-widest leading-relaxed">
                 <p className="border-b border-black pb-1 mb-1 text-center italic">Settlement Details</p>
                 
-                {/* Regular Payments Ledger */}
-                {order.transactions?.filter(t => t.status === 'PAID').map((t, i) => (
-                    <div key={i} className="mb-1">
-                        <div className="flex justify-between px-2">
-                            <span>{t.payment_method === 'CREDIT' ? 'KHATA (A/C)' : t.payment_method}:</span>
-                            <span>{formatCurrency(Number(t.amount))}</span>
-                        </div>
-                        {/* Cash Details: Tendered and Change */}
-                        {t.payment_method === 'CASH' && (t.tenderedAmount || t.changeGiven) && (
-                            <div className="px-4 text-[9px] opacity-70 italic lowercase">
-                                <div className="flex justify-between">
-                                    <span>- received:</span>
-                                    <span>{formatCurrency(Number(t.tenderedAmount || t.amount))}</span>
-                                </div>
-                                {t.changeGiven > 0 && (
-                                    <div className="flex justify-between">
-                                        <span>- change:</span>
-                                        <span>{formatCurrency(Number(t.changeGiven))}</span>
-                                    </div>
-                                )}
+                {/* Regular Payments Ledger - from transactions */}
+                {order.transactions?.filter(t => t.status === 'PAID').length ? (
+                    order.transactions.filter(t => t.status === 'PAID').map((t, i) => (
+                        <div key={i} className="mb-1">
+                            <div className="flex justify-between px-2">
+                                <span>{t.payment_method === 'CREDIT' ? 'KHATA (A/C)' : t.payment_method}:</span>
+                                <span>{formatCurrency(Number(t.amount))}</span>
                             </div>
-                        )}
-                    </div>
-                ))}
-
-                {/* Legacy Fallback if no transactions recorded yet */}
-                {(!order.transactions?.some(t => t.status === 'PAID')) && (
+                            {/* Cash Details: Tendered and Change */}
+                            {t.payment_method === 'CASH' && (t.tenderedAmount || t.changeGiven) && (
+                                <div className="px-4 text-[9px] opacity-70 italic lowercase">
+                                    <div className="flex justify-between">
+                                        <span>- received:</span>
+                                        <span>{formatCurrency(Number(t.tenderedAmount || t.amount))}</span>
+                                    </div>
+                                    {(t.changeGiven || 0) > 0 && (
+                                        <div className="flex justify-between">
+                                            <span>- change:</span>
+                                            <span>{formatCurrency(Number(t.changeGiven))}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    ))
+                ) : (breakdown as any)?.paymentBreakdown?.length ? (
+                    /* Fallback: Read from breakdown.paymentBreakdown (set during settlement) */
+                    ((breakdown as any).paymentBreakdown as { method: string; amount: number }[]).map((p, i) => (
+                        <div key={i} className="flex justify-between px-2 mb-1">
+                            <span>{p.method === 'CREDIT' ? 'KHATA (A/C)' : p.method}:</span>
+                            <span>{formatCurrency(p.amount)}</span>
+                        </div>
+                    ))
+                ) : (
+                    /* Last resort: legacy single payment_method field */
                     <div className="flex justify-between px-2">
                         <span>{order.payment_method === 'CREDIT' ? 'KHATA (A/C)' : (order.payment_method || 'CASH')}:</span>
                         <span>{formatCurrency(total)}</span>
