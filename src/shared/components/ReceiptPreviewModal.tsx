@@ -17,6 +17,7 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
     order,
     title = "Digital Receipt Preview"
 }) => {
+    const [receiptWidth, setReceiptWidth] = React.useState('380px');
     const receiptRef = useRef<HTMLDivElement>(null);
 
     if (!isOpen || !order) return null;
@@ -62,7 +63,21 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
                 </div>
 
                 {/* Toolbar */}
-                <div className="bg-slate-800/50 p-2 border-b border-slate-700 flex gap-2 justify-center">
+                <div className="bg-slate-800/50 p-2 border-b border-slate-700 flex gap-2 justify-center items-center">
+                    <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-700 mr-2">
+                        <button
+                            onClick={() => setReceiptWidth('280px')}
+                            className={`px-3 py-1.5 rounded-md text-[9px] font-black uppercase tracking-wider transition-all ${receiptWidth === '280px' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
+                        >
+                            58mm
+                        </button>
+                        <button
+                            onClick={() => setReceiptWidth('380px')}
+                            className={`px-3 py-1.5 rounded-md text-[9px] font-black uppercase tracking-wider transition-all ${receiptWidth === '380px' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
+                        >
+                            80mm
+                        </button>
+                    </div>
                     <button
                         onClick={handlePrint}
                         className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
@@ -81,7 +96,7 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
                 <div className="flex-1 overflow-y-auto p-6 bg-slate-950 flex justify-center custom-scrollbar">
                     <div ref={receiptRef} className="origin-top transform transition-transform duration-300">
                         {/* We wrap ThermalReceipt in a container to capture it */}
-                        <ThermalReceipt order={order} />
+                        <ThermalReceipt order={order} width={receiptWidth} />
                     </div>
                 </div>
 

@@ -163,23 +163,52 @@ export abstract class BaseOrderService implements IOrderService {
                 }
             }
 
+            // Handle Table Status when switching TO DINE_IN
+            if (data.type === 'DINE_IN' && data.table_id) {
+                await tx.tables.update({
+                    where: { id: data.table_id },
+                    data: {
+                        status: 'OCCUPIED',
+                        active_order_id: id
+                    }
+                });
+                
+                // Ensure dine_in_orders record exists
+                const existingDineIn = await tx.dine_in_orders.findUnique({ where: { order_id: id } });
+                if (!existingDineIn) {
+                    await tx.dine_in_orders.create({
+                        data: {
+                            order_id: id,
+                            table_id: data.table_id,
+                            guest_count: data.guest_count || 1
+                        }
+                    });
+                }
+            }
+
             const customerId = await this.resolveCustomerId(tx, currentOrder?.restaurant_id || data.restaurant_id || '', data.customer_phone, data.customer_name, data.customer_id);
+            
             await tx.orders.update({
                 where: { id },
                 data: {
-                    type: data.type, // Explicitly update type
+                    type: data.type,
                     status: this.mapStatusToPrisma(data.status),
                     total: data.total,
-                    table_id: data.table_id || undefined,
                     guest_count: data.guest_count,
                     customer_name: data.customer_name,
                     customer_phone: data.customer_phone,
-                    customers: customerId
-                        ? { connect: { id: customerId } }
-                        : undefined,
                     delivery_address: data.delivery_address,
-                    assigned_waiter_id: data.waiter_id || data.assigned_waiter_id || undefined,
-                    updated_at: new Date()
+                    updated_at: new Date(),
+                    
+                    // Relation Updates (Prisma requirement)
+                    tables: data.table_id ? { connect: { id: data.table_id } } : { disconnect: true },
+                    customers: customerId ? { connect: { id: customerId } } : { disconnect: true },
+                    staff_orders_assigned_waiter_idTostaff: (data.waiter_id || data.assigned_waiter_id) 
+                        ? { connect: { id: data.waiter_id || data.assigned_waiter_id } } 
+                        : { disconnect: true },
+                    staff_orders_assigned_driver_idTostaff: (data.driver_id || data.assigned_driver_id)
+                        ? { connect: { id: data.driver_id || data.assigned_driver_id } }
+                        : { disconnect: true }
                 } as any
             });
 

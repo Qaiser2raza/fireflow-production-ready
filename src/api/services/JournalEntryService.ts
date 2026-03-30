@@ -202,6 +202,9 @@ export class JournalEntryService {
         const sc = new Decimal(order.service_charge || 0);
         const deliveryFee = new Decimal(order.delivery_fee || 0);
         const discount = new Decimal(order.discount || 0);
+        const taxType = order.tax_type || 'INCLUSIVE';
+
+        console.log(`[JournalTrace] Order #${order.order_number || order.id} | Total: ${total}, Tax: ${tax} (${taxType}), SC: ${sc}, Disc: ${discount}, Deliv: ${deliveryFee}`);
 
         // FORMULA AUDIT:
         // Net Revenue must always exclude Tax and Service Charge.
@@ -333,7 +336,7 @@ export class JournalEntryService {
 
         console.log(`[ROUNDING_DEBUG] Order: ${order.order_number}, DR: ${totalDebit}, CR: ${totalCredit}, Diff: ${diff}, RoundAcc_Found: ${!!roundingAcc}`);
 
-        const ROUNDING_TOLERANCE = new Decimal(2);
+        const ROUNDING_TOLERANCE = new Decimal(10);
         if (!diff.isZero()) {
             if (diff.abs().lte(ROUNDING_TOLERANCE)) {
                 if (roundingAcc) {

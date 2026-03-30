@@ -1053,7 +1053,7 @@ export const POSView: React.FC = () => {
                 changeGiven: (tendered || 0) > total ? (tendered || 0) - total : 0,
                 payments: payments || [{ method, amount: total }],
                 customer_id: finalCustomerId,
-                total: breakdown.total, // SYNC FIX: Explicitly pass grand total
+                total: total, // SYNC FIX: Use the actual payment total (rounded) from modal
                 tax: breakdown.tax,
                 service_charge: breakdown.serviceCharge,
                 discount: breakdown.discount,
@@ -1094,6 +1094,9 @@ export const POSView: React.FC = () => {
             service_charge: breakdown.serviceCharge,
             delivery_fee: breakdown.deliveryFee,
             discount: breakdown.discount,
+            tax_type: breakdown.tax_type, // SYNC: Pass tax type for inclusive/exclusive logic
+            transactions: activeOrderData?.transactions || [], // SYNC: Pass transactions for payment breakdown
+            breakdown: breakdown, // Pass the full breakdown object
             restaurant_id: currentUser?.restaurant_id || ''
           } as any}
         />

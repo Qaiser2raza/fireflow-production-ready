@@ -201,9 +201,26 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                 
                 {/* Regular Payments Ledger */}
                 {order.transactions?.filter(t => t.status === 'PAID').map((t, i) => (
-                    <div key={i} className="flex justify-between px-2">
-                        <span>{t.payment_method === 'CREDIT' ? 'KHATA (A/C)' : t.payment_method}:</span>
-                        <span>{formatCurrency(Number(t.amount))}</span>
+                    <div key={i} className="mb-1">
+                        <div className="flex justify-between px-2">
+                            <span>{t.payment_method === 'CREDIT' ? 'KHATA (A/C)' : t.payment_method}:</span>
+                            <span>{formatCurrency(Number(t.amount))}</span>
+                        </div>
+                        {/* Cash Details: Tendered and Change */}
+                        {t.payment_method === 'CASH' && (t.tenderedAmount || t.changeGiven) && (
+                            <div className="px-4 text-[9px] opacity-70 italic lowercase">
+                                <div className="flex justify-between">
+                                    <span>- received:</span>
+                                    <span>{formatCurrency(Number(t.tenderedAmount || t.amount))}</span>
+                                </div>
+                                {t.changeGiven > 0 && (
+                                    <div className="flex justify-between">
+                                        <span>- change:</span>
+                                        <span>{formatCurrency(Number(t.changeGiven))}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 ))}
 

@@ -115,21 +115,25 @@ export const calculateBill = (
   const taxableAmount = Math.max(0, subtotal - discountAmount);
   const discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
 
-  // 3. Tax
+  // 3. Tax & Net Price Calculation
   let tax = 0;
+  let netPrice = taxableAmount; // Default to subtotal (discounted)
+  
   if (config.taxEnabled && !config.tax_exempt) {
+    const rate = config.taxRate / 100;
     if (config.tax_type === 'INCLUSIVE') {
-      const rate = config.taxRate / 100;
       tax = taxableAmount - (taxableAmount / (1 + rate));
+      netPrice = taxableAmount - tax; // Extract net price for SC calculation
     } else {
-      tax = taxableAmount * (config.taxRate / 100);
+      tax = taxableAmount * rate;
+      netPrice = taxableAmount; // Taxable amount is already net in exclusive
     }
   }
   tax = Math.round(tax * 100) / 100;
 
-  // 4. Service Charge (on taxable amount)
+  // 4. Service Charge (ALWAYS on net price before tax)
   const serviceCharge = config.svcEnabled
-    ? Math.round(taxableAmount * (config.svcRate / 100) * 100) / 100
+    ? Math.round(netPrice * (config.svcRate / 100) * 100) / 100
     : 0;
 
   // 5. Delivery Fee

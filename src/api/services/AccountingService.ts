@@ -599,6 +599,42 @@ export class AccountingService {
      * CASH SESSION (Z-REPORT) LOGIC
      */
 
+    /**
+     * Retrieves all cashier sessions for a specific business date, timezone-aware.
+     */
+    async getSessionsForDate(restaurantId: string, date: string) {
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id: restaurantId },
+            select: { timezone: true }
+        });
+        const tz = restaurant?.timezone || 'Asia/Karachi';
+
+        const toUTC = (localStr: string, timeZone: string, endOfDay = false) => {
+            const d = new Date(localStr + (endOfDay ? 'T23:59:59.999' : 'T00:00:00'));
+            const localeStr = d.toLocaleString('en-US', { timeZone });
+            const diff = d.getTime() - new Date(localeStr).getTime();
+            return new Date(d.getTime() + diff);
+        };
+
+        const startDate = toUTC(date, tz);
+        const endDate = toUTC(date, tz, true);
+
+        return await prisma.cashier_sessions.findMany({
+            where: {
+                restaurant_id: restaurantId,
+                opened_at: {
+                    gte: startDate,
+                    lte: endDate
+                }
+            },
+            include: {
+                staff_cashier_sessions_opened_byTostaff: { select: { name: true } },
+                staff_cashier_sessions_closed_byTostaff: { select: { name: true } }
+            },
+            orderBy: { opened_at: 'desc' }
+        });
+    }
+
     async openCashSession(data: {
         restaurantId: string;
         staffId: string;
@@ -927,26 +963,6 @@ export class AccountingService {
         }
 
         return results;
-    }
-
-    /**
-     * Export Ledger to CSV
-     */
-    async exportLedgerToCSV(restaurantId: string, limit: number = 1000) {
-        const entries = await this.getRecentLedger(restaurantId, limit);
-        
-        const header = "Date,Description,Type,Amount,Reference,Processed By\n";
-        const rows = entries.map(e => {
-            const date = new Date(e.created_at).toLocaleString();
-            const desc = `"${(e.description || '').replace(/"/g, '""')}"`;
-            const type = e.transaction_type;
-            const amount = e.amount;
-            const ref = `${e.reference_type} [${e.reference_id?.slice(-6).toUpperCase() || ''}]`;
-            const by = e.processed_by || '';
-            return `${date},${desc},${type},${amount},${ref},${by}`;
-        }).join("\n");
-
-        return header + rows;
     }
 
     /**
@@ -1284,6 +1300,70 @@ export class AccountingService {
         } catch (jeErr) {
             console.error('[JE] recordSupplierBillJournal failed:', jeErr);
         }
+    }
+
+    /**
+     * Exports the ledger to a CSV string, supporting date ranges.
+     */
+    async exportLedgerToCSV(restaurantId: string, options?: { date?: string; startDate?: string; endDate?: string }) {
+        const { prisma } = await import('../../shared/lib/prisma');
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id: restaurantId },
+            select: { timezone: true }
+        });
+        const tz = restaurant?.timezone || 'Asia/Karachi';
+
+        const toUTC = (localStr: string, timeZone: string, endOfDay = false) => {
+            const d = new Date(localStr + (endOfDay ? 'T23:59:59.999' : 'T00:00:00'));
+            const localeStr = d.toLocaleString('en-US', { timeZone });
+            const diff = d.getTime() - new Date(localeStr).getTime();
+            return new Date(d.getTime() + diff);
+        };
+
+        const dateFilter: any = {};
+        if (options?.startDate && options?.endDate) {
+            dateFilter.gte = toUTC(options.startDate, tz);
+            dateFilter.lte = toUTC(options.endDate, tz, true);
+        } else if (options?.date) {
+            dateFilter.gte = toUTC(options.date, tz);
+            dateFilter.lte = toUTC(options.date, tz, true);
+        }
+
+        const lines = await prisma.journal_entry_lines.findMany({
+            where: {
+                chart_of_accounts: { restaurant_id: restaurantId },
+                ...(Object.keys(dateFilter).length > 0 ? { journal_entries: { date: dateFilter } } : {})
+            },
+            include: {
+                journal_entries: {
+                    select: { reference_type: true, description: true, date: true, created_at: true }
+                },
+                chart_of_accounts: { select: { code: true, name: true } }
+            },
+            orderBy: [{ journal_entries: { date: 'desc' } }, { id: 'asc' }]
+        });
+
+        const headers = ['Date', 'Time', 'Account Code', 'Account Name', 'Description', 'Reference', 'Debit', 'Credit', 'Amount', 'Type'];
+        const rows = lines.map(l => {
+            const date = (l.journal_entries as any)?.date || (l.journal_entries as any)?.created_at;
+            const localDate = new Date(date).toLocaleString('en-US', { timeZone: tz });
+            const [d, t] = localDate.split(', ');
+            
+            return [
+                d?.replace(/,/g, ''),
+                t?.replace(/,/g, ''),
+                (l.chart_of_accounts as any)?.code,
+                `"${(l.chart_of_accounts as any)?.name?.replace(/"/g, '""')}"`,
+                `"${(l.description || (l.journal_entries as any)?.description || '').replace(/"/g, '""')}"`,
+                (l.journal_entries as any)?.reference_type,
+                l.debit,
+                l.credit,
+                Math.abs(Number(l.debit) - Number(l.credit)),
+                Number(l.debit) > 0 ? 'DEBIT' : 'CREDIT'
+            ].join(',');
+        });
+
+        return [headers.join(','), ...rows].join('\n');
     }
 }
 

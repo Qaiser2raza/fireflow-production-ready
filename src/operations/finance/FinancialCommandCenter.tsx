@@ -31,9 +31,24 @@ import { ManualJournalEntryModal } from './components/ManualJournalEntryModal';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const FinancialCommandCenter: React.FC = () => {
-    const { currentUser, activeSession, setActiveSession, drivers, suppliers } = useApp();
+    const { currentUser, currentRestaurant, activeSession, setActiveSession, drivers, suppliers } = useApp();
     const restaurantId = currentUser?.restaurant_id;
     const staffId = currentUser?.id;
+    const timezone = currentRestaurant?.timezone || 'Asia/Karachi';
+
+    const formatTime = (date: string | Date) => {
+        try {
+            return new Intl.DateTimeFormat('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true,
+                timeZone: timezone
+            }).format(new Date(date));
+        } catch (e) {
+            return new Date(date).toLocaleTimeString();
+        }
+    };
 
     const [stats, setStats] = useState({
         expectedCash: 0,
@@ -43,11 +58,18 @@ const FinancialCommandCenter: React.FC = () => {
     const [glBalance, setGlBalance] = useState(0);
     const [glRevenue, setGlRevenue] = useState(0);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+    const [useRange, setUseRange] = useState(false);
+    
     const [ledger, setLedger] = useState<any[]>([]);
     const [metrics, setMetrics] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [coaAccounts, setCoaAccounts] = useState<any[]>([]);
     const [ledgerAccountFilter, setLedgerAccountFilter] = useState<string>('');
+    const [ledgerTypeFilter, setLedgerTypeFilter] = useState<string>('');
+    const [ledgerRefFilter, setLedgerRefFilter] = useState<string>('');
+    const [ledgerSearch, setLedgerSearch] = useState<string>('');
     const [showPayoutModal, setShowPayoutModal] = useState(false);
     const [showOpenModal, setShowOpenModal] = useState(false);
     const [showCloseModal, setShowCloseModal] = useState(false);
@@ -123,7 +145,19 @@ const FinancialCommandCenter: React.FC = () => {
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
             const acctParam = accountId || ledgerAccountFilter;
-            const url = `${apiBase}/accounting/ledger?limit=100&date=${selectedDate}${acctParam ? `&accountId=${acctParam}` : ''}`;
+            
+            let url = `${apiBase}/accounting/ledger?limit=250`;
+            if (useRange) {
+                url += `&startDate=${startDate}&endDate=${endDate}`;
+            } else {
+                url += `&date=${selectedDate}`;
+            }
+            
+            if (acctParam) url += `&accountId=${acctParam}`;
+            if (ledgerTypeFilter) url += `&type=${ledgerTypeFilter}`;
+            if (ledgerRefFilter) url += `&refType=${ledgerRefFilter}`;
+            if (ledgerSearch) url += `&searchQuery=${encodeURIComponent(ledgerSearch)}`;
+
             const res = await fetchWithAuth(url);
             const data = await res.json();
             if (data.success) {
@@ -148,9 +182,15 @@ const FinancialCommandCenter: React.FC = () => {
     const fetchIntelligence = async () => {
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
+            const start = useRange ? startDate : selectedDate;
+            const end = useRange ? endDate : selectedDate;
+            
+            const startStr = new Date(start).toISOString();
+            const endStr = new Date(new Date(end).setHours(23, 59, 59, 999)).toISOString();
+
             const [velocityRes, productRes] = await Promise.all([
-                fetchWithAuth(`${apiBase}/reports/velocity?start=${new Date(selectedDate).toISOString()}&end=${new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString()}&format=json`),
-                fetchWithAuth(`${apiBase}/reports/product-mix?start=${new Date(selectedDate).toISOString()}&end=${new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString()}&format=json`)
+                fetchWithAuth(`${apiBase}/reports/velocity?start=${startStr}&end=${endStr}&format=json`),
+                fetchWithAuth(`${apiBase}/reports/product-mix?start=${startStr}&end=${endStr}&format=json`)
             ]);
             
             const velocityData = await velocityRes.json();
@@ -166,9 +206,11 @@ const FinancialCommandCenter: React.FC = () => {
     const fetchGLStats = async () => {
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
+            const query = useRange ? `startDate=${startDate}&endDate=${endDate}` : `date=${selectedDate}`;
+            
             const [balanceRes, revenueRes] = await Promise.all([
-                fetchWithAuth(`${apiBase}/accounting/gl-balance?date=${selectedDate}`),
-                fetchWithAuth(`${apiBase}/accounting/gl-revenue?date=${selectedDate}`)
+                fetchWithAuth(`${apiBase}/accounting/gl-balance?${query}`),
+                fetchWithAuth(`${apiBase}/accounting/gl-revenue?${query}`)
             ]);
             
             const balanceData = await balanceRes.json();
@@ -185,8 +227,11 @@ const FinancialCommandCenter: React.FC = () => {
         setReportLoading(true);
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3001';
-            const endStr = new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString();
-            const startStr = new Date(selectedDate).toISOString();
+            const start = useRange ? startDate : selectedDate;
+            const end = useRange ? endDate : selectedDate;
+
+            const startStr = new Date(start).toISOString();
+            const endStr = new Date(new Date(end).setHours(23, 59, 59, 999)).toISOString();
             
             const riderParam = riderIdOverride || selectedRiderId;
             const res = await fetchWithAuth(`${apiBase}${endpoint}?start=${startStr}&end=${endStr}&format=json${riderParam ? `&riderId=${riderParam}` : ''}`);
@@ -210,12 +255,12 @@ const FinancialCommandCenter: React.FC = () => {
         setLoading(true);
         Promise.all([fetchSession(), fetchLedger(), fetchIntelligence(), fetchCOA(), fetchGLStats()])
             .finally(() => setLoading(false));
-    }, [selectedDate, restaurantId]);
+    }, [selectedDate, startDate, endDate, useRange, restaurantId]);
 
-    // Re-fetch ledger whenever account filter changes
+    // Re-fetch ledger whenever filters changes
     useEffect(() => {
-        fetchLedger(ledgerAccountFilter);
-    }, [ledgerAccountFilter]);
+        fetchLedger();
+    }, [ledgerAccountFilter, ledgerTypeFilter, ledgerRefFilter, ledgerSearch]);
 
 
     const handleOpenSession = async () => {
@@ -326,10 +371,10 @@ const FinancialCommandCenter: React.FC = () => {
     };
 
     const handlePrintLedger = () => {
-        const dateLabel = selectedDate || new Date().toLocaleDateString();
+        const dateLabel = useRange ? `${startDate} to ${endDate}` : (selectedDate || new Date().toLocaleDateString());
         const rows = ledger.map((e: any) => `
             <tr>
-                <td>${e.created_at ? new Date(e.created_at).toLocaleTimeString() : '—'}</td>
+                <td>${e.created_at ? formatTime(e.created_at) : '—'}</td>
                 <td>${e.reference_type || ''}</td>
                 <td>${(e.description || e.account_name || 'Cash Drawer').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
                 <td style="color:${e.transaction_type==='DEBIT'?'#166534':'#991b1b'}">${e.transaction_type}</td>
@@ -368,28 +413,76 @@ const FinancialCommandCenter: React.FC = () => {
                     <p className="text-slate-500 font-mono text-xs uppercase tracking-[0.2em]">Real-time GL & Performance Intelligence</p>
                 </div>
                 <div className="flex gap-4 items-center">
-                    <div className="flex flex-col items-end mr-4">
-                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Business Date</span>
-                        <input
-                            type="date"
-                            value={selectedDate}
-                            onChange={(e) => setSelectedDate(e.target.value)}
-                            className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-white text-xs font-black uppercase outline-none focus:border-emerald-500 transition-all"
-                        />
+                    <div className="flex bg-slate-900 p-1 rounded-2xl border border-slate-800">
+                        <button
+                            onClick={() => setUseRange(false)}
+                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${!useRange ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            Single Day
+                        </button>
+                        <button
+                            onClick={() => setUseRange(true)}
+                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${useRange ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            Date Range
+                        </button>
                     </div>
-                    <div className="h-10 w-px bg-slate-800 mx-2" />
-                    <button
-                        onClick={() => setShowOpenModal(true)}
-                        className="px-8 py-3.5 bg-white text-slate-950 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-500/10"
-                    >
-                        Open Day
-                    </button>
-                    <button
-                        onClick={() => setShowCloseModal(true)}
-                        className="px-8 py-3.5 bg-slate-800 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-red-600 transition-all"
-                    >
-                        Close Day
-                    </button>
+
+                    {!useRange ? (
+                        <div className="flex flex-col items-end mr-2">
+                            <input
+                                type="date"
+                                value={selectedDate}
+                                onChange={(e) => setSelectedDate(e.target.value)}
+                                className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-white text-xs font-black uppercase outline-none focus:border-emerald-500 transition-all"
+                            />
+                        </div>
+                    ) : (
+                        <div className="flex gap-2 items-center">
+                            <input
+                                type="date"
+                                value={startDate}
+                                onChange={(e) => setStartDate(e.target.value)}
+                                className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-1.5 text-white text-[10px] font-black uppercase outline-none focus:border-indigo-500 transition-all"
+                            />
+                            <span className="text-slate-600 text-[10px] font-black">TO</span>
+                            <input
+                                type="date"
+                                value={endDate}
+                                onChange={(e) => setEndDate(e.target.value)}
+                                className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-1.5 text-white text-[10px] font-black uppercase outline-none focus:border-indigo-500 transition-all"
+                            />
+                        </div>
+                    )}
+
+                    <div className="h-8 w-px bg-slate-800 mx-2" />
+                    <div className="flex gap-2">
+                        {[
+                            { label: 'Today', onClick: () => { setUseRange(false); setSelectedDate(new Date().toISOString().split('T')[0]); } },
+                            { label: '7D', onClick: () => { 
+                                setUseRange(true); 
+                                const d = new Date();
+                                setEndDate(d.toISOString().split('T')[0]);
+                                d.setDate(d.getDate() - 7);
+                                setStartDate(d.toISOString().split('T')[0]);
+                            }},
+                            { label: '30D', onClick: () => { 
+                                setUseRange(true); 
+                                const d = new Date();
+                                setEndDate(d.toISOString().split('T')[0]);
+                                d.setDate(d.getDate() - 30);
+                                setStartDate(d.toISOString().split('T')[0]);
+                            }}
+                        ].map(q => (
+                            <button
+                                key={q.label}
+                                onClick={q.onClick}
+                                className="px-3 py-2 bg-slate-900 border border-slate-800 text-slate-500 rounded-xl font-black text-[9px] uppercase tracking-widest hover:text-white hover:border-slate-600 transition-all"
+                            >
+                                {q.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -525,42 +618,95 @@ const FinancialCommandCenter: React.FC = () => {
 
             {/* Detailed Ledger Section */}
             <div className="flex-1 bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] overflow-hidden flex flex-col">
-                <div className="p-8 border-b border-slate-800/50 flex justify-between items-center bg-[#0B0F19]">
-                    <div className="flex items-center gap-3">
-                        <History className="text-white" size={20} />
-                        <h2 className="text-sm font-black text-white uppercase tracking-widest">Real-time General Ledger</h2>
-                        {/* Account Filter */}
-                        <select
-                            value={ledgerAccountFilter}
-                            onChange={e => setLedgerAccountFilter(e.target.value)}
-                            className="ml-4 bg-slate-900 border border-slate-700 text-white text-[10px] font-bold uppercase rounded-xl px-3 py-2 outline-none focus:border-indigo-500 transition-all"
-                        >
-                            <option value="">All Accounts</option>
-                            {coaAccounts.map((a: any) => (
-                                <option key={a.id} value={a.id}>{a.code} – {a.name}</option>
-                            ))}
-                        </select>
-                    </div>
-                    <div className="flex gap-4 items-center">
-                        <button
-                            onClick={() => setShowCOAModal(true)}
-                            className="text-[10px] font-black text-emerald-400 uppercase tracking-widest hover:text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg bg-emerald-500/10"
-                        >
-                            Configure COA
-                        </button>
-                        <button
-                            onClick={handlePrintLedger}
-                            className="flex items-center gap-1.5 text-[10px] font-black text-slate-300 uppercase tracking-widest hover:text-white border border-slate-700 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 transition-all"
-                            title="Print Ledger (LaserJet A4)"
-                        >
-                            <Printer size={12} strokeWidth={3} /> Print Ledger
-                        </button>
-                        <button
-                            onClick={() => window.open(window.location.origin + `/api/accounting/ledger/export?token=${sessionStorage.getItem('accessToken')}&date=${selectedDate}`, '_blank')}
-                            className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 px-3 py-1.5"
-                        >
-                            Export CSV
-                        </button>
+                <div className="px-8 py-6 border-b border-slate-800/50 bg-[#0B0F19]">
+                    <div className="flex flex-col gap-6">
+                        {/* Title Row */}
+                        <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <History className="text-white" size={20} />
+                                <h2 className="text-sm font-black text-white uppercase tracking-widest">Real-time General Ledger</h2>
+                                <div className="ml-4 px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full text-[10px] font-black text-indigo-400 uppercase tracking-tighter">
+                                    {ledger.length} Entries Found
+                                </div>
+                            </div>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setShowCOAModal(true)}
+                                    className="text-[10px] font-black text-emerald-400 uppercase tracking-widest hover:text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg bg-emerald-500/10"
+                                >
+                                    COA Setup
+                                </button>
+                                <button
+                                    onClick={handlePrintLedger}
+                                    className="flex items-center gap-1.5 text-[10px] font-black text-slate-300 uppercase tracking-widest hover:text-white border border-slate-700 px-3 py-1.5 rounded-lg bg-slate-800"
+                                >
+                                    <Printer size={12} strokeWidth={3} /> Print
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        const query = useRange ? `startDate=${startDate}&endDate=${endDate}` : `date=${selectedDate}`;
+                                        window.open(window.location.origin + `/api/accounting/ledger/export?token=${sessionStorage.getItem('accessToken')}&${query}`, '_blank');
+                                    }}
+                                    className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 px-3 py-1.5"
+                                >
+                                    CSV
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Filter Bar */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            {/* Search */}
+                            <div className="relative group">
+                                <PlusCircle className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 group-hover:text-indigo-500 transition-colors" size={14} />
+                                <input
+                                    type="text"
+                                    placeholder="Search ledger description..."
+                                    value={ledgerSearch}
+                                    onChange={e => setLedgerSearch(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-[10px] font-bold text-white outline-none focus:border-indigo-500/50 transition-all"
+                                />
+                            </div>
+
+                            {/* Account Filter */}
+                            <select
+                                value={ledgerAccountFilter}
+                                onChange={e => setLedgerAccountFilter(e.target.value)}
+                                className="bg-slate-950 border border-slate-800 text-white text-[10px] font-bold uppercase rounded-xl px-4 py-2.5 outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
+                            >
+                                <option value="">Filter By Account (All)</option>
+                                {coaAccounts.map((a: any) => (
+                                    <option key={a.id} value={a.id}>{a.code} – {a.name}</option>
+                                ))}
+                            </select>
+
+                            {/* Reference Filter */}
+                            <select
+                                value={ledgerRefFilter}
+                                onChange={e => setLedgerRefFilter(e.target.value)}
+                                className="bg-slate-950 border border-slate-800 text-white text-[10px] font-bold uppercase rounded-xl px-4 py-2.5 outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
+                            >
+                                <option value="">Reference (All)</option>
+                                <option value="ORDER">Order Sales</option>
+                                <option value="PAYOUT">Payouts/Expenses</option>
+                                <option value="SETTLEMENT">Rider Settlements</option>
+                                <option value="MANUAL">Manual Journals</option>
+                                <option value="OPENING_BALANCE">Opening Balances</option>
+                            </select>
+
+                            {/* Nature / Type Toggle */}
+                            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+                                {['', 'DEBIT', 'CREDIT'].map((t) => (
+                                    <button
+                                        key={t}
+                                        onClick={() => setLedgerTypeFilter(t)}
+                                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${ledgerTypeFilter === t ? 'bg-slate-800 text-white' : 'text-slate-600 hover:text-slate-400'}`}
+                                    >
+                                        {t || 'All'}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -580,7 +726,7 @@ const FinancialCommandCenter: React.FC = () => {
                             {ledger.map((entry: any) => (
                                 <tr key={entry.id} className={`border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors ${entry.transaction_type === 'CREDIT' && entry.reference_type === 'PAYOUT' ? 'bg-red-500/5' : ''}`}>
                                     <td className="px-4 py-3 text-slate-500 text-[10px]">
-                                        {entry.created_at ? new Date(entry.created_at).toLocaleTimeString() : '—'}
+                                        {entry.created_at ? formatTime(entry.created_at) : '—'}
                                     </td>
                                     <td className="px-4 py-3">
                                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{entry.reference_type}</span>

@@ -60,8 +60,13 @@ router.get('/session', async (req, res) => {
  */
 router.get('/ledger/export', async (req, res) => {
     try {
+        const { date, startDate, endDate } = req.query;
         const restaurantId = req.restaurantId!;
-        const csv = await accounting.exportLedgerToCSV(restaurantId);
+        const csv = await accounting.exportLedgerToCSV(restaurantId, { 
+            date: date as string, 
+            startDate: startDate as string, 
+            endDate: endDate as string 
+        });
         
         res.setHeader('Content-Type', 'text/csv');
         res.setHeader('Content-Disposition', `attachment; filename=ledger_${new Date().toISOString().split('T')[0]}.csv`);
@@ -77,26 +82,47 @@ router.get('/ledger/export', async (req, res) => {
  */
 router.get('/ledger', async (req, res) => {
     try {
-        const { limit, accountId, date } = req.query;
+        const { limit, accountId, date, startDate, endDate, type, refType, searchQuery } = req.query;
         const restaurantId = req.restaurantId!;
-
         const { prisma } = await import('../../shared/lib/prisma');
 
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id: restaurantId },
+            select: { timezone: true }
+        });
+        const tz = restaurant?.timezone || 'Asia/Karachi';
+
+        const toUTC = (localStr: string, timeZone: string, endOfDay = false) => {
+            const d = new Date(localStr + (endOfDay ? 'T23:59:59.999' : 'T00:00:00'));
+            const localeStr = d.toLocaleString('en-US', { timeZone });
+            const diff = d.getTime() - new Date(localeStr).getTime();
+            return new Date(d.getTime() + diff);
+        };
+
         const dateFilter: any = {};
-        if (date) {
-            const d = new Date(date as string);
-            const start = new Date(d); start.setHours(0, 0, 0, 0);
-            const end = new Date(d); end.setHours(23, 59, 59, 999);
-            dateFilter.gte = start;
-            dateFilter.lte = end;
+        if (startDate && endDate) {
+            dateFilter.gte = toUTC(startDate as string, tz);
+            dateFilter.lte = toUTC(endDate as string, tz, true);
+        } else if (date) {
+            dateFilter.gte = toUTC(date as string, tz);
+            dateFilter.lte = toUTC(date as string, tz, true);
         }
 
+        const where: any = {
+            chart_of_accounts: { restaurant_id: restaurantId },
+            ...(accountId ? { account_id: accountId } : {}),
+            ...(Object.keys(dateFilter).length > 0 ? { journal_entries: { date: dateFilter } } : {}),
+            ...(refType ? { journal_entries: { reference_type: refType } } : {}),
+            ...(searchQuery ? { 
+                OR: [
+                    { description: { contains: searchQuery as string, mode: 'insensitive' } },
+                    { journal_entries: { description: { contains: searchQuery as string, mode: 'insensitive' } } }
+                ]
+            } : {})
+        };
+
         const lines = await prisma.journal_entry_lines.findMany({
-            where: {
-                chart_of_accounts: { restaurant_id: restaurantId },
-                ...(accountId && typeof accountId === 'string' ? { account_id: accountId } : {}),
-                ...(date ? { journal_entries: { date: dateFilter } } : {})
-            },
+            where,
             include: {
                 journal_entries: {
                     select: { reference_type: true, reference_id: true, description: true, date: true, created_at: true }
@@ -107,7 +133,7 @@ router.get('/ledger', async (req, res) => {
             take: Number(limit) || 100
         });
 
-        const entries = lines.map(l => ({
+        let entries = lines.map(l => ({
             id: l.id,
             created_at: (l.journal_entries as any)?.created_at || (l.journal_entries as any)?.date,
             reference_type: (l.journal_entries as any)?.reference_type,
@@ -119,6 +145,10 @@ router.get('/ledger', async (req, res) => {
             debit: Number(l.debit),
             credit: Number(l.credit),
         }));
+
+        if (type) {
+            entries = entries.filter(e => e.transaction_type === type);
+        }
         
         return res.json({ success: true, entries });
     } catch (e: any) {
@@ -342,17 +372,30 @@ router.post('/manual-journal', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, 
  */
 router.get('/gl-balance', async (req, res) => {
     try {
-        const { date } = req.query;
+        const { date, startDate, endDate } = req.query;
         const restaurantId = req.restaurantId!;
         const { prisma } = await import('../../shared/lib/prisma');
 
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id: restaurantId },
+            select: { timezone: true }
+        });
+        const tz = restaurant?.timezone || 'Asia/Karachi';
+
+        const toUTC = (localStr: string, timeZone: string, endOfDay = false) => {
+            const d = new Date(localStr + (endOfDay ? 'T23:59:59.999' : 'T00:00:00'));
+            const localeStr = d.toLocaleString('en-US', { timeZone });
+            const diff = d.getTime() - new Date(localeStr).getTime();
+            return new Date(d.getTime() + diff);
+        };
+
         const dateFilter: any = {};
-        if (date) {
-            const d = new Date(date as string);
-            const start = new Date(d); start.setHours(0, 0, 0, 0);
-            const end = new Date(d); end.setHours(23, 59, 59, 999);
-            dateFilter.gte = start;
-            dateFilter.lte = end;
+        if (startDate && endDate) {
+            dateFilter.gte = toUTC(startDate as string, tz);
+            dateFilter.lte = toUTC(endDate as string, tz, true);
+        } else if (date) {
+            dateFilter.gte = toUTC(date as string, tz);
+            dateFilter.lte = toUTC(date as string, tz, true);
         }
 
         const lines = await prisma.journal_entry_lines.findMany({
@@ -381,17 +424,30 @@ router.get('/gl-balance', async (req, res) => {
  */
 router.get('/gl-revenue', async (req, res) => {
     try {
-        const { date } = req.query;
+        const { date, startDate, endDate } = req.query;
         const restaurantId = req.restaurantId!;
         const { prisma } = await import('../../shared/lib/prisma');
 
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id: restaurantId },
+            select: { timezone: true }
+        });
+        const tz = restaurant?.timezone || 'Asia/Karachi';
+
+        const toUTC = (localStr: string, timeZone: string, endOfDay = false) => {
+            const d = new Date(localStr + (endOfDay ? 'T23:59:59.999' : 'T00:00:00'));
+            const localeStr = d.toLocaleString('en-US', { timeZone });
+            const diff = d.getTime() - new Date(localeStr).getTime();
+            return new Date(d.getTime() + diff);
+        };
+
         const dateFilter: any = {};
-        if (date) {
-            const d = new Date(date as string);
-            const start = new Date(d); start.setHours(0, 0, 0, 0);
-            const end = new Date(d); end.setHours(23, 59, 59, 999);
-            dateFilter.gte = start;
-            dateFilter.lte = end;
+        if (startDate && endDate) {
+            dateFilter.gte = toUTC(startDate as string, tz);
+            dateFilter.lte = toUTC(endDate as string, tz, true);
+        } else if (date) {
+            dateFilter.gte = toUTC(date as string, tz);
+            dateFilter.lte = toUTC(date as string, tz, true);
         }
 
         const lines = await prisma.journal_entry_lines.findMany({
