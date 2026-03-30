@@ -64,14 +64,14 @@ export async function generatePairingCode(
   // 2. Create in transaction, storing duration in device_expiry_duration 
   // and targetStaffId in used_by (as the intended user)
   const pairingCode = await prisma.$transaction(async (tx) => {
-    return await (tx.pairing_codes as any).create({
+    return await (tx.pairing_codes).create({
       data: {
         restaurant_id: restaurantId,
         pairing_code: plainCode,
         hashed_code: hashedCode,
         expires_at: expiresAt,
         device_expiry_duration: durationHours * 60, // Store in minutes for compatibility
-        used_by: targetStaffId, // Store target staff here
+        used_by: targetStaff.id, // Store target staff here
         is_used: false,
         attempt_count: 0
       }
