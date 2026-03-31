@@ -21,6 +21,8 @@ const _dirname = typeof __dirname !== 'undefined'
   ? __dirname 
   : path.dirname(fileURLToPath(import.meta.url));
 
+import { Decimal } from '@prisma/client/runtime/library';
+
 
 import { OrderServiceFactory } from './services/orders/OrderServiceFactory';
 import { AccountingService } from './services/AccountingService';
@@ -2290,8 +2292,17 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
         });
         if (!order) return res.status(404).json({ error: 'Order not found or unauthorized' });
 
-        const service = OrderServiceFactory.getService(order.type as any);
-        const success = await service.deleteOrder(id);
+        // Soft delete implementation
+        await prisma.orders.update({
+            where: { id },
+            data: {
+                is_deleted: true,
+                deleted_by: (req as any).user?.id || req.staffId || null,
+                deleted_at: new Date(),
+                deleted_reason: req.body.reason ?? null,
+            },
+        });
+        const success = true;
 
         if (success) {
             io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id });
@@ -2363,6 +2374,31 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                 }
             });
             if (!order) throw new Error('Order not found or unauthorized');
+
+            // Credit Limit Guard for Khata (Credit) payments
+            const hasKhataInTransaction = paymentList.some(p => p.method === 'CREDIT');
+            if (hasKhataInTransaction) {
+                const customerId = customer_id || order.customer_id;
+                if (!customerId) throw new Error('Customer assignment required for Khata (Credit) payment.');
+
+                const customer = await tx.customers.findUnique({
+                    where: { id: customerId },
+                    select: { credit_limit: true }
+                });
+                
+                const limit = new Decimal(customer?.credit_limit?.toString() || '0');
+                if (limit.gt(0)) {
+                    const currentBalance = await accounting.getCustomerBalance(req.restaurantId, customerId, tx);
+                    const khataAmount = paymentList
+                        .filter(p => p.method === 'CREDIT')
+                        .reduce((sum, p) => sum + p.amount, 0);
+                    
+                    const newTotal = currentBalance.plus(new Decimal(khataAmount.toString()));
+                    if (newTotal.gt(limit)) {
+                        throw new Error(`Credit limit exceeded. Remaining limit: ${limit.minus(currentBalance).toString()}, Requested Khata: ${khataAmount}`);
+                    }
+                }
+            }
 
             const orderTotal = Number(order.total);
             const isFullyPaid = totalReceived >= orderTotal;
