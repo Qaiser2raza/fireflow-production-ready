@@ -551,6 +551,7 @@ router.get('/riders/:driverId/pending-settlement', async (req, res) => {
 
         const orders = await prisma.orders.findMany({
             where: {
+                is_deleted: false,
                 rider_shift_id: activeShift.id,
                 status: 'DELIVERED',
                 restaurant_id: restaurantId // SaaS Security

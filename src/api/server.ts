@@ -3127,6 +3127,7 @@ app.get('/api/orders', async (req, res) => {
         const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
         const orders = await prisma.orders.findMany({
             where: {
+                is_deleted: false,
                 ...(restaurant_id ? { restaurant_id: String(restaurant_id) } : {}),
                 OR: [
                     // Always include non-terminal orders (live logistics)
@@ -3666,8 +3667,8 @@ app.get('/api/orders/:id', async (req, res, next) => {
         // Skip if ID is actually a route name
         if (['all', 'summary', 'upsert', 'fire'].includes(id)) return next();
 
-        const order = await prisma.orders.findUnique({
-            where: { id },
+        const order = await prisma.orders.findFirst({
+            where: { id: id, is_deleted: false },
             include: {
                 order_items: true,
                 dine_in_orders: true,
@@ -3678,8 +3679,8 @@ app.get('/api/orders/:id', async (req, res, next) => {
         });
         if (!order) {
             // Try searching by order_number if not found as UUID
-            const byNumber = await prisma.orders.findUnique({
-                where: { order_number: id },
+            const byNumber = await prisma.orders.findFirst({
+                where: { order_number: id, is_deleted: false },
                 include: {
                     order_items: true,
                     dine_in_orders: true,

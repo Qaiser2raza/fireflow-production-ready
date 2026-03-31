@@ -126,6 +126,7 @@ router.get('/customers/:id', async (req, res) => {
             include: {
                 addresses: true,
                 orders: {
+                    where: { is_deleted: false },
                     take: 5,
                     orderBy: { created_at: 'desc' }
                 }
@@ -370,6 +371,7 @@ router.get('/customers/:id/statement', async (req, res) => {
     const [orders, ledgerEntries, balance] = await Promise.all([
       prisma.orders.findMany({
         where: {
+          is_deleted: false,
           customer_id: req.params.id,
           restaurant_id: req.restaurantId!,
         },
@@ -431,6 +433,16 @@ router.post('/customers/:id/topup', async (req, res) => {
             processedBy: req.staffId!
         });
 
+        // Step 2: Record in journal_entries (double-entry)
+        await journalEntryService.recordCustomerPaymentJournal({
+            restaurantId: req.restaurantId!,
+            customerId: req.params.id,
+            amount: Number(amount),
+            paymentMethod: (paymentMethod || 'CASH') as 'CASH' | 'CARD',
+            referenceId: `topup-${req.params.id}-${Date.now()}`,
+            processedBy: req.staffId!,
+        }, prisma);
+
         // Return updated balance
         const newBalance = await accounting.getCustomerBalance(req.restaurantId!, req.params.id);
         
@@ -460,6 +472,18 @@ router.post('/customers/:id/charge', async (req, res) => {
       where: { id: req.params.id, restaurant_id: req.restaurantId }
     });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    
+    // Step 1: Credit Limit Guard (A2)
+    const limit = new Decimal(customer.credit_limit || 0);
+    if (limit.gt(0)) {
+        const currentBalance = await accounting.getCustomerBalance(req.restaurantId!, req.params.id);
+        const newTotal = currentBalance.plus(new Decimal(amount.toString()));
+        if (newTotal.gt(limit)) {
+            return res.status(400).json({ 
+                error: `Credit limit exceeded. Remaining limit: ${limit.minus(currentBalance).toString()}, Requested: ${amount}` 
+            });
+        }
+    }
 
     // Use AccountingService to post the charge
     if (orderId) {
