@@ -36,6 +36,7 @@ import { RoleContextBar } from './components/RoleContextBar';
 import { CommandPalette } from './components/CommandPalette';
 import { SessionExpiredView } from '../auth/views/SessionExpiredView';
 import { RiderView } from '../operations/logistics/RiderView';
+import CashierView from '../pages/CashierView';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { PreferencesProvider } from './contexts/PreferencesContext';
 import { RestaurantProvider } from './RestaurantContext';
@@ -284,7 +285,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (user.role === 'SERVER' || user.role === 'WAITER') {
         setActiveView('ORDER_HUB');
       } else if (user.role === 'CASHIER') {
-        setActiveView('POS');
+        setActiveView('CASHIER_VIEW');
       } else {
         setActiveView('DASHBOARD');
       }
@@ -341,7 +342,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const user = data.staff;
               if (user.role === 'SUPER_ADMIN') setActiveView('SUPER_ADMIN');
               else if (user.role === 'SERVER' || user.role === 'WAITER') setActiveView('ORDER_HUB');
-              else if (user.role === 'CASHIER') setActiveView('POS');
+              else if (user.role === 'CASHIER') setActiveView('CASHIER_VIEW');
               else setActiveView('DASHBOARD');
 
               fetchInitialData(data.staff);
@@ -942,6 +943,9 @@ const AppContent = () => {
   }
 
   if (!currentUser) return <LoginView onLogin={login} />;
+  
+  // Cashier full-screen takeover
+  if (activeView === 'CASHIER_VIEW') return <CashierView />;
 
   // SUPER_ADMIN handlers
   const handleEnterRestaurant = (restaurantId: string, restaurantName: string) => {
@@ -1203,7 +1207,7 @@ const AppContent = () => {
             activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
               activeView === 'MENU' ? <MenuView /> :
                 activeView === 'DASHBOARD' ? <DashboardView /> :
-                  activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
+                  activeView === 'POS' ? <POSView /> :
                     activeView === 'KITCHEN' ? <KDSView /> :
                       activeView === 'RIDER_VIEW' ? <RiderView /> :
                         activeView === 'LOGISTICS' ? <LogisticsHub /> :
