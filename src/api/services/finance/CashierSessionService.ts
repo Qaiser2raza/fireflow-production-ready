@@ -43,7 +43,7 @@ export class CashierSessionService {
     static async closeSession(sessionId: string, actualCash: number, closedBy: string, notes?: string) {
         const session = await prisma.cashier_sessions.findUnique({
             where: { id: sessionId },
-            include: { orders: { include: { transactions: true } } }
+            include: { orders: { where: { is_deleted: false }, include: { transactions: true } } }
         });
 
         if (!session || session.status === 'CLOSED') {
@@ -84,6 +84,7 @@ export class CashierSessionService {
             where: { id: sessionId },
             include: { 
                 orders: { 
+                    where: { is_deleted: false },
                     include: { 
                         transactions: true 
                     } 
