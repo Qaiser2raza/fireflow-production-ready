@@ -374,7 +374,7 @@ export interface Order {
     tableId?: string | null;
     timestamp?: Date;
     fbr_invoice_number?: string;
-    fbr_sync_status?: 'NONE' | 'SYNCED' | 'FAILED';
+    fbr_sync_status?: 'NONE' | 'PENDING' | 'SYNCED' | 'FAILED' | 'VOIDED';
     fbr_qr_code?: string;
     is_proforma_printed?: boolean;
     fbr_response?: string;

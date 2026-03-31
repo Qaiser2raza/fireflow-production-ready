@@ -108,7 +108,7 @@ router.post('/void/:orderId', authMiddleware, async (req: any, res) => {
     try {
         await prisma.orders.update({
             where: { id: req.params.orderId },
-            data: { fbr_sync_status: 'voided' } as any
+            data: { fbr_sync_status: 'VOIDED' } as any
         });
         res.json({ success: true });
     } catch (err: any) {
@@ -123,7 +123,7 @@ router.get('/queue', authMiddleware, async (req: any, res) => {
         const orders = await prisma.orders.findMany({
             where: {
                 restaurant_id,
-                fbr_sync_status: { in: ['pending', 'PENDING'] },
+                fbr_sync_status: 'PENDING',
                 is_deleted: false,
             },
             select: {
@@ -168,25 +168,25 @@ router.get('/aggregate', authMiddleware, async (req: any, res) => {
         let tax_liability_today = 0, tax_liability_total = 0;
         
         for (const o of allOrders) {
-            const status = (o.fbr_sync_status || '').toLowerCase();
+            const status = (o.fbr_sync_status || '').toUpperCase();
             const amount = Number(o.total || 0);
             const tax = Number(o.tax || 0);
             const isToday = o.created_at >= todayStart;
             
-            if (status === 'pending') {
+            if (status === 'PENDING') {
                 pending_count++;
                 pending_amount += amount;
-            } else if (status === 'synced') {
+            } else if (status === 'SYNCED') {
                 if (isToday) {
                     synced_today_count++;
                     synced_today_amount += amount;
                     tax_liability_today += tax;
                 }
                 tax_liability_total += tax;
-            } else if (status === 'voided') {
+            } else if (status === 'VOIDED') {
                 voided_count++;
                 voided_amount += amount;
-            } else if (status === 'failed') {
+            } else if (status === 'FAILED') {
                 failed_count++;
             }
         }
@@ -216,7 +216,7 @@ router.post('/sync', authMiddleware, async (req: any, res) => {
         await prisma.orders.updateMany({
             where: { id: { in: orderIds } },
             data: {
-                fbr_sync_status: 'synced',
+                fbr_sync_status: 'SYNCED',
                 fbr_synced_at: new Date()
             } as any
         });
