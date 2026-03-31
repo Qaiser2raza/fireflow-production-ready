@@ -254,6 +254,7 @@ model orders {
   sync_status                            String              @default("PENDING")
   fbr_invoice_number                     String?
   fbr_sync_status                        String              @default("PENDING")
+  fbr_synced_at                          DateTime?
   fbr_qr_code                            String?
   fbr_response                           String?
   customer_id                            String?             @db.Uuid

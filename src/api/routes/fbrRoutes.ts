@@ -12,7 +12,7 @@ const prisma = new PrismaClient();
  */
 router.get('/stats', authMiddleware, async (req: any, res) => {
     try {
-        const restaurant_id = req.user.restaurant_id;
+        const restaurant_id = req.user?.restaurant_id || req.restaurantId;
 
         const [totalInvoices, pendingFBR, syncedToday] = await Promise.all([
             prisma.orders.count({ where: { restaurant_id } }),
@@ -104,26 +104,126 @@ router.post('/sync/:orderId', authMiddleware, requireRole('MANAGER', 'ADMIN'), a
  * POST /api/fbr/void/:orderId
  * Voids a pending FBR invoice so it's excluded from sync batches
  */
-router.post('/void/:orderId', authMiddleware, requireRole('MANAGER', 'ADMIN'), async (req: any, res) => {
+router.post('/void/:orderId', authMiddleware, async (req: any, res) => {
     try {
-        const order = await prisma.orders.findUnique({
-            where: { id: req.params.orderId, restaurant_id: req.user.restaurant_id }
-        });
-
-        if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
-        
-        if (order.fbr_sync_status === 'SYNCED') {
-            return res.status(400).json({ success: false, error: 'Cannot void an already synced invoice via this method. Use Returns to issue a credit note.' });
-        }
-
         await prisma.orders.update({
-            where: { id: order.id },
-            data: { fbr_sync_status: 'VOIDED' } as any
+            where: { id: req.params.orderId },
+            data: { fbr_sync_status: 'voided' } as any
         });
-
-        res.json({ success: true, message: 'Invoice marked as voided' });
+        res.json({ success: true });
     } catch (err: any) {
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// GET /api/fbr/queue
+router.get('/queue', authMiddleware, async (req: any, res) => {
+    try {
+        const restaurant_id = req.user?.restaurant_id || req.restaurantId;
+        const orders = await prisma.orders.findMany({
+            where: {
+                restaurant_id,
+                fbr_sync_status: { in: ['pending', 'PENDING'] },
+                is_deleted: false,
+            },
+            select: {
+                id: true,
+                order_number: true,
+                total: true,
+                tax: true,
+                created_at: true,
+                fbr_sync_status: true
+            }
+        });
+        
+        // Map to requested field names
+        const mapped = orders.map(o => ({
+            id: o.id,
+            order_number: o.order_number,
+            total_amount: Number(o.total || 0),
+            tax_amount: Number(o.tax || 0),
+            created_at: o.created_at,
+            fbr_sync_status: o.fbr_sync_status
+        }));
+        res.json(mapped);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/fbr/aggregate
+router.get('/aggregate', authMiddleware, async (req: any, res) => {
+    try {
+        const restaurant_id = req.user?.restaurant_id || req.restaurantId;
+        const allOrders = await prisma.orders.findMany({
+            where: { restaurant_id, is_deleted: false }
+        });
+        
+        const todayStart = new Date(new Date().setHours(0, 0, 0, 0));
+        
+        let pending_count = 0, pending_amount = 0;
+        let synced_today_count = 0, synced_today_amount = 0;
+        let voided_count = 0, voided_amount = 0;
+        let failed_count = 0;
+        let tax_liability_today = 0, tax_liability_total = 0;
+        
+        for (const o of allOrders) {
+            const status = (o.fbr_sync_status || '').toLowerCase();
+            const amount = Number(o.total || 0);
+            const tax = Number(o.tax || 0);
+            const isToday = o.created_at >= todayStart;
+            
+            if (status === 'pending') {
+                pending_count++;
+                pending_amount += amount;
+            } else if (status === 'synced') {
+                if (isToday) {
+                    synced_today_count++;
+                    synced_today_amount += amount;
+                    tax_liability_today += tax;
+                }
+                tax_liability_total += tax;
+            } else if (status === 'voided') {
+                voided_count++;
+                voided_amount += amount;
+            } else if (status === 'failed') {
+                failed_count++;
+            }
+        }
+        
+        res.json({
+            pending_count,
+            pending_amount,
+            synced_today_count,
+            synced_today_amount,
+            voided_count,
+            voided_amount,
+            failed_count,
+            tax_liability_today,
+            tax_liability_total
+        });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/fbr/sync
+router.post('/sync', authMiddleware, async (req: any, res) => {
+    try {
+        const orderIds = Array.isArray(req.body) ? req.body : req.body.orderIds;
+        if (!Array.isArray(orderIds)) return res.status(400).json({ error: 'Array of order IDs required' });
+        
+        await prisma.orders.updateMany({
+            where: { id: { in: orderIds } },
+            data: {
+                fbr_sync_status: 'synced',
+                fbr_synced_at: new Date()
+            } as any
+        });
+        
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
     }
 });
 
