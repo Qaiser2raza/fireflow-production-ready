@@ -261,4 +261,94 @@ router.post('/sync-all', authMiddleware, requireRole('MANAGER', 'ADMIN'), async 
     }
 });
 
+// GET /api/fbr/tax-liability
+router.get('/tax-liability', authMiddleware, async (req: any, res) => {
+    try {
+        const restaurant_id = req.user?.restaurant_id || req.restaurantId;
+        const { from, to } = req.query;
+
+        // Default range: last 30 days
+        let startDate = new Date();
+        startDate.setDate(startDate.getDate() - 30);
+        startDate.setHours(0, 0, 0, 0);
+        
+        let endDate = new Date();
+        endDate.setHours(23, 59, 59, 999);
+
+        if (from) {
+            startDate = new Date(from as string);
+            startDate.setHours(0, 0, 0, 0);
+        }
+        if (to) {
+            endDate = new Date(to as string);
+            endDate.setHours(23, 59, 59, 999);
+        }
+
+        const orders = await prisma.orders.findMany({
+            where: {
+                restaurant_id,
+                is_deleted: false,
+                created_at: {
+                    gte: startDate,
+                    lte: endDate
+                }
+            }
+        });
+
+        const dailyMap: Record<string, any> = {};
+        
+        let total_tax_collected = 0;
+        let total_fbr_reported = 0;
+
+        for (const o of orders) {
+            const dateStr = o.created_at.toISOString().split('T')[0];
+            if (!dailyMap[dateStr]) {
+                dailyMap[dateStr] = {
+                    date: dateStr,
+                    total_sales: 0,
+                    tax_collected: 0,
+                    synced_amount: 0,
+                    synced_tax: 0,
+                    voided_amount: 0,
+                    voided_tax: 0,
+                    net_fbr_tax: 0
+                };
+            }
+
+            const day = dailyMap[dateStr];
+            const amount = Number(o.total || 0);
+            const tax = Number(o.tax || 0);
+            const status = (o.fbr_sync_status || '').toUpperCase();
+
+            day.total_sales += amount;
+            day.tax_collected += tax;
+            total_tax_collected += tax;
+
+            if (status === 'SYNCED') {
+                day.synced_amount += amount;
+                day.synced_tax += tax;
+                day.net_fbr_tax += tax;
+                total_fbr_reported += tax;
+            } else if (status === 'VOIDED') {
+                day.voided_amount += amount;
+                day.voided_tax += tax;
+            }
+        }
+
+        const daily = Object.values(dailyMap).sort((a: any, b: any) => a.date.localeCompare(b.date));
+
+        res.json({
+            daily,
+            summary: {
+                total_tax_collected,
+                total_fbr_reported,
+                gap: total_tax_collected - total_fbr_reported
+            }
+        });
+
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 export default router;
