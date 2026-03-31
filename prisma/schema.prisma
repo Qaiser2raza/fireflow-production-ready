@@ -272,6 +272,11 @@ model orders {
   tax_type                               TaxType             @default(INCLUSIVE)
   tax_exempt                             Boolean             @default(false)
 
+  is_deleted                             Boolean             @default(false)
+  deleted_by                             String?
+  deleted_at                             DateTime?
+  deleted_reason                         String?
+
   delivery_orders                        delivery_orders?
   dine_in_orders                         dine_in_orders?
   order_intelligence                     order_intelligence?
