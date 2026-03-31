@@ -374,6 +374,7 @@ export class AccountingService {
         paymentMethod: 'CASH' | 'CARD';
         processedBy: string;
         orderId?: string;
+        entry_status?: string; // 'provisional' | 'approved' | 'adjusted'
     }, tx?: any) {
         const db = tx || prisma;
         const amount = new Decimal(data.amount.toString());
@@ -401,15 +402,16 @@ export class AccountingService {
             processedBy: data.processedBy
         }, db);
 
-        // 2.1 Post to specialized Customer Ledger
-        await this.postCustomerLedger({
+        // 2.1 Post to specialized Customer Ledger — honours entry_status for maker-checker
+        return await this.postCustomerLedger({
             restaurantId: data.restaurantId,
             customerId: data.customerId,
             orderId: data.orderId,
             amount: amount,
             entryType: 'PAYMENT',
             description: `Payment received via ${data.paymentMethod}`,
-            processedBy: data.processedBy
+            processedBy: data.processedBy,
+            entry_status: data.entry_status,
         }, db);
     }
 
@@ -422,6 +424,7 @@ export class AccountingService {
         amount: number | Decimal;
         paymentMethod: 'CASH' | 'CARD';
         processedBy: string;
+        entry_status?: string; // 'provisional' | 'approved' | 'adjusted'
     }, tx?: any) {
         const db = tx || prisma;
         const amount = new Decimal(data.amount.toString());
@@ -447,14 +450,15 @@ export class AccountingService {
             processedBy: data.processedBy
         }, db);
 
-        // 3. Post to Customer Ledger
-        await this.postCustomerLedger({
+        // 3. Post to Customer Ledger — honours entry_status for maker-checker
+        return await this.postCustomerLedger({
             restaurantId: data.restaurantId,
             customerId: data.customerId,
             amount: amount,
             entryType: 'TOP_UP',
             description: `Prepaid Top-up via ${data.paymentMethod}`,
-            processedBy: data.processedBy
+            processedBy: data.processedBy,
+            entry_status: data.entry_status,
         }, db);
     }
 
@@ -470,13 +474,28 @@ export class AccountingService {
         entryType: string; // keyof typeof CustomerLedgerEntryType
         description?: string;
         processedBy?: string;
+        entry_status?: string; // 'provisional' | 'approved' | 'adjusted'
     }, tx?: any) {
         const db = tx || prisma;
         const amount = new Decimal(data.amount.toString());
+        
+        // Calculate new balance with concurrency lock if in transaction
+        let currentBalance = new Decimal(0);
+        if (tx) {
+            // Step 1: Lock the latest ledger entry for this customer to prevent race conditions
+            const lastEntry: any[] = await tx.$queryRaw`
+                SELECT amount FROM customer_ledgers 
+                WHERE restaurant_id = ${data.restaurantId} AND customer_id = ${data.customerId} 
+                ORDER BY created_at DESC, id DESC 
+                LIMIT 1 
+                FOR UPDATE
+            `;
+            currentBalance = lastEntry.length > 0 ? new Decimal(lastEntry[0].amount.toString()) : new Decimal(0);
+        } else {
+            // Fallback for non-transactional calls (no lock)
+            currentBalance = await this.getCustomerBalance(data.restaurantId, data.customerId, db);
+        }
 
-        // Calculate new balance
-        // CHARGE increases balance (debt), PAYMENT/TOP_UP decreases balance (clear debt/advance)
-        const currentBalance = await this.getCustomerBalance(data.restaurantId, data.customerId, db);
         
         let newBalance = currentBalance;
         if (data.entryType === 'CHARGE') {
@@ -500,7 +519,8 @@ export class AccountingService {
                 amount: amount,
                 balance_after: newBalance,
                 description: data.description,
-                processed_by: data.processedBy
+                processed_by: data.processedBy,
+                entry_status: data.entry_status ?? 'approved', // default approved for management flows
             }
         });
     }
@@ -517,6 +537,7 @@ export class AccountingService {
         entryType: string; // keyof typeof SupplierLedgerEntryType
         description?: string;
         processedBy?: string;
+        entry_status?: string; // 'provisional' | 'approved' | 'adjusted'
     }, tx?: any) {
         const db = tx || prisma;
         const amount = new Decimal(data.amount.toString());
@@ -543,7 +564,8 @@ export class AccountingService {
                 amount: amount,
                 balance_after: newBalance,
                 description: data.description,
-                processed_by: data.processedBy
+                processed_by: data.processedBy,
+                entry_status: data.entry_status ?? 'approved', // default approved for management flows
             }
         });
     }
@@ -820,7 +842,8 @@ export class AccountingService {
         notes: string;
         processedBy: string;
         referenceId?: string;
-    }, tx?: any): Promise<void> {
+        entry_status?: string; // 'provisional' | 'approved' | 'adjusted'
+    }, tx?: any) {
         const db = tx || prisma;
         const amount = new Decimal(data.amount.toString());
 
@@ -847,14 +870,15 @@ export class AccountingService {
             processedBy: data.processedBy
         }, db);
 
-        // 3. Post supplier ledger entry
-        await this.postSupplierLedger({
+        // 3. Post supplier ledger entry — honours entry_status for maker-checker
+        return await this.postSupplierLedger({
             restaurantId: data.restaurantId,
             supplierId: data.supplierId,
             amount: amount,
             entryType: 'PAYMENT',
             description: data.notes,
-            processedBy: data.processedBy
+            processedBy: data.processedBy,
+            entry_status: data.entry_status,
         }, db);
     }
 

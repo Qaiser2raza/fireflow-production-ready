@@ -100,14 +100,20 @@ router.post('/', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'),
 });
 
 // POST /api/suppliers/payment - Record a payment to a supplier
+// Cashier payments land as provisional — manager must approve before GL posting
 router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const { supplierId, amount, description, referenceId } = req.body;
         const restaurantId = req.restaurantId!;
+        const callerRole = (req as any).staffRole as string | undefined;
 
         if (!supplierId || !amount) {
             return res.status(400).json({ error: 'Supplier ID and Amount are required' });
         }
+
+        // Cashier payments are provisional; manager/admin payments are approved immediately
+        const isCashier = callerRole === 'CASHIER';
+        const entryStatus = isCashier ? 'provisional' : 'approved';
 
         await accounting.recordSupplierPayment({
             restaurantId,
@@ -115,10 +121,18 @@ router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER
             amount,
             notes: description || 'Supplier payment',
             processedBy: req.staffId!,
-            referenceId
+            referenceId,
+            entry_status: entryStatus,
         });
 
-        res.json({ success: true, message: 'Supplier payment recorded successfully' });
+        // GL posting is suppressed for provisional entries — fires only on approval
+        // (JournalEntry posting is not called here; it will be triggered by the approval endpoint)
+
+        res.json({
+            success: true,
+            message: 'Supplier payment recorded successfully',
+            entry_status: entryStatus,
+        });
     } catch (e: any) {
         console.error('POST /api/suppliers/payment ERROR:', e);
         res.status(500).json({ error: e.message });

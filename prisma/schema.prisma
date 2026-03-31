@@ -955,6 +955,9 @@ model customer_ledgers {
   description   String?
   processed_by  String?
   created_at    DateTime                @default(now()) @db.Timestamp(6)
+  entry_status  String                  @default("provisional") // provisional | approved | adjusted
+  reviewed_by   String?
+  reviewed_at   DateTime?
 
   customer   customers   @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   restaurant restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
@@ -975,6 +978,9 @@ model supplier_ledgers {
   description   String?
   processed_by  String?
   created_at    DateTime                @default(now()) @db.Timestamp(6)
+  entry_status  String                  @default("provisional") // provisional | approved | adjusted
+  reviewed_by   String?
+  reviewed_at   DateTime?
 
   supplier    suppliers    @relation(fields: [supplier_id], references: [id], onDelete: Cascade)
   restaurant  restaurants  @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)

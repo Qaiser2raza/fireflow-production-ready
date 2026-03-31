@@ -294,25 +294,29 @@ router.post('/customers/:id/payment', async (req, res) => {
       ? `cust-pay-${orderId}`
       : `cust-${req.params.id}-${Date.now()}`;
 
-    // Record in ledger_entries (simple ledger)
-    await accounting.recordCustomerPayment({
+    // Record in ledger_entries (simple ledger) — always written as provisional
+    const ledgerEntry = await accounting.recordCustomerPayment({
       restaurantId: req.restaurantId!,
       customerId: req.params.id,
       amount: Number(amount),
       paymentMethod: method,
       processedBy: req.staffId!,
       orderId,
+      entry_status: 'provisional',
     });
 
-    // Record in journal_entries (double-entry)
-    await journalEntryService.recordCustomerPaymentJournal({
-      restaurantId: req.restaurantId!,
-      customerId: req.params.id,
-      amount: Number(amount),
-      paymentMethod: method,
-      referenceId,
-      processedBy: req.staffId,
-    }, prisma);
+    // Record in journal_entries (double-entry) ONLY if entry is approved
+    // Cashier payments land as provisional — manager must approve before GL posting
+    if ((ledgerEntry as any)?.entry_status === 'approved') {
+      await journalEntryService.recordCustomerPaymentJournal({
+        restaurantId: req.restaurantId!,
+        customerId: req.params.id,
+        amount: Number(amount),
+        paymentMethod: method,
+        referenceId,
+        processedBy: req.staffId,
+      }, prisma);
+    }
 
     // Return updated balance
     const newBalance = await journalEntryService.getCustomerBalance(
@@ -324,6 +328,7 @@ router.post('/customers/:id/payment', async (req, res) => {
       success: true,
       new_balance: newBalance.toString(),
       interpretation: interpretCustomerBalance(newBalance),
+      entry_status: 'provisional',
     });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
@@ -425,23 +430,27 @@ router.post('/customers/:id/topup', async (req, res) => {
         });
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-        await accounting.topUpAccount({
+        // Always written as provisional — manager must approve before GL posting
+        const ledgerEntry = await accounting.topUpAccount({
             restaurantId: req.restaurantId!,
             customerId: req.params.id,
             amount: Number(amount),
             paymentMethod: (paymentMethod || 'CASH') as 'CASH' | 'CARD',
-            processedBy: req.staffId!
+            processedBy: req.staffId!,
+            entry_status: 'provisional',
         });
 
-        // Step 2: Record in journal_entries (double-entry)
-        await journalEntryService.recordCustomerPaymentJournal({
-            restaurantId: req.restaurantId!,
-            customerId: req.params.id,
-            amount: Number(amount),
-            paymentMethod: (paymentMethod || 'CASH') as 'CASH' | 'CARD',
-            referenceId: `topup-${req.params.id}-${Date.now()}`,
-            processedBy: req.staffId!,
-        }, prisma);
+        // Record in journal_entries (double-entry) ONLY if entry is approved
+        if ((ledgerEntry as any)?.entry_status === 'approved') {
+            await journalEntryService.recordCustomerPaymentJournal({
+                restaurantId: req.restaurantId!,
+                customerId: req.params.id,
+                amount: Number(amount),
+                paymentMethod: (paymentMethod || 'CASH') as 'CASH' | 'CARD',
+                referenceId: `topup-${req.params.id}-${Date.now()}`,
+                processedBy: req.staffId!,
+            }, prisma);
+        }
 
         // Return updated balance
         const newBalance = await accounting.getCustomerBalance(req.restaurantId!, req.params.id);
@@ -449,7 +458,8 @@ router.post('/customers/:id/topup', async (req, res) => {
         res.json({ 
             success: true, 
             new_balance: newBalance.toString(),
-            interpretation: interpretCustomerBalance(newBalance)
+            interpretation: interpretCustomerBalance(newBalance),
+            entry_status: 'provisional',
         });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
