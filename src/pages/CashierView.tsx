@@ -4,12 +4,9 @@ import {
     List, 
     CreditCard, 
     Shield, 
-    Smartphone, 
-    Zap,
-    Clock,
-    User
+    Smartphone,
+    UtensilsCrossed
 } from 'lucide-react';
-import { useAppContext as useApp } from '../client/contexts/AppContext';
 import { useIsMobile } from '../client/hooks/useIsMobile';
 
 // Import existing components
@@ -17,11 +14,14 @@ import { POSView } from '../operations/pos/POSView';
 import { POSViewMobile } from '../operations/pos/POSViewMobile';
 import { OrdersView } from '../operations/orders/OrdersView';
 import { QRCodePairing as DevicePairing } from '../features/settings/QRCodePairing';
+import FBRTab from '../components/cashier/FBRTab';
+import { CustomerLedgerPanel } from '../features/settings/config/CustomerLedgerPanel';
+import { SupplierLedgerPanel } from '../features/settings/config/SupplierLedgerPanel';
+import { KDSView } from '../operations/kds/KDSView';
 
 const CashierView: React.FC = () => {
-    const { currentUser } = useApp();
     const isMobile = useIsMobile();
-    const [activeTab, setActiveTab] = useState<'POS' | 'ORDERS' | 'PAYMENTS' | 'FBR' | 'PAIRING'>('POS');
+    const [activeTab, setActiveTab] = useState<'POS' | 'ORDERS' | 'PAYMENTS' | 'KITCHEN' | 'FBR' | 'PAIRING'>('POS');
 
     // Inject Google Fonts
     useEffect(() => {
@@ -37,6 +37,7 @@ const CashierView: React.FC = () => {
     const tabs = [
         { id: 'POS', label: 'POS', icon: Grid },
         { id: 'ORDERS', label: 'Orders', icon: List },
+        { id: 'KITCHEN', label: 'Kitchen', icon: UtensilsCrossed },
         { id: 'PAYMENTS', label: 'Payments', icon: CreditCard },
         { id: 'FBR', label: 'FBR', icon: Shield },
         { id: 'PAIRING', label: 'Pair', icon: Smartphone },
@@ -49,9 +50,33 @@ const CashierView: React.FC = () => {
             case 'ORDERS':
                 return <OrdersView />;
             case 'PAYMENTS':
-                return <PaymentsPlaceholder />;
+                return (
+                    <div className="flex flex-col h-full bg-[#0f1117] overflow-hidden">
+                        <div className="flex-1 overflow-y-auto p-4 space-y-8 custom-scrollbar">
+                           <section>
+                               <div className="flex items-center gap-3 mb-6 px-2">
+                                   <div className="w-1.5 h-6 bg-emerald-500 rounded-full" />
+                                   <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">Debtor Ledger & Receipts</h2>
+                               </div>
+                               <CustomerLedgerPanel />
+                           </section>
+
+                           <div className="h-px bg-white/5 mx-2" />
+
+                           <section className="pb-20">
+                               <div className="flex items-center gap-3 mb-6 px-2">
+                                   <div className="w-1.5 h-6 bg-blue-500 rounded-full" />
+                                   <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">Supplier Balance & Outflow</h2>
+                               </div>
+                               <SupplierLedgerPanel />
+                           </section>
+                        </div>
+                    </div>
+                );
+            case 'KITCHEN':
+                return <KDSView />;
             case 'FBR':
-                return <FBRPlaceholder />;
+                return <FBRTab />;
             case 'PAIRING':
                 return (
                     <div className="p-4 h-full bg-[#0f1117]">
@@ -130,53 +155,6 @@ const CashierView: React.FC = () => {
     );
 };
 
-// --- Sub-components (Placeholders) ---
-
-const PaymentsPlaceholder: React.FC = () => (
-    <div className="p-8 h-full bg-[#0f1117] flex flex-col items-center justify-center space-y-6">
-        <div className="w-20 h-20 bg-emerald-500/10 rounded-[2.5rem] flex items-center justify-center border border-emerald-500/20 shadow-2xl shadow-emerald-500/5">
-            <CreditCard size={40} className="text-emerald-400" />
-        </div>
-        <div className="text-center">
-            <h2 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">Payments Hub</h2>
-            <p className="text-slate-500 font-['IBM_Plex_Mono'] text-xs uppercase tracking-widest max-w-xs">
-                Settle Debtor Receipts and Record Supplier Outflow
-            </p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-2xl">
-            {[
-                { title: 'Debtor Receipt', desc: 'Settle outstanding customer khata', icon: User, color: 'indigo' },
-                { title: 'Supplier Payment', desc: 'Record cash payment to vendor', icon: Zap, color: 'orange' }
-            ].map((card, i) => (
-                <div key={i} className="bg-[#1a1d27] border border-slate-800 p-6 rounded-[2rem] hover:border-[#f97316]/50 transition-all cursor-pointer group">
-                    <card.icon size={24} className={`text-${card.color}-400 mb-4 group-hover:scale-110 transition-transform`} />
-                    <h3 className="text-sm font-black text-white uppercase mb-1">{card.title}</h3>
-                    <p className="text-[10px] text-slate-500 font-bold leading-relaxed">{card.desc}</p>
-                </div>
-            ))}
-        </div>
-    </div>
-);
-
-const FBRPlaceholder: React.FC = () => (
-    <div className="p-8 h-full bg-[#0f1117] flex flex-col items-center justify-center space-y-6">
-        <div className="w-20 h-20 bg-orange-500/10 rounded-[2.5rem] flex items-center justify-center border border-orange-500/20 shadow-2xl shadow-orange-500/5">
-            <Shield size={40} className="text-[#f97316]" />
-        </div>
-        <div className="text-center">
-            <h2 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">FBR Review</h2>
-            <p className="text-slate-500 font-['IBM_Plex_Mono'] text-xs uppercase tracking-widest max-w-xs">
-                Synchronization Queue and Compliance Dashboard
-            </p>
-        </div>
-        <div className="bg-[#1a1d27] border border-slate-800 p-8 rounded-[2rem] w-full max-w-md text-center">
-            <Clock size={32} className="text-slate-700 mx-auto mb-4" />
-            <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest leading-loose">
-                Sync Engine Offline<br/>
-                Pending Integration with Sync Tab logic
-            </p>
-        </div>
-    </div>
-);
+// FBRPlaceholder removed - using FBRTab component
 
 export default CashierView;
