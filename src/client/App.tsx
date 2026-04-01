@@ -79,6 +79,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [operationsConfig, setOperationsConfig] = useState<any>(null);
 
+  // ── Open Drawer modal state ─────────────────────────────────────────────
+  // Shown when the settle endpoint returns HTTP 402 SESSION_REQUIRED.
+  // Stores the exact orderId + payload so the retry uses identical data.
+  const [showOpenDrawerModal, setShowOpenDrawerModal] = useState(false);
+  const [pendingSettlePayload, setPendingSettlePayload] = useState<{ orderId: string; payload: any } | null>(null);
+  const [drawerFloat, setDrawerFloat] = useState('0');
+  const [drawerSubmitting, setDrawerSubmitting] = useState(false);
+
   const API_URL = (typeof window !== 'undefined' 
     ? (window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : window.location.origin + '/api') 
     : 'http://localhost:3001/api');
@@ -650,6 +658,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Opens cashier session then retries the pending settle call with the exact same payload.
+  const handleOpenDrawerAndRetry = async () => {
+    if (!pendingSettlePayload || drawerSubmitting) return;
+    setDrawerSubmitting(true);
+    try {
+      const openRes = await fetchWithAuth(`${API_URL}/cashier/open`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restaurantId: currentUser?.restaurant_id,
+          staffId: currentUser?.id,
+          openingFloat: Number(drawerFloat) || 0
+        })
+      });
+      if (!openRes.ok) {
+        const err = await openRes.json();
+        throw new Error(err.error || 'Failed to open cashier session');
+      }
+      const sessionData = await openRes.json();
+      setActiveSession(sessionData.session);
+      addNotification('success', 'Drawer opened — retrying payment...');
+
+      // Capture before clearing state
+      const { orderId, payload } = pendingSettlePayload;
+      setShowOpenDrawerModal(false);
+      setPendingSettlePayload(null);
+
+      // Retry the exact same settle call
+      const retryRes = await fetchWithAuth(`${API_URL}/orders/${orderId}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!retryRes.ok) {
+        const err = await retryRes.json();
+        throw new Error(err.error || 'Payment failed after session open');
+      }
+      fetchInitialData();
+      addNotification('success', 'Payment processed successfully');
+    } catch (e: any) {
+      addNotification('error', e.message);
+    } finally {
+      setDrawerSubmitting(false);
+    }
+  };
+
   return (
     <AppContext.Provider value={{
       currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, suppliers,
@@ -854,6 +908,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
+
+          // 🔒 SESSION GATE: backend returned 402 — no active cashier session.
+          // Save the pending payload and show the Open Drawer modal.
+          // The retry (handleOpenDrawerAndRetry) sends the exact same payload.
+          if (res.status === 402) {
+            const err = await res.json();
+            if (err.error === 'SESSION_REQUIRED') {
+              setPendingSettlePayload({ orderId, payload });
+              setDrawerFloat('0');
+              setShowOpenDrawerModal(true);
+              return false; // suppress generic error — modal handles UX
+            }
+          }
+
           if (!res.ok) {
             const err = await res.json();
             throw new Error(err.error || 'Payment processing failed');
@@ -897,6 +965,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     } as any}>
       {children}
+
+      {/* ─── Open Drawer Modal ──────────────────────────────────────────────
+           Triggered when POST /api/orders/:id/settle returns 402 SESSION_REQUIRED.
+           Opens a cashier session then auto-retries the exact same payment payload.
+      ──────────────────────────────────────────────────────────────────── */}
+      {showOpenDrawerModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {/* Backdrop */}
+          <div
+            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
+            onClick={() => { if (!drawerSubmitting) { setShowOpenDrawerModal(false); setPendingSettlePayload(null); } }}
+          />
+          {/* Panel */}
+          <div style={{
+            position: 'relative', background: '#0B0F19',
+            border: '1px solid rgba(251,191,36,0.25)', borderRadius: '18px',
+            padding: '32px', width: '100%', maxWidth: '430px',
+            boxShadow: '0 30px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04)'
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '16px' }}>
+              <div style={{
+                width: '46px', height: '46px', borderRadius: '12px', flexShrink: 0,
+                background: 'linear-gradient(135deg,rgba(251,191,36,0.2),rgba(251,191,36,0.05))',
+                border: '1px solid rgba(251,191,36,0.35)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px'
+              }}>🗝️</div>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#fff', letterSpacing: '-0.4px' }}>Open Your Drawer</h2>
+                <p style={{ margin: 0, fontSize: '10px', color: '#fbbf24', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Session Required to Process Payment</p>
+              </div>
+            </div>
+            <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '24px', lineHeight: 1.65, borderLeft: '2px solid rgba(251,191,36,0.3)', paddingLeft: '12px' }}>
+              A cashier session must be active before payments can be posted to the General Ledger.
+              Enter your opening float below — your drawer will be opened and the payment will be processed automatically.
+            </p>
+            {/* Float input */}
+            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' }}>Opening Float</label>
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              background: '#020617', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '10px', overflow: 'hidden', marginBottom: '24px'
+            }}>
+              <span style={{ padding: '0 14px', color: '#475569', fontSize: '14px', fontWeight: 700, borderRight: '1px solid rgba(255,255,255,0.06)' }}>Rs.</span>
+              <input
+                id="drawer-float-input"
+                type="number"
+                min="0"
+                step="1"
+                value={drawerFloat}
+                onChange={e => setDrawerFloat(e.target.value)}
+                onFocus={e => { if (e.target.value === '0') setDrawerFloat(''); }}
+                autoFocus
+                disabled={drawerSubmitting}
+                style={{
+                  flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                  color: '#fff', fontSize: '22px', fontWeight: 700,
+                  padding: '13px 16px', fontFamily: 'monospace'
+                }}
+                placeholder="0"
+              />
+            </div>
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                id="drawer-cancel-btn"
+                onClick={() => { setShowOpenDrawerModal(false); setPendingSettlePayload(null); }}
+                disabled={drawerSubmitting}
+                style={{
+                  flex: 1, padding: '13px', borderRadius: '10px',
+                  background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+                  color: '#64748b', fontSize: '13px', fontWeight: 700,
+                  cursor: drawerSubmitting ? 'not-allowed' : 'pointer'
+                }}
+              >Cancel</button>
+              <button
+                id="drawer-open-btn"
+                onClick={handleOpenDrawerAndRetry}
+                disabled={drawerSubmitting}
+                style={{
+                  flex: 2, padding: '13px', borderRadius: '10px',
+                  background: drawerSubmitting ? '#1e293b' : 'linear-gradient(135deg,#fbbf24,#f59e0b)',
+                  border: 'none', color: '#000',
+                  fontSize: '13px', fontWeight: 800,
+                  cursor: drawerSubmitting ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.02em', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px'
+                }}
+              >
+                {drawerSubmitting ? (
+                  <><span style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid rgba(0,0,0,0.3)', borderTopColor: '#000', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} /> Opening...</>
+                ) : (
+                  <>🗂️ Open Drawer &amp; Process Payment</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppContext.Provider>
   );
 };
