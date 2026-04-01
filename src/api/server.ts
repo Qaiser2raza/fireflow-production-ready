@@ -45,6 +45,7 @@ import { updateService } from './services/UpdateService';
 import { NetworkDiscoveryService } from './services/NetworkDiscoveryService';
 import financeRoutes from './routes/financeRoutes';
 import cashierRoutes from './routes/cashierRoutes.js';
+import { CashierSessionService } from './services/finance/CashierSessionService.js';
 import analyticsRoutes from './routes/analyticsRoutes';
 
 // ==========================================
@@ -139,7 +140,16 @@ const app = express();
 const server = http.createServer(app);
 const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-    : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:3000'];
+    : [
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002',
+        'http://127.0.0.1:5173',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:3001',
+        'http://127.0.0.1:3002'
+      ];
 
 const io = new Server(server, {
     cors: {
@@ -2326,6 +2336,17 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
         const { id } = req.params;
         const { payments, amount, paymentMethod, payment_method, customer_id } = req.body;
         const staffId = req.staffId;
+        const restaurantId = req.restaurantId!;
+
+        // 🔒 SESSION GATE: An active cashier session is mandatory before any payment is posted to GL.
+        // No role bypass — MANAGER and SUPER_ADMIN are equally subject to this requirement.
+        const activeSession = await CashierSessionService.getActiveSession(restaurantId, staffId!);
+        if (!activeSession) {
+            return res.status(402).json({
+                error: 'SESSION_REQUIRED',
+                message: 'No active cashier session. Please open your drawer before processing payments.'
+            });
+        }
 
         // 1. Prepare Payments List (support both array and legacy single-field format)
         let paymentList: { method: string, amount: number }[] = [];
