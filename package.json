@@ -14,6 +14,7 @@
     "lint": "echo 'Linting not configured yet'",
     "test": "echo 'Tests not configured yet'",
     "server": "node --import tsx src/api/server.ts",
+    "watchdog": "node scripts/watchdog.js",
     "server:fresh": "powershell -Command \"$p=(Get-NetTCPConnection -LocalPort 3001 -EA 0).OwningProcess; if($p){Stop-Process -Id $p -Force -EA 0; Start-Sleep 2}\" && npm run server",
     "kill:3001": "powershell -Command \"$p=(Get-NetTCPConnection -LocalPort 3001 -EA 0).OwningProcess; if($p){Stop-Process -Id $p -Force; Write-Host 'Killed port 3001'}else{Write-Host 'Port 3001 is free'}\"",
     "electron": "cross-env NODE_ENV=production node scripts/launch-electron.js",
