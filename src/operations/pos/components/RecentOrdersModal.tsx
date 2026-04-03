@@ -1,5 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
+import React, { useState, useMemo } from 'react';
 import { 
     X, Printer, Edit2, Clock, 
     Phone, ShoppingBag, Utensils, Bike, 
@@ -24,39 +23,28 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
 }) => {
     const [search, setSearch] = useState('');
     const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'READY' | 'CLOSED'>('ALL');
-    const [localOrders, setLocalOrders] = useState<Order[]>(orders);
-    const [, setRefreshing] = useState(false);
-
-    const refreshOrders = async () => {
-        setRefreshing(true);
-        try {
-            const res = await fetchWithAuth('/api/orders');
-            if (res.ok) {
-                const data = await res.json();
-                setLocalOrders(data);
-            }
-        } catch (err) {
-            // Fallback to prop data silently
-        } finally {
-            setRefreshing(false);
-        }
-    };
-
-    useEffect(() => {
-        if (isOpen) {
-            setLocalOrders(orders); // Seed with prop data immediately
-            refreshOrders();        // Then fetch fresh data in background
-        }
-    }, [isOpen]);
 
     const filteredOrders = useMemo(() => {
-        return localOrders
+        return orders
             .filter(o => {
-                // 1. Filter by Active Session (only show orders created after session opened)
+                // 1. Filter by Active Session
                 if (activeSession?.opened_at) {
                     const sessionStart = new Date(activeSession.opened_at).getTime();
                     const orderTime = new Date(o.created_at || 0).getTime();
-                    if (orderTime < sessionStart) return false;
+                    const completionTime = new Date(o.closed_at || o.updated_at || o.created_at).getTime();
+                    
+                    const isCompleted = ['CLOSED', 'CANCELLED', 'VOIDED'].includes(o.status as string);
+                    
+                    let belongsToShift = false;
+                    if (orderTime >= sessionStart) {
+                        belongsToShift = true; // Created during shift
+                    } else if (!isCompleted) {
+                        belongsToShift = true; // Still active/carried over
+                    } else if (completionTime >= sessionStart) {
+                        belongsToShift = true; // Closed/settled during shift
+                    }
+                    
+                    if (!belongsToShift) return false;
                 }
                 
                 // 2. Filter by search (Order # or Phone)
@@ -74,7 +62,7 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
                 return true;
             })
             .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-    }, [localOrders, activeSession, search, filterStatus]);
+    }, [orders, activeSession, search, filterStatus]);
 
     if (!isOpen) return null;
 

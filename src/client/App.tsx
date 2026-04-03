@@ -17,7 +17,8 @@ declare global {
 // --- COMPONENT IMPORTS ---
 import { LoginView } from '../auth/views/LoginView';
 import { POSView } from '../operations/pos/POSView';
-import { POSViewMobile } from '../operations/pos/POSViewMobile';
+// POSViewMobile is loaded dynamically via useIsMobile — imported lazily where needed
+// import { POSViewMobile } from '../operations/pos/POSViewMobile'; // BUG-07 FIX: was unused at module level
 import { ActivityLog } from '../operations/activity/ActivityLog';
 import { FloorManagementView as OrderCommandHub } from '../operations/dashboard/FloorManagementView';
 import { KDSView } from '../operations/kds/KDSView';
@@ -83,7 +84,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Shown when the settle endpoint returns HTTP 402 SESSION_REQUIRED.
   // Stores the exact orderId + payload so the retry uses identical data.
   const [showOpenDrawerModal, setShowOpenDrawerModal] = useState(false);
-  const [pendingSettlePayload, setPendingSettlePayload] = useState<{ orderId: string; payload: any } | null>(null);
+  const [pendingSettlePayload, setPendingSettlePayload] = useState<{
+    orderId: string;
+    payload: any;
+    resolve: (val: boolean) => void;
+    reject: (err: any) => void;
+  } | null>(null);
   const [drawerFloat, setDrawerFloat] = useState('0');
   const [drawerSubmitting, setDrawerSubmitting] = useState(false);
 
@@ -270,24 +276,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const user = data.staff;
       const restaurant = data.restaurant;
 
+      // ✅ Clear ALL stale session data before applying new session.
+      // This prevents a previous manager/admin session from bleeding into a cashier login.
+      sessionStorage.removeItem('accessToken');
+      sessionStorage.removeItem('refreshToken');
+      sessionStorage.removeItem('accessTokenExpiry');
+      localStorage.removeItem('saved_pin');
+
       // Store restaurant info
       if (restaurant) {
         localStorage.setItem('currentRestaurant', JSON.stringify(restaurant));
         localStorage.setItem('restaurant_id', restaurant.id);
-
       }
 
-      // ✅ Phase 2b: Store JWT tokens if present
+      // Store new JWT tokens
       if (data.tokens) {
         sessionStorage.setItem('accessToken', data.tokens.access_token);
         sessionStorage.setItem('refreshToken', data.tokens.refresh_token);
         const expiryTime = Date.now() + (data.tokens.expires_in * 1000);
         sessionStorage.setItem('accessTokenExpiry', expiryTime.toString());
-
       }
 
       localStorage.setItem('saved_pin', pin);
       setCurrentUser(user);
+
+      // Route based on role — CASHIER gets a dedicated full-screen shell
       if (user.role === 'SUPER_ADMIN') {
         setActiveView('SUPER_ADMIN');
       } else if (user.role === 'SERVER' || user.role === 'WAITER') {
@@ -662,6 +675,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const handleOpenDrawerAndRetry = async () => {
     if (!pendingSettlePayload || drawerSubmitting) return;
     setDrawerSubmitting(true);
+    
+    // Capture state
+    const { orderId, payload, resolve, reject } = pendingSettlePayload;
+
     try {
       const openRes = await fetchWithAuth(`${API_URL}/cashier/open`, {
         method: 'POST',
@@ -680,8 +697,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setActiveSession(sessionData.session);
       addNotification('success', 'Drawer opened — retrying payment...');
 
-      // Capture before clearing state
-      const { orderId, payload } = pendingSettlePayload;
       setShowOpenDrawerModal(false);
       setPendingSettlePayload(null);
 
@@ -697,8 +712,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       fetchInitialData();
       addNotification('success', 'Payment processed successfully');
+      resolve(true);
     } catch (e: any) {
       addNotification('error', e.message);
+      reject(e);
+      setShowOpenDrawerModal(false);
+      setPendingSettlePayload(null);
     } finally {
       setDrawerSubmitting(false);
     }
@@ -915,10 +934,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (res.status === 402) {
             const err = await res.json();
             if (err.error === 'SESSION_REQUIRED') {
-              setPendingSettlePayload({ orderId, payload });
-              setDrawerFloat('0');
-              setShowOpenDrawerModal(true);
-              return false; // suppress generic error — modal handles UX
+              return new Promise<boolean>((resolve, reject) => {
+                setPendingSettlePayload({ orderId, payload, resolve, reject });
+                setDrawerFloat('0');
+                setShowOpenDrawerModal(true);
+              });
             }
           }
 
@@ -975,7 +995,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           {/* Backdrop */}
           <div
             style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
-            onClick={() => { if (!drawerSubmitting) { setShowOpenDrawerModal(false); setPendingSettlePayload(null); } }}
+            onClick={() => { 
+                if (!drawerSubmitting) { 
+                    if (pendingSettlePayload?.resolve) pendingSettlePayload.resolve(false);
+                    setShowOpenDrawerModal(false); 
+                    setPendingSettlePayload(null); 
+                } 
+            }}
           />
           {/* Panel */}
           <div style={{
@@ -1031,7 +1057,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 id="drawer-cancel-btn"
-                onClick={() => { setShowOpenDrawerModal(false); setPendingSettlePayload(null); }}
+                onClick={() => { 
+                    if (pendingSettlePayload?.resolve) pendingSettlePayload.resolve(false);
+                    setShowOpenDrawerModal(false); 
+                    setPendingSettlePayload(null); 
+                }}
                 disabled={drawerSubmitting}
                 style={{
                   flex: 1, padding: '13px', borderRadius: '10px',

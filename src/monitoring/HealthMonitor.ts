@@ -178,41 +178,45 @@ class HealthMonitor {
       }
     });
 
-    // TODO: Send to Slack/Email/PagerDuty if webhook configured
-    // await this.notifySlack(status);
+    // BUG-14 FIX: Webhook notification is now active (no-ops if SLACK_WEBHOOK_URL not set)
+    if (process.env.SLACK_WEBHOOK_URL) {
+      await this.notifyWebhook(status);
+    }
   }
 
-  // private async notifySlack(status: HealthStatus): Promise<void> {
-  //   const webhook = process.env.SLACK_WEBHOOK_URL;
-  //   if (!webhook) return;
-  //
-  //   const color = status.status === 'unhealthy' ? '#FF0000' : '#FFAA00';
-  //   const message = {
-  //     attachments: [{
-  //       color,
-  //       title: `🚨 Fireflow ${status.status.toUpperCase()}`,
-  //       fields: [
-  //         { title: 'Database', value: status.checks.database.message, short: true },
-  //         { title: 'Memory', value: status.checks.memory.message, short: true },
-  //         { title: 'Timestamp', value: status.timestamp, short: false }
-  //       ]
-  //     }]
-  //   };
-  //
-  //   try {
-  //     await fetch(webhook, {
-  //       method: 'POST',
-  //       body: JSON.stringify(message)
-  //     });
-  //   } catch (err) {
-  //     logger.log({
-  //       level: LogLevel.WARN,
-  //       service: 'health_monitor',
-  //       action: 'slack_notification_failed',
-  //       error: { message: (err as Error).message }
-  //     });
-  //   }
-  // }
+  private async notifyWebhook(status: HealthStatus): Promise<void> {
+    const webhook = process.env.SLACK_WEBHOOK_URL;
+    if (!webhook) return;
+
+    const color = status.status === 'unhealthy' ? '#FF0000' : '#FFAA00';
+    const message = {
+      attachments: [{
+        color,
+        title: `🚨 Fireflow ${status.status.toUpperCase()} — ${new Date().toLocaleString()}`,
+        fields: [
+          { title: 'Database', value: status.checks.database.message, short: true },
+          { title: 'Memory',   value: status.checks.memory.message,   short: true },
+          { title: 'Disk',     value: status.checks.disk.message,     short: true },
+          { title: 'Timestamp', value: status.timestamp,              short: false }
+        ]
+      }]
+    };
+
+    try {
+      await fetch(webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(message)
+      });
+    } catch (err) {
+      logger.log({
+        level: LogLevel.WARN,
+        service: 'health_monitor',
+        action: 'webhook_notification_failed',
+        error: { message: (err as Error).message }
+      });
+    }
+  }
 }
 
 export default HealthMonitor;

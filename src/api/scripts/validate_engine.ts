@@ -20,7 +20,8 @@ async function main() {
             const RID = restaurant.id;
             console.log(`[SETUP] Tenant Created: ${RID}`);
 
-            const manager = await tx.staff.create({
+            // BUG-13 FIX: void-cast results that are only needed for DB side-effects
+            void await tx.staff.create({
                 data: {
                     restaurant_id: RID,
                     name: 'Manager Audit',
@@ -38,7 +39,7 @@ async function main() {
                 }
             });
 
-            const supplier = await tx.suppliers.create({
+            void await tx.suppliers.create({
                 data: {
                     restaurant_id: RID,
                     name: 'Test Audit Supplier',

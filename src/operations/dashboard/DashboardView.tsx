@@ -51,7 +51,8 @@ export const DashboardView: React.FC = () => {
       }
 
       // Fetch Finance Analytics
-      const resFinance = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/analytics/finance/summary?restaurant_id=${currentUser.restaurant_id}`);
+      const todayStr = new Date().toISOString().split('T')[0];
+      const resFinance = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/analytics/finance/summary?restaurant_id=${currentUser.restaurant_id}&startDate=${todayStr}&endDate=${todayStr}`);
       if (resFinance.ok) {
           const financeData = await resFinance.json();
           setStats((prev: any) => ({ ...prev, finance: financeData }));

@@ -3,7 +3,8 @@ import {
     Users, 
     Search, 
     Clock,
-    CreditCard
+    CreditCard,
+    CheckCircle
 } from 'lucide-react';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { useRestaurant } from '../../../client/RestaurantContext';
@@ -14,12 +15,29 @@ import { Input } from '../../../shared/ui/Input';
 
 export const CustomerLedgerPanel: React.FC = () => {
     const { currentRestaurant } = useRestaurant();
-    const { addNotification } = useAppContext();
+    const { addNotification, currentUser } = useAppContext();
     const [customers, setCustomers] = useState<any[]>([]);
     const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
     const [ledgerEntries, setLedgerEntries] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [search, setSearch] = useState('');
+
+    const handleApprove = async (entryId: string) => {
+        if (!confirm('Approve this receipt and post to General Ledger?')) return;
+        try {
+            const baseUrl = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
+            const res = await fetchWithAuth(`${baseUrl}/accounting/ledger/${entryId}/approve`, {
+                method: 'PATCH',
+                body: JSON.stringify({ type: 'CUSTOMER' })
+            });
+            if (res.ok) {
+                if (selectedCustomer) fetchLedger(selectedCustomer.id);
+            }
+        } catch (err: any) {
+            console.error('Approval failed:', err);
+            addNotification('error', 'Approval failed: ' + err.message);
+        }
+    };
 
     useEffect(() => {
         fetchCustomers();
@@ -135,7 +153,9 @@ export const CustomerLedgerPanel: React.FC = () => {
                                             <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Type</th>
                                             <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Description</th>
                                             <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Debit / Credit</th>
+                                            <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Status</th>
                                             <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Balance</th>
+                                            <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Action</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-800/50">
@@ -159,8 +179,26 @@ export const CustomerLedgerPanel: React.FC = () => {
                                                 }`}>
                                                     {entry.entry_type === 'SALE' ? '+' : '-'} Rs. {Number(entry.amount).toLocaleString()}
                                                 </td>
+                                                <td className="p-4 text-center">
+                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest ${
+                                                        entry.entry_status === 'approved' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
+                                                    }`}>
+                                                        {entry.entry_status || 'approved'}
+                                                    </span>
+                                                </td>
                                                 <td className="p-4 text-xs font-mono text-slate-400 text-right">
                                                     Rs. {Number(entry.balance_after).toLocaleString()}
+                                                </td>
+                                                <td className="p-4 text-center">
+                                                    {entry.entry_status === 'provisional' && ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') && (
+                                                        <button
+                                                            onClick={() => handleApprove(entry.id)}
+                                                            className="inline-flex items-center gap-1.5 px-2 py-1 bg-emerald-500 text-white rounded text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20"
+                                                        >
+                                                            <CheckCircle size={10} />
+                                                            Approve
+                                                        </button>
+                                                    )}
                                                 </td>
                                             </tr>
                                         ))}

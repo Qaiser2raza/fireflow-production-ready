@@ -29,6 +29,8 @@ export const POSView: React.FC = () => {
   const [estimatedPickupTime, setEstimatedPickupTime] = useState<Date | undefined>(undefined);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [receiptAutoPrint, setReceiptAutoPrint] = useState(false);
+  const [receiptOverrideOrder, setReceiptOverrideOrder] = useState<any>(null);
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
@@ -1023,10 +1025,12 @@ export const POSView: React.FC = () => {
           breakdown={breakdown}
           customer={customers.find(c => c.id === customerId) || { name: customerName, phone: customerPhone, id: customerId }}
           onClose={() => setShowPaymentModal(false)}
-          onPrintReceipt={async () => {
+          onPrintReceipt={async (autoPrint, finalOrder) => {
               const orderId = (activeOrderData || orderToEdit)?.id;
               if (orderId) {
                   setActiveOrderId(orderId);
+                  setReceiptAutoPrint(!!autoPrint);
+                  if (finalOrder) setReceiptOverrideOrder(finalOrder);
                   setShowReceiptPreview(true);
               }
           }}
@@ -1036,12 +1040,12 @@ export const POSView: React.FC = () => {
           }}
           onProcessPayment={async (total, method, tendered, _discountReason, payments, pCustomerId) => {
             const orderId = (activeOrderData || orderToEdit)?.id;
-            if (!orderId) return;
+            if (!orderId) return false;
 
             try {
               const finalCustomerId = pCustomerId || customerId;
 
-              await processPayment(orderId, {
+              const success = await processPayment(orderId, {
                 id: `txn_${Date.now()}`,
                 orderId,
                 amount: total,
@@ -1064,19 +1068,31 @@ export const POSView: React.FC = () => {
                 tax_type: breakdown.tax_type
               } as any);
 
-              // Payment succeeded — let PaymentModal show its success screen.
-              // resetPad + modal close will happen via onPaymentCompleteClose.
+              // If success is false, processPayment failed or was intercepted.
+              // We return false to PaymentModal so it DOES NOT show the success screen.
+              if (success === false) return false;
+              
+              // Only return true if payment fully went through
+              return true;
             } catch (error) {
               console.error("Payment Error:", error);
+              return false;
             }
           }}
         />
       )}
-      {showReceiptPreview && (currentOrderItems.length > 0) && (
+      {showReceiptPreview && (currentOrderItems.length > 0 || !!receiptOverrideOrder) && (
         <ReceiptPreviewModal
           isOpen={showReceiptPreview}
-          onClose={() => setShowReceiptPreview(false)}
-          order={{
+          autoPrint={receiptAutoPrint}
+          // Pass orderId so the modal fetches fresh data from the server on open
+          orderId={receiptOverrideOrder?.id || activeOrderId || undefined}
+          onClose={() => {
+              setShowReceiptPreview(false);
+              setReceiptAutoPrint(false);
+              setReceiptOverrideOrder(null);
+          }}
+          order={receiptOverrideOrder || {
             id: activeOrderId || 'PREVIEW',
             order_number: activeOrderData?.order_number || 'PREVIEW',
             status: activeOrderData?.status || 'DRAFT',
@@ -1093,9 +1109,9 @@ export const POSView: React.FC = () => {
             service_charge: breakdown.serviceCharge,
             delivery_fee: breakdown.deliveryFee,
             discount: breakdown.discount,
-            tax_type: breakdown.tax_type, // SYNC: Pass tax type for inclusive/exclusive logic
-            transactions: activeOrderData?.transactions || [], // SYNC: Pass transactions for payment breakdown
-            breakdown: breakdown, // Pass the full breakdown object
+            tax_type: breakdown.tax_type,
+            transactions: activeOrderData?.transactions || [],
+            breakdown: breakdown,
             restaurant_id: currentUser?.restaurant_id || ''
           } as any}
         />
@@ -1112,7 +1128,9 @@ export const POSView: React.FC = () => {
             setShowRecentOrders(false);
           }}
           onPrintReceipt={(order) => {
-             setActiveOrderId(order.id);
+             // Pass the full live order so ReceiptPreviewModal renders real data
+             setReceiptOverrideOrder(order);
+             setReceiptAutoPrint(false);
              setShowReceiptPreview(true);
              setShowRecentOrders(false);
           }}

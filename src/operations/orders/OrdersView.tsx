@@ -78,7 +78,7 @@ export const OrdersView: React.FC = () => {
       const tableName = order.table?.name || '';
       const sectionName = sections.find(s => s.id === order.table?.section_id)?.name || '';
       const customerName = order.customer_name || order.takeaway_orders?.[0]?.customer_name || order.delivery_orders?.[0]?.customer_name || '';
-      const orderId = order.id.split('-').pop() || '';
+      const orderId = order.order_number || order.id.split('-').pop() || '';
 
       return (
         orderId.toLowerCase().includes(searchLower) ||
@@ -194,7 +194,7 @@ export const OrdersView: React.FC = () => {
                         </div>
                         <div className="flex flex-col">
                           <span className="text-white font-mono font-bold text-sm tracking-tighter">
-                            #{order.id.split('-').pop()?.toUpperCase()}
+                            #{order.order_number || order.id.split('-').pop()?.toUpperCase()}
                           </span>
                           <span className="text-[9px] text-slate-500 font-black uppercase tracking-widest">{order.type}</span>
                         </div>

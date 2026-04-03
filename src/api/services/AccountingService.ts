@@ -485,7 +485,7 @@ export class AccountingService {
             // Step 1: Lock the latest ledger entry for this customer to prevent race conditions
             const lastEntry: any[] = await tx.$queryRaw`
                 SELECT amount FROM customer_ledgers 
-                WHERE restaurant_id = ${data.restaurantId} AND customer_id = ${data.customerId} 
+                WHERE restaurant_id = ${data.restaurantId}::uuid AND customer_id = ${data.customerId}::uuid 
                 ORDER BY created_at DESC, id DESC 
                 LIMIT 1 
                 FOR UPDATE
@@ -983,6 +983,7 @@ export class AccountingService {
             }
         });
 
+
         return customers.map(c => {
             const totalSpend = c.orders.reduce((sum: number, o: any) => sum + Number(o.total), 0);
             const orderCount = c.orders.length;
@@ -1361,6 +1362,106 @@ export class AccountingService {
         });
 
         return [headers.join(','), ...rows].join('\n');
+    }
+
+    /**
+     * Approves a provisional ledger entry and posts it to the General Ledger.
+     */
+    async approveLedgerEntry(entryId: string, type: 'CUSTOMER' | 'SUPPLIER', staffId: string) {
+        const { journalEntryService } = await import('./JournalEntryService');
+        return await prisma.$transaction(async (tx) => {
+            if (type === 'CUSTOMER') {
+                const entry = await tx.customer_ledgers.findUnique({
+                    where: { id: entryId },
+                    include: { customer: true }
+                });
+
+                if (!entry || entry.entry_status !== 'provisional') {
+                    throw new Error('Entry not found or already approved');
+                }
+
+                // 1. Update Status
+                const updated = await tx.customer_ledgers.update({
+                    where: { id: entryId },
+                    data: {
+                        entry_status: 'approved' as any,
+                        reviewed_by: staffId,
+                        reviewed_at: new Date()
+                    }
+                });
+
+                // 2. Post to General Ledger
+                await journalEntryService.recordCustomerPaymentJournal({
+                    restaurantId: entry.restaurant_id,
+                    customerId: entry.customer_id,
+                    amount: entry.amount,
+                    paymentMethod: 'CASH', // Default for cashier receipts
+                    processedBy: staffId,
+                    referenceId: entryId
+                }, tx);
+
+                return updated;
+            } else {
+                const entry = await tx.supplier_ledgers.findUnique({
+                    where: { id: entryId }
+                });
+
+                if (!entry || entry.entry_status !== 'provisional') {
+                    throw new Error('Entry not found or already approved');
+                }
+
+                // 1. Update Status
+                const updated = await tx.supplier_ledgers.update({
+                    where: { id: entryId },
+                    data: {
+                        entry_status: 'approved' as any,
+                        reviewed_by: staffId,
+                        reviewed_at: new Date()
+                    }
+                });
+
+                // 2. Post to General Ledger
+                await this.recordSupplierJournalDirectly({
+                    restaurantId: entry.restaurant_id,
+                    supplierId: entry.supplier_id,
+                    amount: entry.amount,
+                    notes: entry.description,
+                    processedBy: staffId,
+                    referenceId: entryId
+                }, tx);
+
+                return updated;
+            }
+        });
+    }
+
+    /**
+     * Helper to post supplier journal entries without double-posting the ledger.
+     */
+    private async recordSupplierJournalDirectly(data: any, tx: any) {
+        const amount = new Decimal(data.amount.toString());
+        // CREDIT: Cash (1000)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            transactionType: 'CREDIT',
+            amount: amount,
+            referenceType: 'PAYOUT',
+            referenceId: data.referenceId,
+            description: `Supplier payment (Approved): ${data.notes}`,
+            processedBy: data.processedBy
+        }, tx);
+
+        // DEBIT: Accounts Payable (supplier account)
+        await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.supplierId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'PAYOUT',
+            referenceId: data.referenceId,
+            description: `Supplier payable reduced (Approved): ${data.notes}`,
+            processedBy: data.processedBy
+        }, tx);
     }
 }
 

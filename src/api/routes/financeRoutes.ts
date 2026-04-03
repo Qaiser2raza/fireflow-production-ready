@@ -145,4 +145,22 @@ router.get('/suppliers/:id/ledger', authMiddleware, async (req, res) => {
     }
 });
 
+/**
+ * GET /api/finance/customers/:id/ledger
+ * Fetch customer audit trail for finance/payments dashboard
+ */
+router.get('/customers/:id/ledger', authMiddleware, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const ledger = await prisma.customer_ledgers.findMany({
+            where: { customer_id: id, restaurant_id: req.restaurantId },
+            orderBy: { created_at: 'desc' },
+            take: 50
+        });
+        res.json(ledger);
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch customer ledger' });
+    }
+});
+
 export default router;

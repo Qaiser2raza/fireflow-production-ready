@@ -28,6 +28,7 @@ import { ZReportModal } from '../../shared/components/ZReportModal';
 import { ChartOfAccountsModal } from './components/ChartOfAccountsModal';
 import { TrialBalanceModal } from './components/TrialBalanceModal';
 import { ManualJournalEntryModal } from './components/ManualJournalEntryModal';
+import { DaybookReviewModal } from './components/DaybookReviewModal';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const FinancialCommandCenter: React.FC = () => {
@@ -89,6 +90,7 @@ const FinancialCommandCenter: React.FC = () => {
     const [selectedRiderId, setSelectedRiderId] = useState<string>('');
     const [showTrialBalanceModal, setShowTrialBalanceModal] = useState(false);
     const [showManualJournalModal, setShowManualJournalModal] = useState(false);
+    const [showDaybookReviewModal, setShowDaybookReviewModal] = useState(false);
 
     const fetchSession = async () => {
         try {
@@ -518,6 +520,14 @@ const FinancialCommandCenter: React.FC = () => {
                     >
                         <History size={16} strokeWidth={3} /> Z-Report History
                     </button>
+                    {activeSession && (
+                        <button
+                            onClick={() => setShowDaybookReviewModal(true)}
+                            className="px-5 py-3 bg-slate-900 border border-slate-800 text-orange-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:border-orange-500/50 hover:text-orange-300 transition-all flex items-center gap-2"
+                        >
+                            <Info size={16} strokeWidth={3} /> Review Daybook
+                        </button>
+                    )}
                     {activeSession && (
                         <button
                             onClick={() => setShowPayoutModal(true)}
@@ -1026,6 +1036,17 @@ const FinancialCommandCenter: React.FC = () => {
                     }}
                 />
             )}
+
+            {/* Daybook Review Modal */}
+            <DaybookReviewModal
+                isOpen={showDaybookReviewModal}
+                sessionId={activeSession?.id || ''}
+                onClose={() => setShowDaybookReviewModal(false)}
+                onResolved={() => {
+                    fetchLedger();
+                    fetchGLStats();
+                }}
+            />
 
             {/* Report History Modal */}
             {showHistoryModal && (

@@ -144,8 +144,6 @@ export const ShiftManagementOverlay: React.FC<Props> = ({ currentUser, onSession
   }
 
   if (mode === 'CLOSE') {
-    const expected = Number(sessionSummary?.calculatedSummary?.openingFloat || 0) + Number(sessionSummary?.calculatedSummary?.cashSales || 0);
-    const diff = (Number(actualCash) || 0) - expected;
 
     return (
       <div className="fixed inset-0 z-[100] bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
@@ -156,19 +154,6 @@ export const ShiftManagementOverlay: React.FC<Props> = ({ currentUser, onSession
             </div>
             <h2 className="text-3xl font-bold text-white mb-1">End of Shift</h2>
             <p className="text-slate-400">Count your cash and reconcile the drawer.</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 mb-8">
-            <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-700/50">
-              <p className="text-xs text-slate-500 uppercase font-bold mb-1">Expectation</p>
-              <p className="text-xl font-bold text-white">Rs. {expected.toLocaleString()}</p>
-            </div>
-            <div className={`p-4 rounded-2xl border ${diff >= 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
-              <p className="text-xs text-slate-500 uppercase font-bold mb-1">Variance</p>
-              <p className={`text-xl font-bold ${diff >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {diff > 0 ? '+' : ''}{diff.toLocaleString()}
-              </p>
-            </div>
           </div>
 
           <div className="space-y-6">

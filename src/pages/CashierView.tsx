@@ -5,7 +5,8 @@ import {
     CreditCard, 
     Shield, 
     Smartphone,
-    UtensilsCrossed
+    UtensilsCrossed,
+    BookOpen
 } from 'lucide-react';
 import { useIsMobile } from '../client/hooks/useIsMobile';
 
@@ -15,13 +16,14 @@ import { POSViewMobile } from '../operations/pos/POSViewMobile';
 import { OrdersView } from '../operations/orders/OrdersView';
 import { QRCodePairing as DevicePairing } from '../features/settings/QRCodePairing';
 import FBRTab from '../components/cashier/FBRTab';
+import DaybookTab from '../components/cashier/DaybookTab';
 import { CustomerLedgerPanel } from '../features/settings/config/CustomerLedgerPanel';
 import { SupplierLedgerPanel } from '../features/settings/config/SupplierLedgerPanel';
 import { KDSView } from '../operations/kds/KDSView';
 
 const CashierView: React.FC = () => {
     const isMobile = useIsMobile();
-    const [activeTab, setActiveTab] = useState<'POS' | 'ORDERS' | 'PAYMENTS' | 'KITCHEN' | 'FBR' | 'PAIRING'>('POS');
+    const [activeTab, setActiveTab] = useState<'POS' | 'ORDERS' | 'PAYMENTS' | 'KITCHEN' | 'FBR' | 'DAYBOOK' | 'PAIRING'>('POS');
 
     // Inject Google Fonts
     useEffect(() => {
@@ -39,6 +41,7 @@ const CashierView: React.FC = () => {
         { id: 'ORDERS', label: 'Orders', icon: List },
         { id: 'KITCHEN', label: 'Kitchen', icon: UtensilsCrossed },
         { id: 'PAYMENTS', label: 'Payments', icon: CreditCard },
+        { id: 'DAYBOOK', label: 'Daybook', icon: BookOpen },
         { id: 'FBR', label: 'FBR', icon: Shield },
         { id: 'PAIRING', label: 'Pair', icon: Smartphone },
     ];
@@ -75,6 +78,8 @@ const CashierView: React.FC = () => {
                 );
             case 'KITCHEN':
                 return <KDSView />;
+            case 'DAYBOOK':
+                return <DaybookTab />;
             case 'FBR':
                 return <FBRTab />;
             case 'PAIRING':
@@ -154,7 +159,5 @@ const CashierView: React.FC = () => {
         </div>
     );
 };
-
-// FBRPlaceholder removed - using FBRTab component
 
 export default CashierView;

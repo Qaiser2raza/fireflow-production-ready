@@ -215,11 +215,22 @@ if (config.NODE_ENV === 'production') {
             }
         }
 
-        // 5. Run cleanupExpiredCodes() on startup and every hour
-        await cleanupExpiredCodes();
+        // 5. Run cleanupExpiredCodes() — defer 5s to let DB fully connect before querying
+        // FIX BUG-09: startup race condition (P1001) when Postgres is slow to boot
+        setTimeout(async () => {
+            try {
+                await cleanupExpiredCodes();
+            } catch (e: any) {
+                console.warn('[STARTUP] cleanupExpiredCodes deferred — DB not ready yet:', e.message);
+            }
+        }, 5000);
         setInterval(async () => {
-            await cleanupExpiredCodes();
-        }, 3600000); 
+            try {
+                await cleanupExpiredCodes();
+            } catch (e: any) {
+                console.warn('[JOBS] cleanupExpiredCodes failed (DB issue?):', e.message);
+            }
+        }, 3600000);
 
         // 6. Log the local access URL
         const localUrl = NetworkDiscoveryService.getServerURL();
@@ -354,12 +365,14 @@ app.get('/api/connectivity', (_req, res) => {
         }
     }
 
+    // FIX BUG-05: was hardcoded to port 3000 — now uses actual configured port
+    const PORT = process.env.PORT || 3001;
     res.json({
         success: true,
         hostname: hostname,
-        localUrl: `http://${hostname}.local:3000`,
-        ips: addresses.map(ip => `http://${ip}:3000`),
-        port: process.env.PORT || 3001
+        localUrl: `http://${hostname}.local:${PORT}`,
+        ips: addresses.map(ip => `http://${ip}:${PORT}`),
+        port: PORT
     });
 });
 
@@ -2169,6 +2182,13 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
         data.restaurantId = req.restaurantId;
 
         const service = OrderServiceFactory.getService(data.type);
+
+        if (data.type === 'DINE_IN' && !data.table_id) {
+            return res.status(400).json({ 
+                error: 'Table selection is required for Dine-In orders.' 
+            });
+        }
+
         const result = await service.createOrder(data);
 
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'INSERT', data: result });
@@ -2409,7 +2429,8 @@ app.post('/api/orders/:id/settle', authMiddleware, async (req, res) => {
                 
                 const limit = new Decimal(customer?.credit_limit?.toString() || '0');
                 if (limit.gt(0)) {
-                    const currentBalance = await accounting.getCustomerBalance(req.restaurantId, customerId, tx);
+                    // FIX BUG-01: req.restaurantId can technically be undefined (TS2345); authMiddleware guarantees it
+                    const currentBalance = await accounting.getCustomerBalance(req.restaurantId!, customerId, tx);
                     const khataAmount = paymentList
                         .filter(p => p.method === 'CREDIT')
                         .reduce((sum, p) => sum + p.amount, 0);
@@ -2555,15 +2576,15 @@ app.post('/api/floor/seat-party', authMiddleware, async (req, res) => {
 // Mount delivery/rider routes (SaaS Protected internally)
 app.use('/api', deliveryRoutes);
 app.use('/api', customerRoutes);
+// FIX BUG-02: accountingRoutes was also mounted unguarded at /api/payouts — removed duplicate.
+// Auth is enforced inside accountingRoutes itself via authMiddleware + requireRole.
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/expenses', expenseRoutes);
+// FIX BUG-03: coaRoutes was mounted twice (/api/accounting/coa AND /api/coa) — removed duplicate /api/coa.
 app.use('/api/accounting/coa', coaRoutes);
 app.use('/api/reports', reportRoutes);
-app.use('/api/payouts', requireRole('MANAGER', 'ADMIN'), accountingRoutes); // or specific payout routes if separate
-app.use('/api/coa', coaRoutes);
 app.use('/api/finance', financeRoutes);
-// Removed missing analyticsRoutes usage
-// app.use('/api/analytics', analyticsRoutes);
+// FIX BUG-06: Removed ghost comment. analyticsRoutes is live at line ~2965.
 app.use('/api/fbr', fbrRoutes);
 app.use('/api/printers', printerRoutes);
 app.use('/api/cashier', cashierRoutes);

@@ -1,11 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     Shield, 
-    AlertCircle, 
     CheckCircle2, 
-    Ban, 
-    TrendingUp, 
-    Search, 
     Filter, 
     ChevronDown, 
     ChevronUp,
@@ -67,18 +63,6 @@ const FBRTab: React.FC = () => {
         fetchData();
     }, [filters]);
 
-    // Actions
-    const handleVoid = async (id: string) => {
-        if (!window.confirm('Mark this order as VOIDED for FBR? This cannot be undone.')) return;
-        try {
-            const res = await fetchWithAuth(`${API_URL}/fbr/void/${id}`, { method: 'POST' });
-            if (!res.ok) throw new Error('Void failed');
-            addNotification?.('success', 'Order voided from FBR queue');
-            fetchData();
-        } catch (error) {
-            addNotification?.('error', 'Failed to void order');
-        }
-    };
 
     const handleBatchSync = async () => {
         if (selectedIds.size === 0) return;
@@ -127,7 +111,7 @@ const FBRTab: React.FC = () => {
                 {[
                     { label: 'Pending', count: aggregate?.pending?.count || 0, amount: aggregate?.pending?.total || 0, icon: Clock, color: 'text-orange-500' },
                     { label: 'Synced Today', count: aggregate?.synced?.count || 0, amount: aggregate?.synced?.total || 0, icon: CheckCircle2, color: 'text-emerald-500' },
-                    { label: 'Voided', count: aggregate?.voided?.count || 0, amount: aggregate?.voided?.total || 0, icon: Ban, color: 'text-slate-400' },
+                    { label: 'Voided / Failed', count: (aggregate?.voided?.count || 0) + (aggregate?.failed?.count || 0), amount: aggregate?.voided?.total || 0, icon: Shield, color: 'text-slate-400' },
                     { label: 'Tax Liability Today', amount: aggregate?.tax_liability || 0, icon: Shield, color: 'text-[#f97316]', highlight: true },
                 ].map((stat, i) => (
                     <div key={i} className={`p-4 rounded-2xl border ${stat.highlight ? 'bg-[#f97316]/10 border-[#f97316]/20' : 'bg-[#1a1d27] border-white/5'}`}>
@@ -244,21 +228,13 @@ const FBRTab: React.FC = () => {
                                             </span>
                                         </td>
                                         <td className="p-4 text-right">
+                                            {/* Sync only — Void/Cancel is managed from the Control Hub (ORDERS tab) */}
                                             <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                {order.fbr_sync_status === 'PENDING' && (
-                                                    <button 
-                                                        onClick={() => handleVoid(order.id)}
-                                                        className="p-2 hover:bg-red-500/10 text-red-400 rounded-lg transition-colors border border-transparent hover:border-red-500/20"
-                                                        title="Void"
-                                                    >
-                                                        <Ban size={14} />
-                                                    </button>
-                                                )}
                                                 {order.fbr_sync_status === 'PENDING' && (
                                                     <button 
                                                         onClick={() => { toggleSelection(order.id); handleBatchSync(); }}
                                                         className="p-2 hover:bg-[#f97316]/10 text-[#f97316] rounded-lg transition-colors border border-transparent hover:border-[#f97316]/20"
-                                                        title="Immediate Sync"
+                                                        title="Sync Now"
                                                     >
                                                         <RefreshCw size={14} />
                                                     </button>

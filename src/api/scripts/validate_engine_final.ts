@@ -20,7 +20,8 @@ async function main() {
             const RID = restaurant.id;
             console.log(`[SETUP] Tenant Created: ${RID}`);
 
-            const manager = await tx.staff.create({
+            // BUG-13 FIX: void-cast — only DB side-effect needed, result unused
+            void await tx.staff.create({
                 data: {
                     restaurant_id: RID,
                     name: 'Manager Audit',

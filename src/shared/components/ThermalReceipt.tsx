@@ -36,13 +36,28 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
     const serviceCharge = breakdown.serviceCharge !== undefined ? Number(breakdown.serviceCharge) : Number(order.service_charge || 0);
     const deliveryFee = breakdown.deliveryFee !== undefined ? Number(breakdown.deliveryFee) : Number(order.delivery_fee || 0);
     const discount = breakdown.discount !== undefined ? Number(breakdown.discount) : Number(order.discount || 0);
-    const total = breakdown.total !== undefined ? Number(breakdown.total) : 
-                breakdown.grandTotal !== undefined ? Number(breakdown.grandTotal) : 
+    const total = breakdown.total !== undefined ? Number(breakdown.total) :
+                breakdown.grandTotal !== undefined ? Number(breakdown.grandTotal) :
                 Number(order.total || (subtotal + tax + serviceCharge + deliveryFee - discount));
 
     const isPaid = order.payment_status === 'PAID' || order.status === 'CLOSED';
     const isFBRSynced = order.fbr_sync_status === 'SYNCED';
     const isExempt = order.is_tax_exempt === true;
+
+    // ── Determine Settlement Data Availability ───────────────────────────────
+    // Only show Settlement block if actual payment data exists
+    const paidTransactions = (order.transactions || []).filter(t => t.status === 'PAID');
+    const hasTransactions = paidTransactions.length > 0;
+    const hasPaymentBreakdown = ((breakdown as any)?.paymentBreakdown?.length ?? 0) > 0;
+    // Single payment_method is valid only if the order is actually paid
+    const hasSingleMethod = !!order.payment_method && isPaid;
+    const hasSettlementData = hasTransactions || hasPaymentBreakdown || hasSingleMethod;
+
+    // Customer name (resolves from multiple possible fields)
+    const customerName = order.customer_name || (order as any).customerName || '';
+    const customerPhone = order.customer_phone || (order as any).customerPhone || '';
+
+    // Invoice title
     const invoiceTitle = isExempt
         ? 'TAX EXEMPT INVOICE'
         : isFBRSynced
@@ -50,6 +65,14 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
             : isPaid
                 ? 'TAX INVOICE'
                 : 'PROFORMA INVOICE';
+
+    // Helper: display label for payment method
+    const methodLabel = (method: string, name?: string) => {
+        if (method === 'CREDIT') {
+            return name ? `KHATA (A/C) — ${name}` : 'KHATA (A/C)';
+        }
+        return method;
+    };
 
     return (
         <div
@@ -62,15 +85,15 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
         >
             {/* Header */}
             <div className="text-center mb-6 border-b-2 border-black pb-4">
-                <h1 className="text-2xl font-black uppercase tracking-tighter mb-1">{config.businessName || order.restaurants?.name || 'FIREFLOW POS'}</h1>
+                <h1 className="text-2xl font-black uppercase tracking-tighter mb-1">{config.receipt_header_1 || config.business_name || order.restaurants?.name || 'FIREFLOW POS'}</h1>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">
                     {order.restaurants?.type?.replace('_', ' ') || 'RESTAURANT'}
                 </p>
                 <div className="mt-2 text-[10px] leading-relaxed">
-                    <p>{config.businessAddress || order.restaurants?.address || 'DHA Phase 6, Main Boulevard'}</p>
-                    <p>{config.businessPhone || order.restaurants?.phone || 'Lahore, Pakistan'}</p>
-                    {(config.ntnNumber || order.restaurants?.ntn) && <p className="font-bold mt-1 text-xs">NTN: {config.ntnNumber || order.restaurants?.ntn}</p>}
-                    {(config.strnNumber) && <p className="font-bold mt-1 text-xs">STRN: {config.strnNumber}</p>}
+                    <p>{config.receipt_header_2 || config.business_address || order.restaurants?.address || 'DHA Phase 6, Main Boulevard'}</p>
+                    <p>{config.business_phone || order.restaurants?.phone || 'Lahore, Pakistan'}</p>
+                    {(config.ntn_number || order.restaurants?.ntn) && <p className="font-bold mt-1 text-xs">NTN: {config.ntn_number || order.restaurants?.ntn}</p>}
+                    {(config.strn_number) && <p className="font-bold mt-1 text-xs">STRN: {config.strn_number}</p>}
                     {order.restaurants?.fbr_pos_id && <p className="font-bold text-[9px] text-slate-500 mt-1 uppercase">FBR POS ID: {order.restaurants?.fbr_pos_id}</p>}
                 </div>
             </div>
@@ -104,13 +127,18 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                 )}
             </div>
 
-            {/* Customer Info */}
-            {(order.customer_name || order.customerName) && (
+            {/* Customer Info — show for named customers OR credit sales */}
+            {(customerName || order.payment_method === 'CREDIT') && (
                 <div className="border-y border-black border-dashed py-2 mb-4 bg-slate-50">
-                    <p className="text-[9px] font-bold text-slate-500 uppercase mb-1">Guest Details</p>
-                    <p className="font-bold text-[11px]">{order.customer_name || order.customerName}</p>
-                    {order.customer_phone && <p className="text-[10px]">{order.customer_phone}</p>}
+                    <p className="text-[9px] font-bold text-slate-500 uppercase mb-1">
+                        {order.payment_method === 'CREDIT' ? 'Credit Account' : 'Guest Details'}
+                    </p>
+                    {customerName && <p className="font-bold text-[11px]">{customerName}</p>}
+                    {customerPhone && <p className="text-[10px]">{customerPhone}</p>}
                     {order.delivery_address && <p className="text-[9px] mt-1 italic">{order.delivery_address}</p>}
+                    {order.payment_method === 'CREDIT' && !customerName && (
+                        <p className="text-[10px] italic text-slate-500">Charged to Account</p>
+                    )}
                 </div>
             )}
 
@@ -165,7 +193,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                 {!order.is_tax_exempt && tax > 0 && (
                     <div className="flex justify-between text-[11px]">
                         <span className="font-bold tracking-widest">
-                            {config.taxLabel || (order.tax_type === 'INCLUSIVE' ? 'INCL. TAX (GST 16%)' : 'GST (16%)')}
+                            {config.tax_label || (order.tax_type === 'INCLUSIVE' ? 'INCL. TAX (GST 16%)' : 'GST (16%)')}
                         </span>
                         <span className="font-bold italic">
                             {order.tax_type === 'INCLUSIVE' ? `[${formatCurrency(tax)}]` : formatCurrency(tax)}
@@ -195,57 +223,71 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                 </div>
             </div>
 
-            {/* Payment Info / Breakdown */}
-            <div className="mt-4 p-2 border border-black bg-slate-50 uppercase font-black text-[10px] tracking-widest leading-relaxed">
-                <p className="border-b border-black pb-1 mb-1 text-center italic">Settlement Details</p>
-                
-                {/* Regular Payments Ledger - from transactions */}
-                {order.transactions?.filter(t => t.status === 'PAID').length ? (
-                    order.transactions.filter(t => t.status === 'PAID').map((t, i) => (
-                        <div key={i} className="mb-1">
-                            <div className="flex justify-between px-2">
-                                <span>{t.payment_method === 'CREDIT' ? 'KHATA (A/C)' : t.payment_method}:</span>
-                                <span>{formatCurrency(Number(t.amount))}</span>
-                            </div>
-                            {/* Cash Details: Tendered and Change */}
-                            {t.payment_method === 'CASH' && (t.tenderedAmount || t.changeGiven) && (
-                                <div className="px-4 text-[9px] opacity-70 italic lowercase">
-                                    <div className="flex justify-between">
-                                        <span>- received:</span>
-                                        <span>{formatCurrency(Number(t.tenderedAmount || t.amount))}</span>
-                                    </div>
-                                    {(t.changeGiven || 0) > 0 && (
-                                        <div className="flex justify-between">
-                                            <span>- change:</span>
-                                            <span>{formatCurrency(Number(t.changeGiven))}</span>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    ))
-                ) : (breakdown as any)?.paymentBreakdown?.length ? (
-                    /* Fallback: Read from breakdown.paymentBreakdown (set during settlement) */
-                    ((breakdown as any).paymentBreakdown as { method: string; amount: number }[]).map((p, i) => (
-                        <div key={i} className="flex justify-between px-2 mb-1">
-                            <span>{p.method === 'CREDIT' ? 'KHATA (A/C)' : p.method}:</span>
-                            <span>{formatCurrency(p.amount)}</span>
-                        </div>
-                    ))
-                ) : (
-                    /* Last resort: legacy single payment_method field */
-                    <div className="flex justify-between px-2">
-                        <span>{order.payment_method === 'CREDIT' ? 'KHATA (A/C)' : (order.payment_method || 'CASH')}:</span>
-                        <span>{formatCurrency(total)}</span>
-                    </div>
-                )}
+            {/* Settlement Details — ONLY shown when actual payment data exists */}
+            {hasSettlementData && (
+                <div className="mt-4 p-2 border border-black bg-slate-50 uppercase font-black text-[10px] tracking-widest leading-relaxed">
+                    <p className="border-b border-black pb-1 mb-1 text-center italic">Settlement Details</p>
 
-                {isPaid && <p className="text-center mt-2 border-t border-black pt-1">*** FULLY PAID ***</p>}
-            </div>
+                    {hasTransactions ? (
+                        /* Priority 1: Actual paid transactions from DB */
+                        paidTransactions.map((t, i) => (
+                            <div key={i} className="mb-1">
+                                <div className="flex justify-between px-2">
+                                    <span>
+                                        {methodLabel(
+                                            t.payment_method,
+                                            t.payment_method === 'CREDIT' ? customerName : undefined
+                                        )}:
+                                    </span>
+                                    <span>{formatCurrency(Number(t.amount))}</span>
+                                </div>
+                                {/* Cash Details: Tendered and Change */}
+                                {t.payment_method === 'CASH' && (t.tenderedAmount || t.changeGiven) && (
+                                    <div className="px-4 text-[9px] opacity-70 italic lowercase">
+                                        <div className="flex justify-between">
+                                            <span>- received:</span>
+                                            <span>{formatCurrency(Number(t.tenderedAmount || t.amount))}</span>
+                                        </div>
+                                        {(t.changeGiven || 0) > 0 && (
+                                            <div className="flex justify-between">
+                                                <span>- change:</span>
+                                                <span>{formatCurrency(Number(t.changeGiven))}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        ))
+                    ) : hasPaymentBreakdown ? (
+                        /* Priority 2: Payment breakdown from PaymentModal (live preview / Settle & Print) */
+                        ((breakdown as any).paymentBreakdown as { method: string; amount: number }[]).map((p, i) => (
+                            <div key={i} className="flex justify-between px-2 mb-1">
+                                <span>
+                                    {methodLabel(
+                                        p.method,
+                                        p.method === 'CREDIT' ? customerName : undefined
+                                    )}:
+                                </span>
+                                <span>{formatCurrency(p.amount)}</span>
+                            </div>
+                        ))
+                    ) : (
+                        /* Priority 3: Single payment_method field (only when order is paid) */
+                        <div className="flex justify-between px-2">
+                            <span>
+                                {methodLabel(order.payment_method || 'CASH', customerName || undefined)}:
+                            </span>
+                            <span>{formatCurrency(total)}</span>
+                        </div>
+                    )}
+
+                    {isPaid && <p className="text-center mt-2 border-t border-black pt-1">*** FULLY PAID ***</p>}
+                </div>
+            )}
 
             {/* Footer */}
             <div className="mt-8 text-center space-y-2">
-                <p className="text-[10px] italic">*** {config.receiptFooterText || 'Thank You!'} ***</p>
+                <p className="text-[10px] italic">*** {config.receipt_footer || 'Thank You!'} ***</p>
                 <p className="text-[9px]">
                     {order.restaurants?.name ? `${order.restaurants.name} | ` : ''}Powered by Fireflow POS
                 </p>
@@ -273,7 +315,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
                         <style>
                             {`@import url('https://fonts.googleapis.com/css2?family=Libre+Barcode+128&display=swap');`}
                         </style>
-                        <div 
+                        <div
                             style={{ fontFamily: "'Libre Barcode 128', sans-serif", fontSize: '48px', lineHeight: '48px' }}
                         >
                             {order.order_number}

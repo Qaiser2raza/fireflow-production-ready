@@ -20,10 +20,15 @@ async function main() {
   await prisma.staff_wallet_logs.deleteMany({})
   await prisma.rider_settlements.deleteMany({})
   await prisma.rider_shifts.deleteMany({})
+
+  // Accounting related
+  await prisma.journal_entry_lines.deleteMany({})
+  await prisma.journal_entries.deleteMany({})
   await prisma.ledger_entries.deleteMany({})
   await prisma.payouts.deleteMany({})
-  await prisma.cash_sessions.deleteMany({})
+  await prisma.cashier_sessions.deleteMany({})
   await prisma.expenses.deleteMany({})
+
   await prisma.reservations.deleteMany({})
   await prisma.registered_devices.deleteMany({})
   await prisma.pairing_codes.deleteMany({})
@@ -41,25 +46,37 @@ async function main() {
   await prisma.staff.deleteMany({})
   await prisma.customers.deleteMany({})
   await prisma.vendors.deleteMany({})
+  await prisma.chart_of_accounts.deleteMany({})
   await prisma.restaurants.deleteMany({})
 
   console.log('✅ Database cleared.')
 
   // 2. Create Restaurant
   console.log('🏗️  Seeding Restaurant...')
-  const restaurant = await prisma.restaurants.create({
-    data: {
+  const restaurantId = 'b1972d7d-8374-4b55-9580-95a15f18f656';
+  const restaurant = await prisma.restaurants.upsert({
+    where: { id: restaurantId },
+    update: {
+      name: 'Fireflow Restaurant',
+      currency: 'PKR',
+      phone: '+92 300 1234567',
+      address: 'DHA Phase 6, Lahore',
+    },
+    create: {
+      id: restaurantId,
       name: 'Fireflow Restaurant',
       slug: 'fireflow-restaurant',
       currency: 'PKR',
       address: 'DHA Phase 6, Lahore',
       phone: '+92 300 1234567',
       is_active: true,
+      subscription_status: 'trial',
+      subscription_plan: 'enterprise',
       tax_enabled: true,
       tax_rate: 16,
       service_charge_enabled: true,
       service_charge_rate: 10,
-      logo_url: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', // A professional looking restaurant icon
+      logo_url: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png',
     },
   })
 
@@ -100,28 +117,28 @@ async function main() {
   console.log('🏗️  Seeding Menu Items...')
   const menuItems = [
     // Starters
-    { name: 'Chicken Corn Soup', price: 450, category_id: catStarters.id, station_id: kitchen.id },
-    { name: 'Finger Fish', price: 1200, category_id: catStarters.id, station_id: kitchen.id },
+    { name: 'Chicken Corn Soup', name_urdu: 'چکن کارن سوپ', price: 450, category_id: catStarters.id, station_id: kitchen.id },
+    { name: 'Finger Fish', name_urdu: 'فنگر فش', price: 1200, category_id: catStarters.id, station_id: kitchen.id },
 
     // Mains
-    { name: 'Chicken Karahi (Full)', price: 2800, category_id: catMains.id, station_id: kitchen.id },
-    { name: 'Mutton Handi', price: 3500, category_id: catMains.id, station_id: kitchen.id },
-    { name: 'Chicken Jalfrezi', price: 1800, category_id: catMains.id, station_id: kitchen.id },
+    { name: 'Chicken Karahi (Full)', name_urdu: 'چکن کڑاہی (فل)', price: 2800, category_id: catMains.id, station_id: kitchen.id },
+    { name: 'Mutton Handi', name_urdu: 'مٹن ہانڈی', price: 3500, category_id: catMains.id, station_id: kitchen.id },
+    { name: 'Chicken Jalfrezi', name_urdu: 'چکن جلفریزی', price: 1800, category_id: catMains.id, station_id: kitchen.id },
 
     // BBQ
-    { name: 'Chicken Tikka', price: 450, category_id: catBBQ.id, station_id: tandoor.id },
-    { name: 'Seekh Kabab (4 pcs)', price: 1100, category_id: catBBQ.id, station_id: tandoor.id },
-    { name: 'Malai Boti', price: 1400, category_id: catBBQ.id, station_id: tandoor.id },
+    { name: 'Chicken Tikka', name_urdu: 'چکن تکہ', price: 450, category_id: catBBQ.id, station_id: tandoor.id },
+    { name: 'Seekh Kabab (4 pcs)', name_urdu: 'سیخ کباب (4 عدد)', price: 1100, category_id: catBBQ.id, station_id: tandoor.id },
+    { name: 'Malai Boti', name_urdu: 'ملائی بوٹی', price: 1400, category_id: catBBQ.id, station_id: tandoor.id },
 
     // Breads
-    { name: 'Roti (Tandoori)', price: 40, category_id: catBreads.id, station_id: tandoor.id },
-    { name: 'Naan (Plain)', price: 60, category_id: catBreads.id, station_id: tandoor.id },
-    { name: 'Garlic Naan', price: 120, category_id: catBreads.id, station_id: tandoor.id },
+    { name: 'Roti (Tandoori)', name_urdu: 'روٹی (تندوری)', price: 40, category_id: catBreads.id, station_id: tandoor.id },
+    { name: 'Naan (Plain)', name_urdu: 'نان (سادہ)', price: 60, category_id: catBreads.id, station_id: tandoor.id },
+    { name: 'Garlic Naan', name_urdu: 'گارلک نان', price: 120, category_id: catBreads.id, station_id: tandoor.id },
 
     // Drinks
-    { name: 'Mint Margarita', price: 550, category_id: catDrinks.id, station_id: bar.id },
-    { name: 'Fresh Lime', price: 250, category_id: catDrinks.id, station_id: bar.id },
-    { name: 'Coke/Pepsi', price: 120, category_id: catDrinks.id, station_id: bar.id },
+    { name: 'Mint Margarita', name_urdu: 'منٹ مارگریٹا', price: 550, category_id: catDrinks.id, station_id: bar.id },
+    { name: 'Fresh Lime', name_urdu: 'فریش لائم', price: 250, category_id: catDrinks.id, station_id: bar.id },
+    { name: 'Coke/Pepsi', name_urdu: 'کوک/پیپسی', price: 120, category_id: catDrinks.id, station_id: bar.id },
   ]
 
   for (const item of menuItems) {

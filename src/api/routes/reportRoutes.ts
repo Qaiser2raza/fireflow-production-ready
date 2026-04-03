@@ -26,7 +26,14 @@ const reportQuerySchema = z.object({
 /**
  * Helper to handle report requests and return HTML or JSON
  */
-async function handleReport(req: any, res: any, title: string, type: string, fetchFn: Function) {
+// BUG-15 FIX: Typed fetchFn properly instead of loose Function type
+async function handleReport(
+    req: any,
+    res: any,
+    title: string,
+    type: string,
+    fetchFn: (restaurantId: string, range: { start: Date; end: Date }) => Promise<any>
+) {
     try {
         const { start, end } = reportQuerySchema.parse(req.query);
         const data = await fetchFn(req.restaurantId!, {
@@ -47,7 +54,8 @@ async function handleReport(req: any, res: any, title: string, type: string, fet
         res.setHeader('Content-Type', 'text/html');
         res.send(html);
     } catch (e: any) {
-        res.status(400).json({ error: e.message });
+        // BUG-15 FIX: was just e.message which gives 'undefined' for non-Error throws
+        res.status(400).json({ error: e?.message || String(e) || 'Unknown report error' });
     }
 }
 
