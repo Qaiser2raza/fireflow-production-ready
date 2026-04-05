@@ -76,10 +76,10 @@ async function storeAuthToken(token: string, deviceId: string): Promise<void> {
             await win.electron.store.set('deviceAuthToken', token);
             await win.electron.store.set('deviceId', deviceId);
         } else {
-            // Fallback: sessionStorage (not persisted)
-            sessionStorage.setItem('deviceAuthToken', token);
-            sessionStorage.setItem('deviceId', deviceId);
-            console.warn('⚠️ Using sessionStorage for auth token. Not recommended for production.');
+            // Fallback: localStorage (persisted)
+            localStorage.setItem('deviceAuthToken', token);
+            localStorage.setItem('deviceId', deviceId);
+            console.log('✅ Using localStorage for auth token persistence.');
         }
     } catch (error) {
         console.error('Failed to store auth token:', error);

@@ -238,7 +238,7 @@ export const MenuView: React.FC = () => {
         const formDataUpload = new FormData();
         formDataUpload.append('image', file);
 
-        const token = sessionStorage.getItem('accessToken');
+        const token = localStorage.getItem('accessToken');
         const res = await fetch('/api/upload/menu-image', {
             method: 'POST',
             headers: token ? { 'Authorization': `Bearer ${token}` } : {},

@@ -124,7 +124,9 @@ export const DashboardView: React.FC = () => {
           <h1 className="text-3xl sm:text-4xl font-serif font-black text-white tracking-tighter uppercase transition-all leading-none">
             {currentRestaurant?.name || 'FireFlow'} <span className="text-slate-500 font-normal block sm:inline mt-1 sm:mt-0">Dashboard</span>
           </h1>
-          <p className="text-[8px] sm:text-[9px] text-slate-600 font-bold uppercase tracking-[0.2em] mt-2 sm:mt-1">Cravex Solutions Pakistan</p>
+          <p className="text-[8px] sm:text-[9px] text-slate-600 font-bold uppercase tracking-[0.2em] mt-2 sm:mt-1">
+            {currentRestaurant?.name?.toUpperCase() || 'RESTAURANT'} | {currentRestaurant?.slug || 'SYSTEM'}
+          </p>
         </div>
 
         <div className="w-full sm:w-auto flex gap-3">

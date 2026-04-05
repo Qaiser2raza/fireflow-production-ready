@@ -80,6 +80,7 @@ export abstract class BaseOrderService implements IOrderService {
                         station: item.station || item.menu_item?.station,
                         station_id: item.station_id || item.menu_item?.station_id || undefined,
                         item_status: item.item_status || 'DRAFT',
+                        variant_id: item.variant_id || undefined,
                         modifications: item.modifications ? JSON.stringify(item.modifications) : undefined
                     }))
                 });
@@ -97,14 +98,23 @@ export abstract class BaseOrderService implements IOrderService {
                 discount: breakdown.discount,
                 tax_enabled: breakdown.tax_enabled,
                 service_charge_enabled: breakdown.service_charge_enabled,
-                delivery_fee_enabled: breakdown.delivery_fee_enabled
+                delivery_fee_enabled: breakdown.delivery_fee_enabled,
+                tax_type: breakdown.tax_type,
+                tax_exempt: breakdown.tax_exempt,
+                discount_type: breakdown.discount_type,
+                discount_value: breakdown.discount_value,
+                discountReason: breakdown.discountReason
             } : undefined);
 
             // 5. Return full order with items for frontend sync
             return await tx.orders.findUnique({
                 where: { id: order.id },
                 include: {
-                    order_items: true,
+                    order_items: {
+                        include: {
+                            variant: true
+                        }
+                    },
                     dine_in_orders: true,
                     takeaway_orders: true,
                     delivery_orders: true,
@@ -231,6 +241,7 @@ export abstract class BaseOrderService implements IOrderService {
                             station: item.station || item.menu_item?.station,
                             station_id: item.station_id || item.menu_item?.station_id || undefined,
                             item_status: item.item_status || 'PENDING', // v3.0: Changed from DRAFT
+                            variant_id: item.variant_id || undefined,
                             modifications: item.modifications ? JSON.stringify(item.modifications) : undefined
                         }))
                     });
@@ -267,14 +278,23 @@ export abstract class BaseOrderService implements IOrderService {
                 discount: breakdown.discount,
                 tax_enabled: breakdown.tax_enabled,
                 service_charge_enabled: breakdown.service_charge_enabled,
-                delivery_fee_enabled: breakdown.delivery_fee_enabled
+                delivery_fee_enabled: breakdown.delivery_fee_enabled,
+                tax_type: breakdown.tax_type,
+                tax_exempt: breakdown.tax_exempt,
+                discount_type: breakdown.discount_type,
+                discount_value: breakdown.discount_value,
+                discountReason: breakdown.discountReason
             } : undefined);
 
             // 5. Return full order with items for frontend sync
             return await tx.orders.findUnique({
                 where: { id },
                 include: {
-                    order_items: true,
+                    order_items: {
+                        include: {
+                            variant: true
+                        }
+                    },
                     dine_in_orders: true,
                     takeaway_orders: true,
                     delivery_orders: true,
@@ -301,7 +321,11 @@ export abstract class BaseOrderService implements IOrderService {
         const order = await prisma.orders.findUnique({
             where: { id },
             include: {
-                order_items: true,
+                order_items: {
+                    include: {
+                        variant: true
+                    }
+                },
                 dine_in_orders: true,
                 takeaway_orders: true,
                 delivery_orders: true,
@@ -346,6 +370,9 @@ export abstract class BaseOrderService implements IOrderService {
           delivery_fee_enabled?: boolean;
           tax_type?: TaxType;
           tax_exempt?: boolean;
+          discount_type?: string;
+          discount_value?: number;
+          discountReason?: string;
         }
     ): Promise<void> {
         // 1. Fetch Order and its Items
@@ -443,12 +470,12 @@ export abstract class BaseOrderService implements IOrderService {
 
         const breakdown = {
             // Preserve UI-only fields from previous save
-            discount_type: existingBreakdown.discount_type || 'flat',
-            discount_value: existingBreakdown.discount_value ?? rounded.discount_amount,
-            discountReason: existingBreakdown.discountReason || '',
-            tax_enabled: existingBreakdown.tax_enabled ?? true,
-            service_charge_enabled: existingBreakdown.service_charge_enabled ?? false,
-            delivery_fee_enabled: existingBreakdown.delivery_fee_enabled ?? false,
+            discount_type: overrideBreakdown?.discount_type ?? existingBreakdown.discount_type ?? 'flat',
+            discount_value: overrideBreakdown?.discount_value ?? existingBreakdown.discount_value ?? rounded.discount_amount,
+            discountReason: overrideBreakdown?.discountReason ?? existingBreakdown.discountReason ?? '',
+            tax_enabled: overrideBreakdown?.tax_enabled ?? existingBreakdown.tax_enabled ?? config.tax_enabled ?? true,
+            service_charge_enabled: overrideBreakdown?.service_charge_enabled ?? existingBreakdown.service_charge_enabled ?? config.svc_enabled ?? false,
+            delivery_fee_enabled: overrideBreakdown?.delivery_fee_enabled ?? existingBreakdown.delivery_fee_enabled ?? (order.type === 'DELIVERY'),
             // Financial fields (always recalculated)
             subtotal: rounded.subtotal,
             discount_amount: rounded.discount_amount,

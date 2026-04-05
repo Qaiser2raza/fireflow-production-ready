@@ -228,6 +228,16 @@ export interface MenuItem {
     // Included relation
     category_rel?: MenuCategory;
     station_rel?: Station;
+    variant?: MenuItemVariant[];
+}
+
+export interface MenuItemVariant {
+    id: string;
+    menu_item_id: string;
+    name: string;
+    name_urdu?: string;
+    price: number;
+    created_at?: Date | string;
 }
 
 export interface MenuCategory {
@@ -256,6 +266,8 @@ export interface OrderItem {
     // helpers for UI if needed, but DB is source of truth
     menu_item?: MenuItem; // Optional, if included in fetch
     station_rel?: Station;
+    variant_id?: string;
+    variant?: MenuItemVariant;
 }
 
 export interface DineInOrder {

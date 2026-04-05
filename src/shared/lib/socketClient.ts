@@ -17,7 +17,7 @@ class SocketIOClient {
         if (this.socket) return; // Already connecting or connected
 
         // Get JWT token for authentication
-        const accessToken = sessionStorage.getItem('accessToken');
+        const accessToken = localStorage.getItem('accessToken');
 
         this.socket = io(SOCKET_URL, {
             transports: ['websocket', 'polling'], // Prefer websockets

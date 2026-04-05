@@ -108,11 +108,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartRegistrati
             <Shield size={32} />
           </div>
           <h1 className="text-4xl lg:text-5xl font-serif font-bold text-white mb-4 leading-tight">
-            Precision <br />
+            {restaurantName || 'Fireflow'} <br />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-gold-400 to-gold-600">Secure Access</span>
           </h1>
           <p className="text-slate-400 text-sm max-w-sm leading-relaxed mb-6">
-            Identify yourself to access the Fireflow Neural Network. All access is logged.
+            Identify yourself to access the {restaurantName || 'Fireflow'} Neural Network. All access is logged.
           </p>
           <div className="flex items-center gap-3 text-xs font-medium text-slate-500">
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800">
@@ -294,7 +294,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartRegistrati
         <div className="flex flex-col items-center gap-1">
           <div className="flex flex-col md:flex-row items-center gap-1 md:gap-2 grayscale brightness-200">
             <span className="text-[8px] md:text-[10px] font-black tracking-[0.2em] text-slate-500 uppercase">Powered By</span>
-            <span className="text-xs md:text-sm font-black tracking-widest text-gold-500">CRAVEX SOLUTIONS PAKISTAN</span>
+            <span className="text-xs md:text-sm font-black tracking-widest text-gold-500">{restaurantName?.toUpperCase() || 'FIREFLOW POS'}</span>
           </div>
           <div className="flex flex-col items-center">
             <span className="text-[8px] md:text-[9px] text-slate-500 font-bold tracking-wider">© 2026 Cravex Solutions. All rights reserved.</span>

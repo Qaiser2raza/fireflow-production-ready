@@ -190,6 +190,19 @@ model menu_items {
   stations        stations?        @relation(fields: [station_id], references: [id])
   order_items     order_items[]
   recipe_items    recipe_items[]
+  variant        menu_item_variants[]
+}
+
+model menu_item_variants {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  menu_item_id  String      @db.Uuid
+  name          String      @db.VarChar(50)
+  name_urdu     String?     @db.VarChar(50)
+  price         Decimal     @db.Decimal(10, 2)
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @default(now())
+  menu_items    menu_items  @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+  order_items   order_items[]
 }
 
 model order_items {
@@ -214,7 +227,9 @@ model order_items {
   force_ready_at       DateTime?
   force_ready_by       String?     @db.Uuid
   item_status          ItemStatus? @default(PENDING)
+  variant_id           String?     @db.Uuid
   menu_items           menu_items  @relation(fields: [menu_item_id], references: [id])
+  variant             menu_item_variants? @relation(fields: [variant_id], references: [id])
   orders               orders      @relation(fields: [order_id], references: [id])
   stations             stations?   @relation(fields: [station_id], references: [id])
 }

@@ -17,8 +17,8 @@ declare global {
 // --- COMPONENT IMPORTS ---
 import { LoginView } from '../auth/views/LoginView';
 import { POSView } from '../operations/pos/POSView';
-// POSViewMobile is loaded dynamically via useIsMobile — imported lazily where needed
-// import { POSViewMobile } from '../operations/pos/POSViewMobile'; // BUG-07 FIX: was unused at module level
+import { POSViewMobile } from '../operations/pos/POSViewMobile';
+
 import { ActivityLog } from '../operations/activity/ActivityLog';
 import { FloorManagementView as OrderCommandHub } from '../operations/dashboard/FloorManagementView';
 import { KDSView } from '../operations/kds/KDSView';
@@ -51,6 +51,67 @@ import { getBilingualMessage } from '../shared/lib/userMessages';
 // --- 1. CONTEXT DEFINITION ---
 import { AppContext, useAppContext } from './contexts/AppContext';
 export { useAppContext };
+
+// --- HELPERS (Global Logic) ---
+const formatMenuItem = (m: any) => ({
+  ...m,
+  price: Number(m.price || 0),
+  available: m.is_available ?? m.available ?? true,
+  is_available: m.is_available ?? m.available ?? true,
+  image_url: m.image_url || m.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80',
+  nameUrdu: m.name_urdu,
+  name_urdu: m.name_urdu,
+  category_rel: m.category_rel
+});
+
+const formatOrder = (o: any, tables: Table[] = []) => {
+  const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
+  const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
+  const delivery = o.delivery_order || (o.delivery_orders && o.delivery_orders[0]);
+
+  // Find the table object
+  const tableObj = Array.isArray(tables) ? tables.find((t: any) => t.id === (dineIn?.table_id || o.table_id)) : null;
+
+  const orderItems = (o.order_items || []).map((item: any) => ({
+    ...item,
+    unit_price: Number(item.unit_price || 0),
+    total_price: Number(item.total_price || (Number(item.unit_price || 0) * (item.quantity || 0))),
+    item_name: item.item_name || item.menu_item?.name || item.item_name || "Unknown Item"
+  }));
+
+  const total = Number(o.total || 0);
+  const tax = Number(o.tax || 0);
+  const service_charge = Number(o.service_charge || 0);
+  const discount = Number(o.discount || 0);
+  const delivery_fee = Number(o.delivery_fee || 0);
+
+  // Ensure breakdown has a valid subtotal
+  const breakdown = o.breakdown && typeof o.breakdown === 'object' ? o.breakdown : {
+    subtotal: total - tax - service_charge - delivery_fee + discount,
+    tax,
+    serviceCharge: service_charge,
+    discount,
+    deliveryFee: delivery_fee,
+    grandTotal: total
+  };
+
+  return {
+    ...o,
+    total,
+    tax,
+    service_charge,
+    delivery_fee,
+    discount,
+    breakdown,
+    tableId: dineIn?.table_id || o.table_id || null,
+    table: tableObj,
+    guestCount: dineIn?.guest_count || o.guest_count || 1,
+    customerName: takeaway?.customer_name || delivery?.customer_name || o.customer_name || "Guest",
+    customerPhone: takeaway?.customer_phone || delivery?.customer_phone || o.customer_phone || "",
+    timestamp: new Date(o.created_at || o.timestamp || Date.now()),
+    order_items: orderItems
+  };
+};
 
 // --- 2. PROVIDER (The Logic Layer) ---
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -99,16 +160,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Helper: Get Authorization header with JWT token
   const getAuthHeaders = () => {
-    const accessToken = sessionStorage.getItem('accessToken');
-    const expiry = sessionStorage.getItem('accessTokenExpiry');
+    const accessToken = localStorage.getItem('accessToken');
+    const expiry = localStorage.getItem('accessTokenExpiry');
     
 
     // Check if token is expired
     if (expiry && Date.now() > parseInt(expiry)) {
       console.log('[Auth] Token expired, clearing session');
-      sessionStorage.removeItem('accessToken');
-      sessionStorage.removeItem('refreshToken');
-      sessionStorage.removeItem('accessTokenExpiry');
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+      localStorage.removeItem('accessTokenExpiry');
       return { 'Content-Type': 'application/json' };
     }
     
@@ -168,70 +229,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         configRes.ok ? configRes.json() : null
       ]);
 
-      const mapOrder = (o: any) => {
-        const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
-        const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
-        const delivery = o.delivery_order || (o.delivery_orders && o.delivery_orders[0]);
-
-        // Find the table object
-        const tableObj = Array.isArray(tables) ? tables.find((t: any) => t.id === (dineIn?.table_id || o.table_id)) : null;
-
-        const orderItems = (o.order_items || []).map((item: any) => ({
-          ...item,
-          unit_price: Number(item.unit_price || 0),
-          total_price: Number(item.total_price || (Number(item.unit_price || 0) * (item.quantity || 0))),
-          item_name: item.item_name || item.menu_item?.name || item.item_name || "Unknown Item"
-        }));
-
-        const total = Number(o.total || 0);
-        const tax = Number(o.tax || 0);
-        const service_charge = Number(o.service_charge || 0);
-        const discount = Number(o.discount || 0);
-        const delivery_fee = Number(o.delivery_fee || 0);
-
-        // Ensure breakdown has a valid subtotal
-        const breakdown = o.breakdown && typeof o.breakdown === 'object' ? o.breakdown : {
-          subtotal: total - tax - service_charge - delivery_fee + discount,
-          tax,
-          serviceCharge: service_charge,
-          discount,
-          deliveryFee: delivery_fee,
-          grandTotal: total
-        };
-
-        return {
-          ...o,
-          total,
-          tax,
-          service_charge,
-          delivery_fee,
-          discount,
-          breakdown,
-          tableId: dineIn?.table_id || o.table_id || null,
-          table: tableObj,
-          guestCount: dineIn?.guest_count || o.guest_count || 1,
-          customerName: takeaway?.customer_name || delivery?.customer_name || o.customer_name || "Guest",
-          customerPhone: takeaway?.customer_phone || delivery?.customer_phone || o.customer_phone || "",
-          timestamp: new Date(o.created_at || o.timestamp || Date.now()),
-          order_items: orderItems
-        };
-      };
-
-      const mappedOrders = (Array.isArray(ordersData) ? ordersData : []).map(mapOrder);
-
+      const mappedOrders = (Array.isArray(ordersData) ? ordersData : []).map(o => formatOrder(o, tablesData));
       setOrders(mappedOrders);
       setTables(Array.isArray(tablesData) ? tablesData : []);
       setSections(Array.isArray(sectionsData) ? sectionsData : []);
-      setMenuItems(Array.isArray(menuData) ? menuData.map((m: any) => ({
-        ...m,
-        price: Number(m.price || 0),
-        available: m.is_available ?? m.available ?? true,
-        is_available: m.is_available ?? m.available ?? true,
-        image_url: m.image_url || m.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80',
-        nameUrdu: m.name_urdu,
-        name_urdu: m.name_urdu,
-        category_rel: m.category_rel
-      })) : []);
+      setMenuItems(Array.isArray(menuData) ? menuData.map(formatMenuItem) : []);
       setMenuCategories(Array.isArray(catData) ? catData : []);
       setServers(Array.isArray(staffData) ? staffData : []);
       setTransactions(Array.isArray(trxData) ? trxData.map((t: any) => ({ ...t, amount: Number(t.amount) })) : []);
@@ -278,9 +280,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // ✅ Clear ALL stale session data before applying new session.
       // This prevents a previous manager/admin session from bleeding into a cashier login.
-      sessionStorage.removeItem('accessToken');
-      sessionStorage.removeItem('refreshToken');
-      sessionStorage.removeItem('accessTokenExpiry');
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+      localStorage.removeItem('accessTokenExpiry');
       localStorage.removeItem('saved_pin');
 
       // Store restaurant info
@@ -291,10 +293,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Store new JWT tokens
       if (data.tokens) {
-        sessionStorage.setItem('accessToken', data.tokens.access_token);
-        sessionStorage.setItem('refreshToken', data.tokens.refresh_token);
+        localStorage.setItem('accessToken', data.tokens.access_token);
+        localStorage.setItem('refreshToken', data.tokens.refresh_token);
         const expiryTime = Date.now() + (data.tokens.expires_in * 1000);
-        sessionStorage.setItem('accessTokenExpiry', expiryTime.toString());
+        localStorage.setItem('accessTokenExpiry', expiryTime.toString());
       }
 
       localStorage.setItem('saved_pin', pin);
@@ -326,9 +328,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logout = () => {
     // Clear JWT tokens
-    sessionStorage.removeItem('accessToken');
-    sessionStorage.removeItem('refreshToken');
-    sessionStorage.removeItem('accessTokenExpiry');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('accessTokenExpiry');
 
     // Clear app state
     setCurrentUser(null);
@@ -340,8 +342,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Validate token on app load and restore session
   useEffect(() => {
     const validateToken = async () => {
-      const token = sessionStorage.getItem('accessToken');
-      const expiry = sessionStorage.getItem('accessTokenExpiry');
+      const token = localStorage.getItem('accessToken');
+      const expiry = localStorage.getItem('accessTokenExpiry');
       
       if (token && expiry) {
         if (Date.now() > parseInt(expiry)) {
@@ -384,7 +386,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 🔑 Join the restaurant room if user is logged in
     if (currentUser?.restaurant_id) {
+      console.log(`[SOCKET] Attempting to join room: restaurant:${currentUser.restaurant_id}`);
       socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
+    } else {
+      console.warn('[SOCKET] Not joining restaurant room - currentUser.restaurant_id is missing');
     }
 
     const handleSessionExpired = () => {
@@ -400,6 +405,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const { table, eventType, data, id } = payload;
 
       if (table === 'orders') {
+        console.log(`[SYNC] Handling ${eventType} for table 'orders':`, data?.id || id);
         const mapOrderLocal = (o: any) => {
           const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
           const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
@@ -537,7 +543,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const savedPin = localStorage.getItem('saved_pin');
-    const token = sessionStorage.getItem('accessToken');
+    const token = localStorage.getItem('accessToken');
     
     // Only auto-login with PIN if there is no token (first time or session cleared)
     if (savedPin && !currentUser && !token) {
@@ -577,7 +583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (oldDrafts.length > 0) {
         addNotification('info', `Cleaned up ${oldDrafts.length} old empty order(s)`);
-        fetchInitialData();
+        setOrders(prev => prev.filter(o => !oldDrafts.some(od => od.id === o.id)));
       }
     };
 
@@ -710,7 +716,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const err = await retryRes.json();
         throw new Error(err.error || 'Payment failed after session open');
       }
-      fetchInitialData();
+      setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'CLOSED' as OrderStatus, payment_status: 'PAID' as any } as Order) : o));
       addNotification('success', 'Payment processed successfully');
       resolve(true);
     } catch (e: any) {
@@ -735,7 +741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updateTableStatus: async (id: string, status: TableStatus) => {
         const restaurant_id = currentUser?.restaurant_id || localStorage.getItem('restaurant_id');
         await tableService.updateTable(id, { status, restaurant_id: restaurant_id as string });
-        await fetchInitialData();
+        setTables(prev => prev.map(t => t.id === id ? { ...t, status } : t));
         return true;
       },
       addOrder: async (order: any) => {
@@ -745,27 +751,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...order, restaurant_id })
         });
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => ({ error: 'Order creation failed' }));
-          throw new Error(errBody.error || 'Order creation failed');
-        }
+        if (!res.ok) throw new Error('Order creation failed');
         const result = await res.json();
-        await fetchInitialData();
+        setOrders(prev => [...prev, formatOrder(result, tables)]);
         return result;
       },
       updateOrder: async (order: any) => {
-        const restaurant_id = currentUser?.restaurant_id || localStorage.getItem('restaurant_id');
         const res = await fetchWithAuth(`${API_URL}/orders/${order.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...order, restaurant_id })
+          body: JSON.stringify({ ...order, restaurant_id: currentUser?.restaurant_id })
         });
-        if (!res.ok) {
-          console.error('[AppContext] updateOrder failed:', await res.text());
-          return null;
-        }
+        if (!res.ok) return null;
         const result = await res.json();
-        await fetchInitialData();
+        setOrders(prev => prev.map(o => o.id === result.id ? formatOrder(result, tables) : o));
         return result;
       },
       fireOrder: async (id: string, type: string) => {
@@ -774,74 +773,128 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type })
         });
-        if (!res.ok) {
-          console.error('[AppContext] fireOrder failed:', await res.text());
-          return null;
-        }
+        if (!res.ok) return null;
         const result = await res.json();
-        await fetchInitialData();
+        setOrders(prev => prev.map(o => o.id === result.id ? formatOrder(result, tables) : o));
         return result;
       },
       updateOrderStatus: async (id: string, status: OrderStatus) => {
-        await fetchWithAuth(`${API_URL}/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
-        fetchInitialData();
+        const res = await fetchWithAuth(`${API_URL}/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+        if (res.ok) setOrders(prev => prev.map(o => o.id === id ? ({ ...o, status } as Order) : o));
       },
       assignDriverToOrder: async (orderId: string, driverId: string) => {
-        await fetchWithAuth(`${API_URL}/orders/${orderId}`, {
+        const res = await fetchWithAuth(`${API_URL}/orders/${orderId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            status: 'READY',
-            assigned_driver_id: driverId,
-            dispatched_at: new Date()
-          })
+          body: JSON.stringify({ status: 'READY', assigned_driver_id: driverId, dispatched_at: new Date() })
         });
-
-        // --- 🖨️ HW: Auto-Print Delivery Slip ---
-        if (window.electronAPI) {
-          window.electronAPI.printDeliverySlip({ orderIds: [orderId], driverId });
+        if (res.ok) {
+          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'READY' as OrderStatus, assigned_driver_id: driverId, dispatched_at: new Date() } as Order) : o));
         }
-
-        fetchInitialData();
       },
-      addMenuItem: async (item: any) => { await fetchWithAuth(`${API_URL}/menu_items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
+      addMenuItem: async (item: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setMenuItems(prev => [...prev, formatMenuItem(result)]); }
+      },
       updateMenuItem: async (item: any) => {
         const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) });
-        if (!res.ok) console.error('[App] updateMenuItem failed:', await res.text());
-        await fetchInitialData();
+        if (res.ok) { const result = await res.json(); setMenuItems(prev => prev.map(i => i.id === result.id ? formatMenuItem(result) : i)); }
       },
-      deleteMenuItem: async (id: string) => { await fetchWithAuth(`${API_URL}/menu_items?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
+      deleteMenuItem: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/menu_items?id=${id}`, { method: 'DELETE' }); 
+        if (res.ok) setMenuItems(prev => prev.filter(i => i.id !== id));
+      },
       toggleItemAvailability: async (id: string) => {
         const item = menuItems.find(i => i.id === id);
         if (item) {
-          await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, restaurant_id: currentUser?.restaurant_id, is_available: !item.is_available }) });
-          await fetchInitialData();
+          const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, restaurant_id: currentUser?.restaurant_id, is_available: !item.is_available }) });
+          if (res.ok) setMenuItems(prev => prev.map(i => i.id === id ? { ...i, is_available: !i.is_available } : i));
         }
       },
-      addMenuCategory: async (cat: any) => { await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      updateMenuCategory: async (cat: any) => { await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      deleteMenuCategory: async (id: string) => { await fetchWithAuth(`${API_URL}/menu_categories?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
-      addSection: async (sec: any) => { await fetchWithAuth(`${API_URL}/sections`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      updateSection: async (sec: any) => { await fetchWithAuth(`${API_URL}/sections`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      deleteSection: async (id: string) => { await fetchWithAuth(`${API_URL}/sections?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
-      addTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      updateTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await fetchInitialData(); },
-      deleteTable: async (id: string) => { await fetchWithAuth(`${API_URL}/tables?id=${id}`, { method: 'DELETE' }); await fetchInitialData(); },
-      addSupplier: async (s: any) => { await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      updateSupplier: async (s: any) => { await fetchWithAuth(`${API_URL}/suppliers/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      deleteSupplier: async (id: string) => { await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
-      addVendor: async (v: any) => { /* Bridge to supplier */ await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      updateVendor: async (v: any) => { await fetchWithAuth(`${API_URL}/suppliers/${v.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      deleteVendor: async (id: string) => { await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
-      addCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      updateCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      deleteCustomer: async (id: string) => { await fetchWithAuth(`${API_URL}/customers/${id}`, { method: 'DELETE' }); fetchInitialData(); },
-
-      // Stations CRUD
-      stations,
-      addStation: async (s: any) => { await fetchWithAuth(`${API_URL}/stations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); fetchInitialData(); },
-      updateStation: async (s: any) => { await fetchWithAuth(`${API_URL}/stations`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) }); fetchInitialData(); },
-      deleteStation: async (id: string) => { await fetchWithAuth(`${API_URL}/stations?id=${id}`, { method: 'DELETE' }); fetchInitialData(); },
+      addMenuCategory: async (cat: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setMenuCategories(prev => [...prev, result]); }
+      },
+      updateMenuCategory: async (cat: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setMenuCategories(prev => prev.map(c => c.id === result.id ? result : c)); }
+      },
+      deleteMenuCategory: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/menu_categories?id=${id}`, { method: 'DELETE' }); 
+        if (res.ok) setMenuCategories(prev => prev.filter(c => c.id !== id));
+      },
+      addSection: async (sec: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/sections`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setSections(prev => [...prev, result]); }
+      },
+      updateSection: async (sec: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/sections`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setSections(prev => prev.map(s => s.id === result.id ? result : s)); }
+      },
+      deleteSection: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/sections?id=${id}`, { method: 'DELETE' }); 
+        if (res.ok) setSections(prev => prev.filter(s => s.id !== id));
+      },
+      addTable: async (tbl: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/tables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setTables(prev => [...prev, result]); }
+      },
+      updateTable: async (tbl: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/tables`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setTables(prev => prev.map(t => t.id === result.id ? result : t)); }
+      },
+      deleteTable: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/tables?id=${id}`, { method: 'DELETE' }); 
+        if (res.ok) setTables(prev => prev.filter(t => t.id !== id));
+      },
+      addSupplier: async (s: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setSuppliers(prev => [...prev, result]); }
+      },
+      updateSupplier: async (s: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/suppliers/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setSuppliers(prev => prev.map(item => item.id === result.id ? result : item)); }
+      },
+      deleteSupplier: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); 
+        if (res.ok) setSuppliers(prev => prev.filter(s => s.id !== id));
+      },
+      addVendor: async (v: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setSuppliers(prev => [...prev, result]); }
+      },
+      updateVendor: async (v: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/suppliers/${v.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setSuppliers(prev => prev.map(item => item.id === result.id ? result : item)); }
+      },
+      deleteVendor: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); 
+        if (res.ok) setSuppliers(prev => prev.filter(s => s.id !== id));
+      },
+      addCustomer: async (c: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setCustomers(prev => [...prev, result]); }
+      },
+      updateCustomer: async (c: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/customers/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setCustomers(prev => prev.map(item => item.id === result.id ? result : item)); }
+      },
+      deleteCustomer: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/customers/${id}`, { method: 'DELETE' }); 
+        if (res.ok) setCustomers(prev => prev.filter(c => c.id !== id));
+      },
+      addStation: async (s: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/stations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); 
+        if (res.ok) { const result = await res.json(); setStations(prev => [...prev, result]); }
+      },
+      updateStation: async (s: any) => { 
+        const res = await fetchWithAuth(`${API_URL}/stations`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) }); 
+        if (res.ok) { const result = await res.json(); setStations(prev => prev.map(item => item.id === result.id ? result : item)); }
+      },
+      deleteStation: async (id: string) => { 
+        const res = await fetchWithAuth(`${API_URL}/stations?id=${id}`, { method: 'DELETE' }); 
+        if (res.ok) setStations(prev => prev.filter(s => s.id !== id));
+      },
       cancelOrder: async (id: string, reason: string, notes?: string) => {
         try {
           const res = await fetchWithAuth(`${API_URL}/orders/${id}`, {
@@ -856,7 +909,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             })
           });
           if (!res.ok) throw new Error('Cancellation failed');
-          fetchInitialData();
+          setOrders(prev => prev.map(o => o.id === id ? ({ ...o, status: 'CANCELLED' as OrderStatus } as Order) : o));
           addNotification('success', 'Order cancelled successfully');
           return true;
         } catch (e: any) {
@@ -895,7 +948,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
 
           if (!res.ok) throw new Error('Void operation failed');
-          fetchInitialData();
+          setOrders(prev => prev.map(o => o.id === id ? ({ ...o, status: 'VOIDED' as OrderStatus } as Order) : o));
           addNotification('success', 'Order voided successfully');
           return true;
         } catch (e: any) {
@@ -946,7 +999,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const err = await res.json();
             throw new Error(err.error || 'Payment processing failed');
           }
-          fetchInitialData();
+          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'CLOSED' as OrderStatus, payment_status: 'PAID' as any } as Order) : o));
           return true;
         } catch (e: any) {
           console.error('Process Payment Error:', e);
@@ -962,8 +1015,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             body: JSON.stringify({ processedBy: currentUser?.id })
           });
           if (!res.ok) throw new Error('Failed to mark as delivered');
+          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'DELIVERED' as OrderStatus } as Order) : o));
           addNotification('success', 'Order marked as delivered');
-          fetchInitialData();
         } catch (e: any) {
           addNotification('error', e.message);
         }
@@ -976,8 +1029,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             body: JSON.stringify({ reason, processedBy: currentUser?.id })
           });
           if (!res.ok) throw new Error('Failed to mark as failed');
+          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'READY' as OrderStatus } as Order) : o));
           addNotification('success', 'Order delivery failed (reset to READY)');
-          fetchInitialData();
         } catch (e: any) {
           addNotification('error', e.message);
         }
@@ -1403,7 +1456,7 @@ const AppContent = () => {
             activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
               activeView === 'MENU' ? <MenuView /> :
                 activeView === 'DASHBOARD' ? <DashboardView /> :
-                  activeView === 'POS' ? <POSView /> :
+                  activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
                     activeView === 'KITCHEN' ? <KDSView /> :
                       activeView === 'RIDER_VIEW' ? <RiderView /> :
                         activeView === 'LOGISTICS' ? <LogisticsHub /> :

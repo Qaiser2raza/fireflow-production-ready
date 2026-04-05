@@ -23,24 +23,41 @@ export const MenuItemCard: React.FC<MenuItemCardProps> = ({
             className="group relative bg-[#0B1120] rounded-2xl overflow-hidden cursor-pointer border border-white/5 hover:border-gold-500/40 transition-all duration-300 flex flex-col active:scale-95 h-full shadow-lg"
         >
             {/* Image Section */}
-            <div className="aspect-[4/3] w-full relative bg-slate-700 overflow-hidden shrink-0">
-                <img
-                    src={imgUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80'}
-                    alt={item.name}
-                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                    onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.onerror = null; // Prevent infinite loop
-                        target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80';
-                    }}
-                />
+            <div className="aspect-[4/3] w-full relative bg-slate-800 overflow-hidden shrink-0 flex items-center justify-center">
+                {imgUrl ? (
+                    <img
+                        src={imgUrl}
+                        alt={item.name}
+                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                        onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.onerror = null; // Prevent infinite loop
+                            target.style.display = 'none'; // Hide broken image, reveal fallback background
+                            if (target.parentElement) {
+                                target.parentElement.classList.add('fallback-bg'); // Hook for any css
+                            }
+                        }}
+                    />
+                ) : (
+                    <div className="w-full h-full bg-slate-800 flex items-center justify-center">
+                        <span className="text-slate-600 font-bold uppercase tracking-widest text-[10px]">No Image</span>
+                    </div>
+                )}
 
-                {/* Modern Price Badge */}
                 <div className="absolute top-2 right-2 md:top-3 md:right-3 bg-black/80 backdrop-blur-md px-2 py-1 md:px-2.5 md:py-1.5 rounded-lg border border-white/10 shadow-xl z-20">
                     <span className="text-gold-500 font-black font-mono text-[9px] md:text-[11px] tracking-tight">
                         Rs. {Number(item.price).toLocaleString()}
                     </span>
                 </div>
+
+                {/* Portion Badge */}
+                {item.variant && item.variant.length > 0 && (
+                    <div className="absolute top-2 left-2 md:top-3 md:left-3 bg-blue-600/90 backdrop-blur-md px-2 py-1 rounded-md border border-white/10 shadow-xl z-20">
+                        <span className="text-white font-black text-[8px] md:text-[10px] uppercase tracking-widest">
+                            {item.variant.length} Portions
+                        </span>
+                    </div>
+                )}
 
                 {/* Availability Badge */}
                 {!isAvailable && (

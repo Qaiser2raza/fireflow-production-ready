@@ -720,9 +720,9 @@ app.get('/pair', (req, res) => {
                         'try { data = JSON.parse(text); } catch (e) { data = { error: text }; }' +
 
                         'if (res.ok && data.success) {' +
-                            'sessionStorage.setItem(\'accessToken\', data.session_jwt);' +
+                            'localStorage.setItem(\'accessToken\', data.session_jwt);' +
                             'if (data.expires_at) {' +
-                                'sessionStorage.setItem(\'accessTokenExpiry\', new Date(data.expires_at).getTime().toString());' +
+                                'localStorage.setItem(\'accessTokenExpiry\', new Date(data.expires_at).getTime().toString());' +
                             '}' +
                             
                             'document.getElementById(\'status-card\').innerHTML = ' +
@@ -2190,8 +2190,10 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
         }
 
         const result = await service.createOrder(data);
+        console.log(`[ORDER] Created ID: ${result.id} for restaurant ${req.restaurantId}`);
 
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'INSERT', data: result });
+        console.log(`[SOCKET] Emitted INSERT for order ${result.id} to room restaurant:${req.restaurantId}`);
         res.json(result);
     } catch (e: any) {
         console.error("Critical Order Create Error:", {
@@ -3002,7 +3004,10 @@ app.get('/api/menu_items', async (req, res) => {
     try {
         const items = await prisma.menu_items.findMany({
             where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
-            include: { menu_categories: true },
+            include: { 
+                menu_categories: true,
+                variant: true
+            },
             orderBy: { name: 'asc' }
         });
 

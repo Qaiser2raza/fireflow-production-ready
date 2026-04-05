@@ -119,6 +119,8 @@ export async function authMiddleware(
       name: decoded.payload.name
     };
 
+    console.log(`[AUTH] ${req.method} ${req.path} - Staff: ${req.staffId} (${req.role}) @ Restaurant: ${req.restaurantId}`);
+
     // 5. SUPER_ADMIN: Allow targeting any restaurant via x-target-restaurant header
     if (req.role === 'SUPER_ADMIN') {
       const targetRestaurant = req.headers['x-target-restaurant'] as string | undefined;

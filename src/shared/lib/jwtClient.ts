@@ -17,10 +17,10 @@ export async function apiCall(
     const { retry = true, ...fetchOptions } = options;
 
     // Get current access token
-    let accessToken = sessionStorage.getItem('accessToken');
+    let accessToken = localStorage.getItem('accessToken');
 
     // Check if token is about to expire (within 1 minute)
-    const expiryTime = sessionStorage.getItem('accessTokenExpiry');
+    const expiryTime = localStorage.getItem('accessTokenExpiry');
     if (expiryTime && Date.now() > parseInt(expiryTime) - 60000) {
         console.log('[JWT] Token expiring soon, refreshing...');
         accessToken = await refreshAccessToken();
@@ -86,7 +86,7 @@ export async function apiCall(
  * Refresh access token using refresh token
  */
 async function refreshAccessToken(): Promise<string | null> {
-    const refreshToken = sessionStorage.getItem('refreshToken');
+    const refreshToken = localStorage.getItem('refreshToken');
 
     if (!refreshToken) {
         console.error('[JWT] No refresh token available');
@@ -109,9 +109,9 @@ async function refreshAccessToken(): Promise<string | null> {
         const { access_token, expires_in } = await response.json();
 
         // Store new token and expiry
-        sessionStorage.setItem('accessToken', access_token);
+        localStorage.setItem('accessToken', access_token);
         const expiryTime = Date.now() + (expires_in * 1000);
-        sessionStorage.setItem('accessTokenExpiry', expiryTime.toString());
+        localStorage.setItem('accessTokenExpiry', expiryTime.toString());
 
         console.log('[JWT] Token refreshed successfully');
         return access_token;
@@ -126,7 +126,7 @@ async function refreshAccessToken(): Promise<string | null> {
  */
 export async function logoutJWT(): Promise<void> {
     try {
-        const accessToken = sessionStorage.getItem('accessToken');
+        const accessToken = localStorage.getItem('accessToken');
         if (accessToken) {
             // Notify server
             await fetch('/api/auth/logout', {
@@ -146,9 +146,9 @@ export async function logoutJWT(): Promise<void> {
  * Clear authentication session
  */
 function clearAuthSession(): void {
-    sessionStorage.removeItem('accessToken');
-    sessionStorage.removeItem('refreshToken');
-    sessionStorage.removeItem('accessTokenExpiry');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('accessTokenExpiry');
     localStorage.removeItem('saved_pin');
 }
 
@@ -156,23 +156,23 @@ function clearAuthSession(): void {
  * Get current access token (for manual use if needed)
  */
 export function getAccessToken(): string | null {
-    return sessionStorage.getItem('accessToken');
+    return localStorage.getItem('accessToken');
 }
 
 /**
  * Check if authenticated
  */
 export function isAuthenticated(): boolean {
-    return !!sessionStorage.getItem('accessToken');
+    return !!localStorage.getItem('accessToken');
 }
 
 /**
  * Store JWT tokens after login
  */
 export function storeTokens(accessToken: string, refreshToken: string, expiresIn: number): void {
-    sessionStorage.setItem('accessToken', accessToken);
-    sessionStorage.setItem('refreshToken', refreshToken);
+    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('refreshToken', refreshToken);
     const expiryTime = Date.now() + (expiresIn * 1000);
-    sessionStorage.setItem('accessTokenExpiry', expiryTime.toString());
+    localStorage.setItem('accessTokenExpiry', expiryTime.toString());
     console.log('[JWT] Tokens stored successfully');
 }

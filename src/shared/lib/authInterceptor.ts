@@ -9,7 +9,7 @@ const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api'
  */
 async function refreshAccessToken(): Promise<string | null> {
   try {
-    const refreshToken = sessionStorage.getItem('refreshToken');
+    const refreshToken = localStorage.getItem('refreshToken');
 
     if (!refreshToken) {
       console.log('[Auth] No refresh token available');
@@ -28,9 +28,9 @@ async function refreshAccessToken(): Promise<string | null> {
     }
 
     const data = await response.json();
-    sessionStorage.setItem('accessToken', data.access_token);
+    localStorage.setItem('accessToken', data.access_token);
     const expiryTime = Date.now() + (data.expires_in * 1000);
-    sessionStorage.setItem('accessTokenExpiry', expiryTime.toString());
+    localStorage.setItem('accessTokenExpiry', expiryTime.toString());
     console.log('[Auth] Token refreshed successfully');
     return data.access_token;
   } catch (err) {
@@ -43,8 +43,8 @@ async function refreshAccessToken(): Promise<string | null> {
  * Get current access token
  */
 function getAccessToken(): string | null {
-  const token = sessionStorage.getItem('accessToken');
-  const expiry = sessionStorage.getItem('accessTokenExpiry');
+  const token = localStorage.getItem('accessToken');
+  const expiry = localStorage.getItem('accessTokenExpiry');
 
   // Check if token is expired
   if (expiry && Date.now() > parseInt(expiry)) {
@@ -110,9 +110,9 @@ export async function fetchWithAuth(
       response = await fetch(url, { ...options, headers });
     } else {
       // Refresh failed, clear session
-      sessionStorage.removeItem('accessToken');
-      sessionStorage.removeItem('refreshToken');
-      sessionStorage.removeItem('accessTokenExpiry');
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+      localStorage.removeItem('accessTokenExpiry');
       console.error('[Auth] Token refresh failed, session cleared');
     }
   }
@@ -120,9 +120,9 @@ export async function fetchWithAuth(
   // Handle 410 Gone (Session Expired)
   if (response.status === 410) {
     console.error('[Auth] Session expired (410)');
-    sessionStorage.removeItem('accessToken');
-    sessionStorage.removeItem('refreshToken');
-    sessionStorage.removeItem('accessTokenExpiry');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('accessTokenExpiry');
     window.dispatchEvent(new CustomEvent('session:expired'));
     return response;
   }
@@ -135,7 +135,7 @@ export async function fetchWithAuth(
  */
 export async function clearAuthSession(): Promise<void> {
   try {
-    const accessToken = sessionStorage.getItem('accessToken');
+    const accessToken = localStorage.getItem('accessToken');
     if (accessToken) {
       // Notify server
       await fetch(`${API_URL}/auth/logout`, {
@@ -148,9 +148,9 @@ export async function clearAuthSession(): Promise<void> {
     }); // Ignore errors
     }
   } finally {
-    sessionStorage.removeItem('accessToken');
-    sessionStorage.removeItem('refreshToken');
-    sessionStorage.removeItem('accessTokenExpiry');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('accessTokenExpiry');
     localStorage.removeItem('saved_pin');
     localStorage.removeItem('restaurant_id');
     localStorage.removeItem('currentRestaurant');

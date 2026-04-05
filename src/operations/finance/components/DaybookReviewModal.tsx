@@ -75,7 +75,7 @@ export const DaybookReviewModal: React.FC<Props> = ({ sessionId, isOpen, onClose
     const handleResolve = async (logId: string, status: 'APPROVED' | 'REJECTED', category: string, entityId?: string) => {
         setResolvingId(logId);
         try {
-            const currentUser = JSON.parse(sessionStorage.getItem('user') || '{}');
+            const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
             const res = await fetchWithAuth(`${API}/cashier/logs/${logId}/resolve`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

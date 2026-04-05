@@ -206,7 +206,7 @@ export const BillingView: React.FC = () => {
                   </div>
                   <div>
                     <div className="text-slate-500 mb-1">Account Name:</div>
-                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 text-slate-300">Cravex Solutions</div>
+                    <div className="bg-slate-950 border border-slate-800 rounded px-3 py-2 text-slate-300">{currentRestaurant?.name || 'FireFlow'}</div>
                   </div>
                 </div>
               </div>

@@ -80,7 +80,7 @@ export const ReceiptView: React.FC<ReceiptViewProps> = ({
 
       {/* Header */}
       <div className="text-center mb-4">
-        <h1 className="text-xl font-bold uppercase">{invoiceSettings.business_name || order.restaurants?.name || 'FIREFLOW RESTAURANT'}</h1>
+        <h1 className="text-xl font-bold uppercase">{invoiceSettings.business_name || order.restaurants?.name || 'RESTAURANT'}</h1>
         <p className="text-[10px]">{invoiceSettings.business_address || order.restaurants?.address || 'Main Branch, City'}</p>
         <p className="text-[10px]">Phone: {invoiceSettings.business_phone || order.restaurants?.phone || '000-0000000'}</p>
         {invoiceSettings.tax_id && <p className="text-[10px]">NTN/Tax ID: {invoiceSettings.tax_id}</p>}

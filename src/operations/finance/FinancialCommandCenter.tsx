@@ -655,7 +655,7 @@ const FinancialCommandCenter: React.FC = () => {
                                 <button
                                     onClick={() => {
                                         const query = useRange ? `startDate=${startDate}&endDate=${endDate}` : `date=${selectedDate}`;
-                                        window.open(window.location.origin + `/api/accounting/ledger/export?token=${sessionStorage.getItem('accessToken')}&${query}`, '_blank');
+                                        window.open(window.location.origin + `/api/accounting/ledger/export?token=${localStorage.getItem('accessToken')}&${query}`, '_blank');
                                     }}
                                     className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 px-3 py-1.5"
                                 >
@@ -1121,7 +1121,7 @@ const FinancialCommandCenter: React.FC = () => {
                                     onClick={() => {
                                         const endStr = new Date(new Date(selectedDate).setHours(23, 59, 59, 999)).toISOString();
                                         const startStr = new Date(selectedDate).toISOString();
-                                        const token = sessionStorage.getItem('accessToken') || '';
+                                        const token = localStorage.getItem('accessToken') || '';
                                         const riderParam = selectedRiderId ? `&riderId=${selectedRiderId}` : '';
                                         window.open(window.location.origin + previewReport.endpoint + `?start=${startStr}&end=${endStr}&token=${token}${riderParam}`, '_blank');
                                     }}

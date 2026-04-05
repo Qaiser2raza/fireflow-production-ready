@@ -50,7 +50,7 @@ export const RestaurantProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
 
     // FIX: Do not query if we don't have valid auth tokens
-    const accessToken = sessionStorage.getItem('accessToken');
+    const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) {
       console.log('[RestaurantContext] No access token, skipping pending payment check');
       setHasPendingPayment(false);

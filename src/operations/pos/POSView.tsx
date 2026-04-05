@@ -12,6 +12,8 @@ import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal
 import { calculateBill, getDefaultBillConfig } from '../../lib/billEngine';
 import { RecentOrdersModal } from './components/RecentOrdersModal';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
+import { VariantSelectionModal } from './components/VariantSelectionModal';
+import { MenuItemVariant } from '../../shared/types';
 
 export const POSView: React.FC = () => {
   const {
@@ -69,6 +71,7 @@ export const POSView: React.FC = () => {
 
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showRecentOrders, setShowRecentOrders] = useState(false);
+  const [itemToSelectVariants, setItemToSelectVariants] = useState<MenuItem | null>(null);
 
   // Track mobile breakpoint
   useEffect(() => {
@@ -380,37 +383,58 @@ export const POSView: React.FC = () => {
     return isStatusLocked || isDriverAssigned;
   }, [activeOrderData]);
 
-  const addToOrder = (item: MenuItem) => {
-    if (!item.available || isAlreadyPaid || isReadOnly) return;
+  const addToOrder = (item: MenuItem, variant?: MenuItemVariant) => {
+    if (!item.is_available || isAlreadyPaid || isReadOnly) return;
+    
+    const unitPrice = variant ? Number(variant.price) : Number(item.price);
+    const itemName = variant ? `${item.name} (${variant.name})` : item.name;
+    const variantId = variant?.id;
+
     setCurrentOrderItems(prev => {
-      // ... existing add logic ...
-      const existingIndex = prev.findIndex(i => i.menu_item_id === item.id && i.item_status === 'DRAFT');
+      // Find matching item (same ID AND same Variant ID)
+      const existingIndex = prev.findIndex(i => 
+        i.menu_item_id === item.id && 
+        i.variant_id === variantId && 
+        i.item_status === 'DRAFT'
+      );
+      
       if (existingIndex >= 0) {
         const newItems = [...prev];
-        newItems[existingIndex] = { ...newItems[existingIndex], quantity: newItems[existingIndex].quantity + 1 };
+        newItems[existingIndex] = { 
+          ...newItems[existingIndex], 
+          quantity: newItems[existingIndex].quantity + 1,
+          total_price: (newItems[existingIndex].quantity + 1) * unitPrice
+        };
         return newItems;
       }
+
       return [{
         id: crypto.randomUUID(),
         menu_item_id: item.id,
+        variant_id: variantId,
         menu_item: item,
-        item_name: item.name,
+        item_name: itemName,
         quantity: 1,
         item_status: 'DRAFT',
-        unit_price: item.price,
-        total_price: item.price,
+        unit_price: unitPrice,
+        total_price: unitPrice,
         category: item.category,
         station: item.station,
         station_id: item.station_id
       } as any, ...prev];
     });
+
+    if (itemToSelectVariants) setItemToSelectVariants(null);
   };
 
-  const updateQuantity = (menuItemId: string, delta: number) => {
+  const updateQuantity = (menuItemId: string, delta: number, variantId?: string) => {
     if (isAlreadyPaid || isReadOnly) return;
     setCurrentOrderItems(prev => {
-      // ... existing update logic ...
-      const index = prev.findIndex(i => i.menu_item_id === menuItemId && i.item_status === 'DRAFT');
+      const index = prev.findIndex(i => 
+        i.menu_item_id === menuItemId && 
+        i.item_status === 'DRAFT' && 
+        i.variant_id === variantId
+      );
       if (index === -1) return prev;
       const newItems = [...prev];
       const newQty = newItems[index].quantity + delta;
@@ -459,7 +483,20 @@ export const POSView: React.FC = () => {
         customer_id: customerId,
         delivery_address: deliveryAddress,
         total: breakdown.total,
-        discount_reason: discountReason
+        discount_reason: discountReason,
+        breakdown: {
+          tax_enabled: taxEnabled,
+          service_charge_enabled: serviceChargeEnabled,
+          delivery_fee_enabled: deliveryFeeEnabled,
+          tax: breakdown.tax,
+          serviceCharge: breakdown.serviceCharge,
+          deliveryFee: breakdown.deliveryFee,
+          discount: breakdown.discount,
+          tax_type: breakdown.tax_type,
+          discount_type: discountType,
+          discount_value: discountValue,
+          discountReason: discountReason
+        }
       };
 
       const result = activeOrderId
@@ -561,13 +598,29 @@ export const POSView: React.FC = () => {
                 key={item.id}
                 item={item}
                 onSelect={() => {
-                  addToOrder(item);
-                  if (isMobile) setShowMobileCart(true);
+                  if (item.variant && item.variant.length > 0) {
+                    setItemToSelectVariants(item);
+                  } else {
+                    addToOrder(item);
+                    if (isMobile) setShowMobileCart(true);
+                  }
                 }}
               />
             ))}
           </div>
         </div>
+
+        {/* Portions / Variant Selection Modal */}
+        {itemToSelectVariants && (
+          <VariantSelectionModal
+            item={itemToSelectVariants}
+            onSelect={(variant) => {
+              addToOrder(itemToSelectVariants, variant);
+              if (isMobile) setShowMobileCart(true);
+            }}
+            onClose={() => setItemToSelectVariants(null)}
+          />
+        )}
       </div>
 
       {/* RIGHT: CART & CHECKOUT */}
@@ -653,8 +706,8 @@ export const POSView: React.FC = () => {
 
                 {!isReadOnly && (
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
-                    <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                    <button onClick={() => updateQuantity(item.menu_item_id, -1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
+                    <button onClick={() => updateQuantity(item.menu_item_id, 1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
                   </div>
                 )}
                 <div className="font-bold text-white text-sm font-mono tracking-tight">
@@ -826,7 +879,7 @@ export const POSView: React.FC = () => {
               </button>
 
               <button
-                disabled={currentOrderItems.length === 0 || isSubmitting}
+                disabled={currentOrderItems.length === 0 || isSubmitting || (!currentOrderItems.some(i => i.item_status === 'DRAFT') && currentUser?.role === 'SERVER')}
                 onClick={async () => {
                   const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
 
@@ -874,11 +927,11 @@ export const POSView: React.FC = () => {
                     } finally {
                       setIsSubmitting(false);
                     }
-                  } else {
+                  } else if (currentUser?.role !== 'SERVER') {
                     setShowPaymentModal(true);
                   }
                 }}
-                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : currentUser?.role === 'SERVER' ? 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
               >
                 {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
                   <>
@@ -886,6 +939,11 @@ export const POSView: React.FC = () => {
                       <>
                         <Flame size={14} className="animate-pulse" />
                         <span>Fire Order</span>
+                      </>
+                    ) : currentUser?.role === 'SERVER' ? (
+                      <>
+                        <Utensils size={14} />
+                        <span>Order Fired</span>
                       </>
                     ) : (
                       <>
@@ -952,8 +1010,8 @@ export const POSView: React.FC = () => {
 
                     {!isReadOnly && (
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => updateQuantity(item.menu_item_id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
-                        <button onClick={() => updateQuantity(item.menu_item_id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                        <button onClick={() => updateQuantity(item.menu_item_id, -1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
+                        <button onClick={() => updateQuantity(item.menu_item_id, 1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
                       </div>
                     )}
                     <div className="font-bold text-white text-sm font-mono tracking-tight">
@@ -994,14 +1052,18 @@ export const POSView: React.FC = () => {
                 </button>
 
                 <button
-                  disabled={currentOrderItems.length === 0 || isSubmitting}
+                  disabled={currentOrderItems.length === 0 || isSubmitting || (!currentOrderItems.some(i => i.item_status === 'DRAFT') && currentUser?.role === 'SERVER')}
                   onClick={() => {
                     const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
-                    hasUnfiredItems ? handleOrderAction(true) : setShowPaymentModal(true);
+                    if (hasUnfiredItems) {
+                      handleOrderAction(true);
+                    } else if (currentUser?.role !== 'SERVER') {
+                      setShowPaymentModal(true);
+                    }
                   }}
-                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : currentUser?.role === 'SERVER' ? 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
                 >
-                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (currentOrderItems.some(i => i.item_status === 'DRAFT') ? <><Flame size={14} className="animate-pulse" /><span>Fire</span></> : <><Banknote size={14} /><span>Pay</span></>)}
+                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (currentOrderItems.some(i => i.item_status === 'DRAFT') ? <><Flame size={14} className="animate-pulse" /><span>Fire</span></> : currentUser?.role === 'SERVER' ? <><Utensils size={14} /><span>Fired</span></> : <><Banknote size={14} /><span>Pay</span></>)}
                 </button>
               </div>
             </div>

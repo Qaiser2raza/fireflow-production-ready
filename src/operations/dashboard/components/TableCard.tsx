@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Table, Order, Staff } from '../../../shared/types';
-import { Clock, Users, CheckCircle2, FileText, Eye, Plus, Minus } from 'lucide-react';
+import { Clock, Users, CheckCircle2, FileText, Eye, Plus, Minus, Unlock } from 'lucide-react';
 import { OrderDetailModal } from './OrderDetailModal';
 
 interface TableCardProps {
@@ -71,13 +71,8 @@ export const TableCard: React.FC<TableCardProps> = ({
         }
     };
 
-    // ENHANCED VALIDATION: Bill request only when all items served
     const servedItems = order?.order_items?.filter(item => item.item_status === 'SERVED' || item.item_status === 'DONE') || [];
     const totalItems = order?.order_items?.length || 0;
-    const canRequestBill = order && totalItems > 0 && servedItems.length === totalItems;
-    const billTooltip = !canRequestBill && order
-        ? `${servedItems.length}/${totalItems} items served - Need all items served to request bill`
-        : 'Request bill from customer';
 
     return (
         <>
@@ -100,25 +95,34 @@ export const TableCard: React.FC<TableCardProps> = ({
                 )}
 
                 {/* Urgent Badges - Top Right */}
-                {order && (
-                    <div className="absolute top-2 right-2 flex gap-1">
-                        {order.payment_status === 'PAID' && (
-                            <span className="bg-emerald-500 text-white text-[8px] font-black px-2 py-0.5 rounded uppercase">
-                                PAID
-                            </span>
-                        )}
-                        {isOverdue && (
-                            <span className="bg-red-600 text-white text-[8px] font-black px-2 py-0.5 rounded uppercase animate-pulse">
-                                OVERDUE
-                            </span>
-                        )}
-                        {isSlow && !isOverdue && (
-                            <span className="bg-red-500 text-white text-[8px] font-black px-2 py-0.5 rounded uppercase">
-                                SLOW
-                            </span>
-                        )}
-                    </div>
-                )}
+                <div className="absolute top-2 right-2 flex gap-1 z-30">
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onUpdateStatus?.('AVAILABLE'); }}
+                        className="bg-slate-900/80 hover:bg-red-600 text-slate-500 hover:text-white p-1 rounded backdrop-blur-sm transition-colors shadow-black/50 shadow-lg"
+                        title="Force Available (Override)"
+                    >
+                        <Unlock size={10} />
+                    </button>
+                    {order && (
+                        <>
+                            {order.payment_status === 'PAID' && (
+                                <span className="bg-emerald-500 text-white text-[8px] font-black px-2 py-0.5 rounded uppercase">
+                                    PAID
+                                </span>
+                            )}
+                            {isOverdue && (
+                                <span className="bg-red-600 text-white text-[8px] font-black px-2 py-0.5 rounded uppercase animate-pulse">
+                                    OVERDUE
+                                </span>
+                            )}
+                            {isSlow && !isOverdue && (
+                                <span className="bg-red-500 text-white text-[8px] font-black px-2 py-0.5 rounded uppercase">
+                                    SLOW
+                                </span>
+                            )}
+                        </>
+                    )}
+                </div>
 
                 <div className="flex justify-between items-start relative z-10">
                     <div>
@@ -238,49 +242,84 @@ export const TableCard: React.FC<TableCardProps> = ({
                                 );
                             })()}
 
-                            {/* Quick Action Menu on Hover — universal actions */}
-                            <div className="absolute inset-x-5 bottom-5 opacity-0 group-hover:opacity-100 transition-all duration-200 space-y-1.5 z-20">
-                                  {order.status === 'READY' && onMarkServed && (
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); handleMarkServed(); }}
-                                      className="w-full bg-green-600/90 backdrop-blur-md border border-green-500/30 hover:bg-green-500 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                    >
-                                      <CheckCircle2 size={12} />
-                                      Mark Served
-                                    </button>
-                                  )}
-                                  {(order.status === 'ACTIVE' || order.status === 'READY') && onRequestBill && (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (canRequestBill) handleRequestBill();
-                                      }}
-                                      disabled={!canRequestBill}
-                                      title={billTooltip}
-                                      className={`w-full backdrop-blur-md border text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
-                                        canRequestBill
-                                          ? 'bg-red-600/90 border-red-500/30 hover:bg-red-500 cursor-pointer'
-                                          : 'bg-gray-700/50 border-gray-600/30 cursor-not-allowed opacity-60'
-                                      }`}
-                                    >
-                                      <FileText size={12} />
-                                      {canRequestBill ? 'Request Bill' : `Bill (${servedItems.length}/${totalItems})`}
-                                    </button>
-                                  )}
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
-                                    className="w-full bg-gold-500/90 backdrop-blur-md border border-gold-400/30 hover:bg-gold-400 text-black font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                  >
-                                    <Plus size={12} />
-                                    Add Items
-                                  </button>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); setShowDetailModal(true); }}
-                                    className="w-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 text-white font-black py-2 rounded-lg text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                                  >
-                                    <Eye size={12} />
-                                    View Details
-                                  </button>
+                            {/* Context-Aware Primary Action */}
+                            <div className="mt-4 relative z-20">
+                                {(() => {
+                                    if (order.status === 'BILL_REQUESTED') {
+                                        return (
+                                            <div className="w-full bg-amber-500/10 border border-amber-500/30 text-amber-500 font-black py-2.5 rounded-lg text-[10px] uppercase tracking-widest flex items-center justify-center gap-2">
+                                              <FileText size={14} />
+                                              Awaiting Payment
+                                            </div>
+                                        );
+                                    }
+                                    if (order.status === 'READY') {
+                                        return (
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); handleMarkServed(); }}
+                                              className="w-full bg-green-600 hover:bg-green-500 shadow-lg shadow-green-900/40 text-white font-black py-2.5 rounded-lg text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"
+                                            >
+                                              <CheckCircle2 size={14} />
+                                              Mark Served
+                                            </button>
+                                        );
+                                    }
+                                    if (currentUser?.role === 'SERVER') {
+                                        if (servedItems.length === totalItems && totalItems > 0) {
+                                            return (
+                                                <button
+                                                  onClick={(e) => { e.stopPropagation(); handleRequestBill(); }}
+                                                  className="w-full bg-red-600 hover:bg-red-500 shadow-lg shadow-red-900/40 text-white font-black py-2.5 rounded-lg text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"
+                                                >
+                                                  <FileText size={14} />
+                                                  Request Bill
+                                                </button>
+                                            );
+                                        } else {
+                                            // Split button: Edit vs Early Bill
+                                            return (
+                                                <div className="flex gap-2">
+                                                    <button
+                                                      onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
+                                                      className="flex-[2] bg-slate-800 hover:bg-slate-700 text-white font-black py-2.5 rounded-lg text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"
+                                                      title="Edit Items"
+                                                    >
+                                                      <Plus size={14} />
+                                                      Add
+                                                    </button>
+                                                    <button
+                                                      onClick={(e) => { e.stopPropagation(); handleRequestBill(); }}
+                                                      className="flex-[1.5] bg-red-900/40 border border-red-500/20 hover:bg-red-600 text-red-500 hover:text-white font-black py-2.5 rounded-lg text-[9px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                                                      title="Request Bill Early"
+                                                    >
+                                                      <FileText size={12} />
+                                                      Early Bill
+                                                    </button>
+                                                </div>
+                                            );
+                                        }
+                                    }
+                                    
+                                    // Fallback / Cooking for Managers/Cashiers who click the table
+                                    return (
+                                        <div className="flex gap-2">
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); onOpenPOS(); }}
+                                              className="flex-1 bg-[#D4AF37]/20 hover:bg-[#D4AF37]/30 border border-[#D4AF37]/50 text-[#D4AF37] font-black py-2.5 rounded-lg text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"
+                                            >
+                                              <Plus size={14} />
+                                              Add Items
+                                            </button>
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); setShowDetailModal(true); }}
+                                              className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black py-2.5 rounded-lg text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"
+                                            >
+                                              <Eye size={14} />
+                                              Details
+                                            </button>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         </div>
                     )}
