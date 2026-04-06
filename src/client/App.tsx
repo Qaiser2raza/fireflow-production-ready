@@ -413,7 +413,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return [...prev, formatOrder(data, tablesRef.current)];
           }
           
-          // Preserve existing item statuses for items already in COOKING or READY state
+          // Preserve existing item statuses for items already in PREPARING or DONE state
           const existingOrder = prev[index];
           const mergedData = { ...data };
           
@@ -422,10 +422,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   const existingItem = existingOrder.order_items?.find(
                       (ei: any) => ei.id === newItem.id
                   );
-                  // If item was already COOKING or READY, preserve that status
+                  // If item was already PREPARING or DONE, preserve that status
                   if (existingItem && 
-                      (existingItem.item_status === 'COOKING' || 
-                       existingItem.item_status === 'READY')) {
+                      (existingItem.item_status === 'PREPARING' || 
+                       existingItem.item_status === 'DONE')) {
                       return { ...newItem, item_status: existingItem.item_status };
                   }
                   return newItem;
