@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Supplier, Station } from '../shared/types';
 import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History, Package, Users, Truck } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
@@ -140,6 +140,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lastSyncAt, setLastSyncAt] = useState<Date>(new Date());
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [operationsConfig, setOperationsConfig] = useState<any>(null);
+
+  // Ref to track if we've already joined the room
+  const hasJoinedRoom = useRef(false);
+
+  // --- REFS FOR STABLE SYNC (Avoid closures with stale state) ---
+  const tablesRef = React.useRef(tables);
+  const sectionsRef = React.useRef(sections);
+  const stationsRef = React.useRef(stations);
+
+  React.useEffect(() => { tablesRef.current = tables; }, [tables]);
+  React.useEffect(() => { sectionsRef.current = sections; }, [sections]);
+  React.useEffect(() => { stationsRef.current = stations; }, [stations]);
 
   // ── Open Drawer modal state ─────────────────────────────────────────────
   // Shown when the settle endpoint returns HTTP 402 SESSION_REQUIRED.
@@ -337,6 +349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setOrders([]);
     setActiveView('LOGIN');
     localStorage.removeItem('saved_pin');
+    hasJoinedRoom.current = false;
   };
 
   // Validate token on app load and restore session
@@ -381,166 +394,167 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     validateToken();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    socketIO.connect();
+  const handleDbChange = (payload: any) => {
+    if (process.env.NODE_ENV === 'development') console.log("Real-time DB Change:", payload);
+    const { table, eventType, data, id } = payload;
 
-    // 🔑 Join the restaurant room if user is logged in
-    if (currentUser?.restaurant_id) {
-      console.log(`[SOCKET] Attempting to join room: restaurant:${currentUser.restaurant_id}`);
-      socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
-    } else {
-      console.warn('[SOCKET] Not joining restaurant room - currentUser.restaurant_id is missing');
+    if (table === 'orders') {
+      console.log(`[SYNC] Handling ${eventType} for table 'orders':`, data?.id || id);
+      
+      setOrders(prev => {
+        if (eventType === 'INSERT' && data) {
+          if (prev.some(o => o.id === data.id)) return prev;
+          return [...prev, formatOrder(data, tablesRef.current)];
+        }
+        if (eventType === 'UPDATE' && data) {
+          const index = prev.findIndex(o => o.id === data.id);
+          if (index === -1) {
+            // UPSERT: If laptop missed INSERT, add it now
+            return [...prev, formatOrder(data, tablesRef.current)];
+          }
+          
+          // Preserve existing item statuses for items already in COOKING or READY state
+          const existingOrder = prev[index];
+          const mergedData = { ...data };
+          
+          if (data.order_items && existingOrder.order_items) {
+              mergedData.order_items = data.order_items.map((newItem: any) => {
+                  const existingItem = existingOrder.order_items?.find(
+                      (ei: any) => ei.id === newItem.id
+                  );
+                  // If item was already COOKING or READY, preserve that status
+                  if (existingItem && 
+                      (existingItem.item_status === 'COOKING' || 
+                       existingItem.item_status === 'READY')) {
+                      return { ...newItem, item_status: existingItem.item_status };
+                  }
+                  return newItem;
+              });
+          }
+          
+          return prev.map((o, i) => 
+              i === index ? formatOrder({ ...o, ...mergedData }, tablesRef.current) : o
+          );
+        }
+        if (eventType === 'DELETE') {
+          if (id === 'ALL') return [];  // Factory reset clears all orders
+          return prev.filter(o => o.id !== id);
+        }
+        return prev;
+      });
     }
 
-    const handleSessionExpired = () => {
-      logout();
-      setActiveView('SESSION_EXPIRED');
-    };
+    if (table === 'tables') {
+      setTables(prev => {
+        if (eventType === 'INSERT' && data) return [...prev, data];
+        if (eventType === 'UPDATE') {
+          // Handle factory reset broadcast (id: 'ALL')
+          if (id === 'ALL') return prev.map(t => ({ ...t, status: 'AVAILABLE', active_order_id: null }));
+          if (data) return prev.map(t => t.id === data.id ? { ...t, ...data } : t);
+          return prev;
+        }
+        if (eventType === 'DELETE') {
+          if (id === 'ALL') return [];
+          return prev.filter(t => t.id !== id);
+        }
+        return prev;
+      });
+    }
 
+    if (table === 'sections') {
+      setSections(prev => {
+        if (eventType === 'INSERT' && data) return [...prev, data];
+        if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
+        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
+        return prev;
+      });
+    }
+
+    if (table === 'stations') {
+      setStations(prev => {
+        if (eventType === 'INSERT' && data) return [...prev, data];
+        if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
+        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
+        return prev;
+      });
+    }
+
+    if (table === 'transactions') {
+      setTransactions(prev => {
+        if (eventType === 'INSERT' && data) {
+          if (prev.some(t => t.id === data.id)) return prev;
+          return [{ ...data, amount: Number(data.amount) }, ...prev];
+        }
+        if (eventType === 'UPDATE' && data) return prev.map(t => t.id === data.id ? { ...t, ...data, amount: Number(data.amount) } : t);
+        if (eventType === 'DELETE') return prev.filter(t => t.id !== id);
+        return prev;
+      });
+    }
+
+    if (table === 'staff') {
+      const isRider = (s: any) => s && (s.role === 'RIDER' || s.role === 'DRIVER');
+
+      setDrivers(prev => {
+        if (eventType === 'INSERT' && data && isRider(data)) return [...prev, data];
+        if (eventType === 'UPDATE' && data) {
+          const existing = prev.find(s => s.id === data.id);
+          if (existing) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
+          if (isRider(data)) return [...prev, data]; // Was not a rider, now is? Or just new.
+          return prev;
+        }
+        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
+        return prev;
+      });
+
+      const updateAllStaff = (prev: Staff[]) => {
+        if (eventType === 'INSERT' && data) return [...prev, data];
+        if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
+        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
+        return prev;
+      };
+      setServers(prev => updateAllStaff(prev));
+    }
+
+    if (table === 'menu_items') {
+      setMenuItems(prev => {
+        if (eventType === 'INSERT' && data) return [...prev, data];
+        if (eventType === 'UPDATE' && data) return prev.map(i => i.id === data.id ? { ...i, ...data } : i);
+        if (eventType === 'DELETE') return prev.filter(i => i.id !== id);
+        return prev;
+      });
+    }
+
+    if (table === 'menu_categories') {
+      setMenuCategories(prev => {
+        if (eventType === 'INSERT' && data) return [...prev, data];
+        if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
+        if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
+        return prev;
+      });
+    }
+
+    if (table === 'customers') {
+      setCustomers(prev => {
+        if (eventType === 'INSERT' && data) return [...prev, data];
+        if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
+        if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
+        return prev;
+      });
+    }
+  };
+
+  const handleSessionExpired = () => {
+    logout();
+    setActiveView('SESSION_EXPIRED');
+  };
+
+  useEffect(() => {
+    socketIO.connect();
     window.addEventListener('session:expired', handleSessionExpired);
 
-    // Real-time DB listeners
-    socketIO.on('db_change', (payload: any) => {
-      if (process.env.NODE_ENV === 'development') console.log("Real-time DB Change:", payload);
-      const { table, eventType, data, id } = payload;
-
-      if (table === 'orders') {
-        console.log(`[SYNC] Handling ${eventType} for table 'orders':`, data?.id || id);
-        const mapOrderLocal = (o: any) => {
-          const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
-          const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
-          const delivery = o.delivery_order || (o.delivery_orders && o.delivery_orders[0]);
-          return {
-            ...o,
-            total: Number(o.total || 0) > 0 ? Number(o.total) : (o.order_items || []).reduce((acc: number, item: any) => acc + (Number(item.unit_price || 0) * (item.quantity || 0)), 0),
-            tax: Number(o.tax || 0),
-            service_charge: Number(o.service_charge || 0),
-            delivery_fee: Number(o.delivery_fee || 0),
-            tableId: dineIn?.table_id || o.table_id || null,
-            guestCount: dineIn?.guest_count || o.guest_count || 1,
-            customerName: takeaway?.customer_name || delivery?.customer_name || o.customer_name || "Guest",
-            customerPhone: takeaway?.customer_phone || delivery?.customer_phone || o.customer_phone || "",
-            timestamp: new Date(o.created_at || o.timestamp || Date.now()),
-            order_items: (o.order_items || []).map((item: any) => ({
-              ...item,
-              unit_price: Number(item.unit_price || 0),
-              total_price: Number(item.total_price || 0)
-            }))
-          };
-        };
-
-        setOrders(prev => {
-          if (eventType === 'INSERT' && data) {
-            if (prev.some(o => o.id === data.id)) return prev;
-            return [...prev, mapOrderLocal(data)];
-          }
-          if (eventType === 'UPDATE' && data) return prev.map(o => o.id === data.id ? { ...o, ...mapOrderLocal(data) } : o);
-          if (eventType === 'DELETE') {
-            if (id === 'ALL') return [];  // Factory reset clears all orders
-            return prev.filter(o => o.id !== id);
-          }
-          return prev;
-        });
-      }
-
-      if (table === 'tables') {
-        setTables(prev => {
-          if (eventType === 'INSERT' && data) return [...prev, data];
-          if (eventType === 'UPDATE') {
-            // Handle factory reset broadcast (id: 'ALL')
-            if (id === 'ALL') return prev.map(t => ({ ...t, status: 'AVAILABLE', active_order_id: null }));
-            if (data) return prev.map(t => t.id === data.id ? { ...t, ...data } : t);
-            return prev;
-          }
-          if (eventType === 'DELETE') {
-            if (id === 'ALL') return [];
-            return prev.filter(t => t.id !== id);
-          }
-          return prev;
-        });
-      }
-
-      if (table === 'sections') {
-        setSections(prev => {
-          if (eventType === 'INSERT' && data) return [...prev, data];
-          if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-          if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-          return prev;
-        });
-      }
-
-      if (table === 'stations') {
-        setStations(prev => {
-          if (eventType === 'INSERT' && data) return [...prev, data];
-          if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-          if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-          return prev;
-        });
-      }
-
-      if (table === 'transactions') {
-        setTransactions(prev => {
-          if (eventType === 'INSERT' && data) {
-            if (prev.some(t => t.id === data.id)) return prev;
-            return [{ ...data, amount: Number(data.amount) }, ...prev];
-          }
-          if (eventType === 'UPDATE' && data) return prev.map(t => t.id === data.id ? { ...t, ...data, amount: Number(data.amount) } : t);
-          if (eventType === 'DELETE') return prev.filter(t => t.id !== id);
-          return prev;
-        });
-      }
-
-      if (table === 'staff') {
-        const isRider = (s: any) => s && (s.role === 'RIDER' || s.role === 'DRIVER');
-
-        setDrivers(prev => {
-          if (eventType === 'INSERT' && data && isRider(data)) return [...prev, data];
-          if (eventType === 'UPDATE' && data) {
-            const existing = prev.find(s => s.id === data.id);
-            if (existing) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-            if (isRider(data)) return [...prev, data]; // Was not a rider, now is? Or just new.
-            return prev;
-          }
-          if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-          return prev;
-        });
-
-        const updateAllStaff = (prev: Staff[]) => {
-          if (eventType === 'INSERT' && data) return [...prev, data];
-          if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-          if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-          return prev;
-        };
-        setServers(prev => updateAllStaff(prev));
-      }
-
-      if (table === 'menu_items') {
-        setMenuItems(prev => {
-          if (eventType === 'INSERT' && data) return [...prev, data];
-          if (eventType === 'UPDATE' && data) return prev.map(i => i.id === data.id ? { ...i, ...data } : i);
-          if (eventType === 'DELETE') return prev.filter(i => i.id !== id);
-          return prev;
-        });
-      }
-
-      if (table === 'menu_categories') {
-        setMenuCategories(prev => {
-          if (eventType === 'INSERT' && data) return [...prev, data];
-          if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
-          if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
-          return prev;
-        });
-      }
-
-      if (table === 'customers') {
-        setCustomers(prev => {
-          if (eventType === 'INSERT' && data) return [...prev, data];
-          if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
-          if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
-          return prev;
-        });
-      }
-    });
+    // Set up db_change listener ONCE — remove previous before adding
+    socketIO.removeAllListeners('db_change');
+    socketIO.on('db_change', handleDbChange);
 
     const savedPin = localStorage.getItem('saved_pin');
     const token = localStorage.getItem('accessToken');
@@ -551,13 +565,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return () => {
-      socketIO.off('db_change');
       window.removeEventListener('session:expired', handleSessionExpired);
-      // We don't call disconnect() here to prevent "flapping" 
-      // when React unmounts/remounts during login cycles.
-      // The singleton will handle cleanup when needed.
+      socketIO.removeAllListeners('db_change');
     };
-  }, [currentUser]);
+  }, []); // Run ONCE on mount
+
+  // Separate useEffect ONLY for room joining
+  useEffect(() => {
+    if (currentUser?.restaurant_id && !hasJoinedRoom.current) {
+      console.log(`[SOCKET] Joining room: restaurant:${currentUser.restaurant_id}`);
+      socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
+      hasJoinedRoom.current = true;
+    }
+  }, [currentUser?.restaurant_id]); // Only re-run when restaurant_id changes
 
   // AUTO-CLEANUP: Delete active orders older than 24 hours (v3.0: DRAFT is now ACTIVE)
   useEffect(() => {
@@ -731,7 +751,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{
-      currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, suppliers,
+      currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, suppliers, stations,
       connectionStatus, lastSyncAt, notifications, activeView, loading, isRestaurantLoading, orderToEdit,
       socket: socketIO,
       activeSession, setActiveSession,
@@ -775,12 +795,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         if (!res.ok) return null;
         const result = await res.json();
-        setOrders(prev => prev.map(o => o.id === result.id ? formatOrder(result, tables) : o));
-        return result;
+        const updatedOrder = result.order;
+        if (updatedOrder) {
+          setOrders(prev => prev.map(o => o.id === updatedOrder.id ? formatOrder(updatedOrder, tables) : o));
+        }
+        return updatedOrder;
       },
       updateOrderStatus: async (id: string, status: OrderStatus) => {
         const res = await fetchWithAuth(`${API_URL}/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
-        if (res.ok) setOrders(prev => prev.map(o => o.id === id ? ({ ...o, status } as Order) : o));
+        if (res.ok) {
+          const result = await res.json();
+          setOrders(prev => prev.map(o => o.id === id ? formatOrder(result, tables) : o));
+        }
       },
       assignDriverToOrder: async (orderId: string, driverId: string) => {
         const res = await fetchWithAuth(`${API_URL}/orders/${orderId}`, {

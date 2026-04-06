@@ -60,11 +60,19 @@ class SocketIOClient {
         if (!this.listeners[event]) {
             this.listeners[event] = [];
         }
+        // Prevent duplicate listeners
+        if (this.listeners[event].includes(callback)) return;
         this.listeners[event].push(callback);
 
-        // Also listen on socket
         if (this.socket) {
             this.socket.on(event, (data) => callback(data));
+        }
+    }
+
+    removeAllListeners(event: string) {
+        delete this.listeners[event];
+        if (this.socket) {
+            this.socket.removeAllListeners(event);
         }
     }
 
