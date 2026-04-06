@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { MenuItem, OrderItem, OrderType } from '../../shared/types';
 import { useAppContext } from '../../client/contexts/AppContext';
-import { Search, X, Edit2, Plus, Minus, Loader2, Utensils, Flame, ShoppingBag, Bike, Users, Banknote, Printer, History } from 'lucide-react';
+import { Search, X, Edit2, Plus, Minus, Loader2, Utensils, Flame, ShoppingBag, Bike, Users, Banknote, Printer, History, FileText } from 'lucide-react';
 import { useDebounce } from '../../hooks/useDebounce';
 import { CustomerQuickAdd } from './components/CustomerQuickAdd';
 import { TokenDisplayBanner } from './components/TokenDisplayBanner';
@@ -19,7 +19,7 @@ export const POSView: React.FC = () => {
   const {
     addOrder, updateOrder, fireOrder, orders,
     orderToEdit, setOrderToEdit, setActiveView, currentUser, menuItems, menuCategories,
-    tables, addNotification, customers, processPayment, operationsConfig
+    tables, addNotification, customers, processPayment, operationsConfig, updateOrderStatus
   } = useAppContext();
 
   // UI & Order State
@@ -142,6 +142,25 @@ export const POSView: React.FC = () => {
       addNotification('info', `Editing Order #${orderToEdit.id.slice(-6)}`);
     }
   }, [orderToEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync item statuses when server data updates (Fix: Prevent POS from resetting KDS states)
+  useEffect(() => {
+    if (activeOrderId && activeOrderData?.order_items) {
+        setCurrentOrderItems(prev => {
+            return prev.map(localItem => {
+                // Find matching server item by id
+                const serverItem = activeOrderData.order_items?.find(
+                    si => si.id === localItem.id
+                );
+                if (serverItem && localItem.item_status !== 'DRAFT') {
+                    // Sync server status but keep DRAFT items as DRAFT
+                    return { ...localItem, item_status: serverItem.item_status };
+                }
+                return localItem;
+            });
+        });
+    }
+  }, [activeOrderData?.order_items]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Customer Lookup logic
   useEffect(() => {
@@ -467,6 +486,11 @@ export const POSView: React.FC = () => {
           // Explicitly Fire: Transition DRAFT items to PENDING or DONE
           const shouldSkipPrep = item.menu_item?.requires_prep === false || item.station === 'NO_PRINT';
           return { ...item, item_status: shouldSkipPrep ? 'DONE' : 'PENDING' };
+        }
+        // For non-DRAFT items, use the server's latest status if available
+        const serverItem = activeOrderData?.order_items?.find(si => si.id === item.id);
+        if (serverItem && item.item_status !== 'DRAFT') {
+          return { ...item, item_status: serverItem.item_status };
         }
         return item;
       });
@@ -927,11 +951,24 @@ export const POSView: React.FC = () => {
                     } finally {
                       setIsSubmitting(false);
                     }
-                  } else if (currentUser?.role !== 'SERVER') {
+                  } else if (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') {
+                    const status = (activeOrderData || orderToEdit)?.status;
+                    if (status === 'READY' || status === 'SERVED') {
+                      try {
+                        setIsSubmitting(true);
+                        await updateOrderStatus((activeOrderData || orderToEdit)!.id, 'BILL_REQUESTED' as any);
+                        addNotification('success', 'Bill requested successfully!');
+                      } catch (e: any) {
+                        addNotification('error', e.message);
+                      } finally {
+                        setIsSubmitting(false);
+                      }
+                    }
+                  } else {
                     setShowPaymentModal(true);
                   }
                 }}
-                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : currentUser?.role === 'SERVER' ? 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/40' : 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
               >
                 {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
                   <>
@@ -940,11 +977,18 @@ export const POSView: React.FC = () => {
                         <Flame size={14} className="animate-pulse" />
                         <span>Fire Order</span>
                       </>
-                    ) : currentUser?.role === 'SERVER' ? (
-                      <>
-                        <Utensils size={14} />
-                        <span>Order Fired</span>
-                      </>
+                    ) : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? (
+                      ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? (
+                        <>
+                          <FileText size={14} />
+                          <span>Request Bill</span>
+                        </>
+                      ) : (
+                        <>
+                          <Utensils size={14} />
+                          <span>Order Fired</span>
+                        </>
+                      )
                     ) : (
                       <>
                         <Banknote size={14} />
@@ -1052,18 +1096,55 @@ export const POSView: React.FC = () => {
                 </button>
 
                 <button
-                  disabled={currentOrderItems.length === 0 || isSubmitting || (!currentOrderItems.some(i => i.item_status === 'DRAFT') && currentUser?.role === 'SERVER')}
-                  onClick={() => {
+                  disabled={currentOrderItems.length === 0 || isSubmitting}
+                  onClick={async () => {
                     const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
                     if (hasUnfiredItems) {
                       handleOrderAction(true);
-                    } else if (currentUser?.role !== 'SERVER') {
+                    } else if (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') {
+                      const status = (activeOrderData || orderToEdit)?.status;
+                      if (status === 'READY' || status === 'SERVED') {
+                        try {
+                          setIsSubmitting(true);
+                          await updateOrderStatus((activeOrderData || orderToEdit)!.id, 'BILL_REQUESTED' as any);
+                          addNotification('success', 'Bill requested successfully!');
+                        } catch (e: any) {
+                          addNotification('error', e.message);
+                        } finally {
+                          setIsSubmitting(false);
+                        }
+                      }
+                    } else {
                       setShowPaymentModal(true);
                     }
                   }}
-                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : currentUser?.role === 'SERVER' ? 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/40' : 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
                 >
-                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (currentOrderItems.some(i => i.item_status === 'DRAFT') ? <><Flame size={14} className="animate-pulse" /><span>Fire</span></> : currentUser?.role === 'SERVER' ? <><Utensils size={14} /><span>Fired</span></> : <><Banknote size={14} /><span>Pay</span></>)}
+                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
+                    currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
+                      <>
+                        <Flame size={14} className="animate-pulse" />
+                        <span>Fire</span>
+                      </>
+                    ) : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? (
+                      ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? (
+                        <>
+                          <FileText size={14} />
+                          <span>Bill</span>
+                        </>
+                      ) : (
+                        <>
+                          <Utensils size={14} />
+                          <span>Fired</span>
+                        </>
+                      )
+                    ) : (
+                      <>
+                        <Banknote size={14} />
+                        <span>Pay</span>
+                      </>
+                    )
+                  )}
                 </button>
               </div>
             </div>
