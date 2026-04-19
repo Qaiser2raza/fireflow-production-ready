@@ -4,10 +4,11 @@ import {
    Bike, MapPin, Clock, Navigation, Package, Send, CheckCircle2,
    Banknote, AlertCircle, Zap, Check, Layers, ShoppingCart,
    X, ChevronRight, TrendingUp, RefreshCw,
-   User, AlertTriangle
+   User, AlertTriangle, Edit2, Eye
 } from 'lucide-react';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
-import { useThermalPrinter } from '../../hooks/useThermalPrinter';
+
+import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
 
 /* ─────────────────────────── helpers ─────────────────────────── */
 const fmt = (n: number) => `Rs. ${Number(n).toLocaleString()}`;
@@ -16,19 +17,22 @@ const elapsed = (date: string | Date) =>
 
 /* ─────────────────────────── component ─────────────────────────── */
 export const LogisticsHub: React.FC = () => {
-   const { orders, drivers, addNotification, currentUser, fetchInitialData, completeDelivery, failDelivery } = useAppContext();
-   const { printReceipt } = useThermalPrinter();
+   const { orders, drivers, addNotification, currentUser, fetchInitialData, failDelivery, activeSession, setActiveView, setOrderToEdit } = useAppContext();
 
    const [activeTab, setActiveTab] = useState<'DISPATCH' | 'MONITOR' | 'SETTLE'>('DISPATCH');
    const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
    const [isProcessing, setIsProcessing] = useState(false);
+   const [receiptPrintQueue, setReceiptPrintQueue] = useState<string[]>([]);
+   const [viewOrderId, setViewOrderId] = useState<string | null>(null);
 
    // Dispatch modal
    const [dispatchRiderId, setDispatchRiderId] = useState<string | null>(null);
+   const [dispatchFloat, setDispatchFloat] = useState('');      // Float issued with this run
+   const [dispatchingIds, setDispatchingIds] = useState<string[]>([]); // Optimistic UI: hide mid-flight orders
 
    // Shift modal
    const [shiftModal, setShiftModal] = useState<{ open: boolean; mode: 'OPEN' | 'CLOSE' | 'CASH_DROP'; riderId: string | null }>({ open: false, mode: 'OPEN', riderId: null });
-   const [shiftAmount, setShiftAmount] = useState('0');
+   const [shiftAmount, setShiftAmount] = useState('');
    const [shiftNotes, setShiftNotes] = useState('');
 
    // Settlement cart
@@ -37,16 +41,26 @@ export const LogisticsHub: React.FC = () => {
    const [receivedCash, setReceivedCash] = useState('');
    const [settleNotes, setSettleNotes] = useState('');
 
+   // Settle confirmation modal
+   const [showSettleModal, setShowSettleModal] = useState(false);
+   const [settleModalCash, setSettleModalCash] = useState('');
+
    const API = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
    /* ── derived data ── */
    const pendingDispatch = useMemo(() =>
-      orders.filter(o => o.type === 'DELIVERY' && o.status === 'READY' && !o.assigned_driver_id)
+      orders
+         .filter(o =>
+            o.type === 'DELIVERY' &&
+            o.status?.trim().toUpperCase() === 'READY' &&
+            !o.assigned_driver_id &&
+            !dispatchingIds.includes(o.id)  // ← Optimistic: hide in-flight orders immediately
+         )
          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
-      [orders]);
+      [orders, dispatchingIds]);
 
    const activeRuns = useMemo(() =>
-      orders.filter(o => o.type === 'DELIVERY' && o.status === 'READY' && !!o.assigned_driver_id),
+      orders.filter(o => o.type === 'DELIVERY' && (o.status?.trim().toUpperCase() === 'READY') && !!o.assigned_driver_id),
       [orders]);
 
    const delivered = useMemo(() =>
@@ -75,6 +89,16 @@ export const LogisticsHub: React.FC = () => {
    const received = Number(receivedCash) || 0;
    const difference = received - expectedTotal;
 
+   // Audit trail: all orders assigned to this rider in their current shift
+   const auditTrailOrders = useMemo(() => {
+      if (!settleRiderId || !settleRider) return [];
+      return orders.filter(o =>
+         o.assigned_driver_id === settleRiderId &&
+         ['READY', 'DELIVERED', 'CANCELLED'].includes(o.status?.trim().toUpperCase() || '') &&
+         new Date(o.created_at) > new Date(settleRider?.active_shift?.opened_at || 0)
+      ).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+   }, [orders, settleRiderId, settleRider]);
+
    /* ── actions ── */
    const toggleOrder = (id: string) =>
       setSelectedOrderIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
@@ -85,91 +109,77 @@ export const LogisticsHub: React.FC = () => {
    const handleDispatch = async () => {
       if (!selectedOrderIds.length || !dispatchRiderId) return;
       setIsProcessing(true);
+
+      // Capture into local consts BEFORE clearing state — state clears are async
+      const idsToDispatch = [...selectedOrderIds];
+      const riderId = dispatchRiderId;
+      const riderName = drivers.find(d => d.id === riderId)?.name || 'rider';
+      const floatAmt = Number(dispatchFloat) || 0;
+
+      // ── OPTIMISTIC UPDATE: remove orders from queue instantly ──
+      setDispatchingIds(prev => [...prev, ...idsToDispatch]);
+      setSelectedOrderIds([]);
+      setDispatchRiderId(null);
+      setDispatchFloat('');
+
       try {
-         for (const orderId of selectedOrderIds) {
+         for (const orderId of idsToDispatch) {
             const res = await fetchWithAuth(`${API}/orders/${orderId}/assign-driver`, {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ driverId: dispatchRiderId, processedBy: currentUser?.id }),
+               body: JSON.stringify({
+                  driverId: riderId,
+                  processedBy: currentUser?.id,
+                  ...(floatAmt > 0 ? { floatAmount: floatAmt } : {})
+               }),
             });
+            if (!res.ok) {
+               const text = await res.text();
+               throw new Error(`Server ${res.status}: ${text.slice(0, 120)}`);
+            }
             const d = await res.json();
             if (!d.success) throw new Error(d.error);
          }
-         addNotification?.('success', `${selectedOrderIds.length} order(s) dispatched to ${drivers.find(d => d.id === dispatchRiderId)?.name}`);
-         
-         // Trigger Rider Print
-         await handlePrintRiderSlip(selectedOrderIds, dispatchRiderId);
 
-         setSelectedOrderIds([]);
-         setDispatchRiderId(null);
+         const riderName = drivers.find(d => d.id === riderId)?.name || 'rider';
+         addNotification?.('success', `${idsToDispatch.length} order(s) dispatched to ${riderName}${floatAmt > 0 ? ` • Float Rs. ${floatAmt.toLocaleString()} issued` : ''}`);
+
+         // Release optimistic lock — socket db_change will update state; fetchInitialData as safety net
+         setDispatchingIds(prev => prev.filter(id => !idsToDispatch.includes(id)));
          fetchInitialData();
+
+         // Auto-print rider dispatch receipts
+         setReceiptPrintQueue([...idsToDispatch]);
       } catch (e: any) {
+         // ── ROLLBACK optimistic update on error ──
+         setDispatchingIds(prev => prev.filter(id => !idsToDispatch.includes(id)));
          addNotification?.('error', e.message || 'Dispatch failed');
-      } finally { setIsProcessing(false); }
+      } finally {
+         setIsProcessing(false);
+      }
    };
 
-   const handlePrintRiderSlip = async (orderIds: string[], riderId: string) => {
-      const rider = drivers.find(d => d.id === riderId);
-      if (!rider) return;
-
-      const assignedOrders = orders.filter(o => orderIds.includes(o.id));
-      const totalAmount = assignedOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-
-      const html = `
-         <div style="font-family: monospace; width: 100%; font-size: 11px; padding: 5px;">
-            <div style="text-align: center; border-bottom: 1px dashed #000; padding-bottom: 5px; margin-bottom: 10px;">
-               <h2 style="margin: 0; font-size: 16px;">RIDER DISPATCH</h2>
-               <p style="margin: 2px 0;"><b>Rider: ${rider.name}</b></p>
-               <p style="margin: 0;">${new Date().toLocaleString()}</p>
-            </div>
-            <table style="width: 100%; border-collapse: collapse;">
-               <thead>
-                  <tr style="border-bottom: 1px solid #000;">
-                     <th style="text-align: left; padding: 2px 0;">Order</th>
-                     <th style="text-align: right; padding: 2px 0;">Total</th>
-                  </tr>
-               </thead>
-               <tbody>
-                  ${assignedOrders.map(o => `
-                     <tr style="border-top: 1px dotted #eee;">
-                        <td style="padding: 5px 0;">
-                           <b>#${o.id.slice(-6).toUpperCase()}</b><br/>
-                           ${o.customer_name || 'Customer'}<br/>
-                           <span style="font-size: 10px;">${o.delivery_address || 'No Address'}</span>
-                        </td>
-                        <td style="text-align: right; padding: 5px 0; vertical-align: top;">
-                           <b>Rs. ${Number(o.total || 0).toLocaleString()}</b>
-                        </td>
-                     </tr>
-                  `).join('')}
-               </tbody>
-            </table>
-            <div style="margin-top: 15px; border-top: 2px solid #000; padding-top: 5px;">
-               <div style="display: flex; justify-content: space-between;">
-                  <span>ORDERS:</span>
-                  <span>${assignedOrders.length}</span>
-               </div>
-               <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; margin-top: 5px;">
-                  <span>TO COLLECT:</span>
-                  <span>Rs. ${totalAmount.toLocaleString()}</span>
-               </div>
-            </div>
-            <div style="text-align: center; margin-top: 20px; font-size: 9px; border-top: 1px dashed #eee; padding-top: 10px;">
-               --- END OF BATCH ---<br/>
-               FIREFLOW LOGISTICS
-            </div>
-         </div>
-      `;
-
-      await printReceipt(html);
-   };
 
    const handleMarkDelivered = async (orderId: string) => {
+      if (!window.confirm('Mark this order as DELIVERED and add to rider collection?')) return;
+      setIsProcessing(true);
       try {
-         setIsProcessing(true);
-         await completeDelivery(orderId);
-      } catch (e) {
-         console.error('Delivery Error:', e);
+         // FIX: Correct endpoint URL was /mark-delivered, not /deliver
+         const res = await fetchWithAuth(`${API}/orders/${orderId}/mark-delivered`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+         });
+         // FIX: Guard against 404/500 HTML responses before parsing JSON
+         if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Server error ${res.status}: ${text.slice(0, 120)}`);
+         }
+         const d = await res.json();
+         if (!d.success) throw new Error(d.error || 'Failed to mark as delivered');
+         addNotification?.('success', 'Order marked as Delivered');
+         fetchInitialData();
+      } catch (e: any) {
+         addNotification?.('error', e.message || 'Could not mark order as delivered');
       } finally {
          setIsProcessing(false);
       }
@@ -190,18 +200,23 @@ export const LogisticsHub: React.FC = () => {
 
    const handleOpenShift = async () => {
       if (!shiftModal.riderId) return;
+      const floatAmt = Number(shiftAmount);
+      if (floatAmt > 0 && ['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') && !activeSession) {
+          addNotification?.('error', 'You must open a Cashier Session in POS before giving out cash floats.');
+          return;
+      }
       setIsProcessing(true);
       try {
          const res = await fetchWithAuth(`${API}/riders/shift/open`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-restaurant-id': currentUser?.restaurant_id || '' },
-            body: JSON.stringify({ riderId: shiftModal.riderId, openedBy: currentUser?.id, openingFloat: Number(shiftAmount), notes: shiftNotes }),
+            body: JSON.stringify({ riderId: shiftModal.riderId, openedBy: currentUser?.id, openingFloat: floatAmt, notes: shiftNotes, session_id: activeSession?.id }),
          });
          const d = await res.json();
          if (!d.success) throw new Error(d.error);
          addNotification?.('success', 'Shift opened');
          setShiftModal({ open: false, mode: 'OPEN', riderId: null });
-         setShiftAmount('0'); setShiftNotes('');
+         setShiftAmount(''); setShiftNotes('');
          fetchInitialData();
       } catch (e: any) { addNotification?.('error', e.message || 'Failed'); }
       finally { setIsProcessing(false); }
@@ -213,6 +228,13 @@ export const LogisticsHub: React.FC = () => {
          addNotification?.('error', 'No active shift found for this rider.');
          return;
       }
+      
+      const amt = Number(shiftAmount);
+      if (amt > 0 && ['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') && !activeSession) {
+          addNotification?.('error', 'You must open a Cashier Session in POS before receiving cash drops/closings.');
+          return;
+      }
+      
       setIsProcessing(true);
       try {
          let res;
@@ -222,17 +244,17 @@ export const LogisticsHub: React.FC = () => {
 
          if (shiftModal.mode === 'CLOSE') {
             endpoint = `${API}/riders/shift/close`;
-            body = JSON.stringify({ shiftId: rider.active_shift.id, closedBy: currentUser?.id, closingCash: Number(shiftAmount), notes: shiftNotes });
+            body = JSON.stringify({ shiftId: rider.active_shift.id, closedBy: currentUser?.id, closingCash: amt, notes: shiftNotes, session_id: activeSession?.id });
             successMessage = 'Shift closed & reconciled';
          } else if (shiftModal.mode === 'CASH_DROP') {
-            const depositAmount = Number(shiftAmount);
+            const depositAmount = amt;
             if (!depositAmount || depositAmount <= 0) {
                addNotification?.('error', 'Enter a valid deposit amount greater than 0');
                setIsProcessing(false);
                return;
             }
             endpoint = `${API}/riders/shift/deposit`;
-            body = JSON.stringify({ shiftId: rider.active_shift.id, depositedBy: currentUser?.id, amount: depositAmount, notes: shiftNotes });
+            body = JSON.stringify({ shiftId: rider.active_shift.id, depositedBy: currentUser?.id, amount: depositAmount, notes: shiftNotes, session_id: activeSession?.id });
             successMessage = 'Cash deposit recorded';
          } else {
             throw new Error('Invalid shift modal mode for this action.');
@@ -256,6 +278,10 @@ export const LogisticsHub: React.FC = () => {
 
    const handleOrdersSettle = async () => {
       if (!selectedSettleIds.length || !settleRiderId) return;
+      if (['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') && !activeSession) {
+          addNotification?.('error', 'You must open a Cashier Session in POS before settling orders.');
+          return;
+      }
       setIsProcessing(true);
       try {
          for (const orderId of selectedSettleIds) {
@@ -269,7 +295,8 @@ export const LogisticsHub: React.FC = () => {
                   amount: Number(order.total),          // backend reads 'amount'
                   paymentMethod: 'CASH',                 // backend reads 'paymentMethod'
                   payment_method: 'CASH',                // fallback alias
-                  processedBy: currentUser?.id
+                  processedBy: currentUser?.id,
+                  session_id: activeSession?.id
                }),
             });
             const d = await res.json();
@@ -474,8 +501,28 @@ export const LogisticsHub: React.FC = () => {
                                     {mins}m
                                  </span>
                                  <span className="lh-col lh-col--amount lh-amount">{fmt(Number(order.total))}</span>
-                                 <span className="lh-col lh-col--action">
-                                    {isSelected && <ChevronRight size={16} className="text-indigo-400" />}
+                                 <span className="lh-col lh-col--action flex gap-1 justify-end">
+                                    <button
+                                       onClick={(e) => { e.stopPropagation(); setViewOrderId(order.id); }}
+                                       className="h-8 w-8 flex items-center justify-center bg-slate-800 text-slate-400 hover:text-blue-400 hover:bg-slate-700 rounded-lg transition-all"
+                                       title="View Order Details"
+                                    >
+                                       <Eye size={14} />
+                                    </button>
+                                    <button
+                                       onClick={(e) => { 
+                                          e.stopPropagation(); 
+                                          if(setOrderToEdit && setActiveView) {
+                                             setOrderToEdit(order); 
+                                             setActiveView('pos'); 
+                                          }
+                                       }}
+                                       className="h-8 w-8 mr-1 flex items-center justify-center bg-slate-800 text-slate-400 hover:text-gold-500 hover:bg-slate-700 rounded-lg transition-all"
+                                       title="Edit Order in POS"
+                                    >
+                                       <Edit2 size={14} />
+                                    </button>
+                                    {isSelected && <ChevronRight size={16} className="text-indigo-400 ml-1" />}
                                  </span>
                               </div>
                            );
@@ -535,6 +582,26 @@ export const LogisticsHub: React.FC = () => {
                                  </span>
                                  <span className="lh-col lh-col--amount lh-amount">{fmt(Number(order.total))}</span>
                                  <span className="lh-col lh-col--actions">
+                                    <button
+                                       onClick={(e) => { e.stopPropagation(); setViewOrderId(order.id); }}
+                                       className="h-8 w-8 mr-1 flex items-center justify-center bg-slate-800 text-slate-400 hover:text-blue-400 hover:bg-slate-700 rounded-lg transition-all"
+                                       title="View Order Details"
+                                    >
+                                       <Eye size={14} />
+                                    </button>
+                                    <button
+                                       onClick={(e) => { 
+                                          e.stopPropagation(); 
+                                          if(setOrderToEdit && setActiveView) {
+                                             setOrderToEdit(order); 
+                                             setActiveView('pos'); 
+                                          }
+                                       }}
+                                       className="h-8 w-8 mr-2 flex items-center justify-center bg-slate-800 text-slate-400 hover:text-gold-500 hover:bg-slate-700 rounded-lg transition-all"
+                                       title="Edit Order in POS"
+                                    >
+                                       <Edit2 size={14} />
+                                    </button>
                                     <button
                                        onClick={() => handleMarkDelivered(order.id)}
                                        disabled={isProcessing}
@@ -678,114 +745,143 @@ export const LogisticsHub: React.FC = () => {
                                     </div>
                                  </div>
 
-                                 {/* Per-order rows */}
-                                 {settleOrders.length > 0 && (
-                                    <div className="lh-cart-orders">
-                                       <p className="lh-cart-label" style={{ marginBottom: '6px' }}>Delivered Orders</p>
-                                       {settleOrders.map((o, i) => (
-                                          <div key={o.id} className="lh-cart-order-row">
-                                             <span className="lh-cart-order-num">{i + 1}</span>
-                                             <div className="lh-cart-order-info">
-                                                <p className="lh-cart-order-name">{o.customer_name || 'Guest'}</p>
-                                                <p className="lh-cart-order-addr">{o.delivery_orders?.[0]?.delivery_address || 'No address'}</p>
+                                 {/* --- 🛡️ Shift Audit Section --- */}
+                                 <div className="lh-audit-header">
+                                    <Layers size={14} className="text-indigo-400" />
+                                    <span>Detailed Shift Audit Trail</span>
+                                 </div>
+
+                                 <div className="lh-cart-orders" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                                    {auditTrailOrders.length === 0 ? (
+                                       <div className="p-8 text-center text-slate-600 text-[10px] font-bold uppercase">No shift history</div>
+                                    ) : auditTrailOrders.map((o) => (
+                                       <div key={o.id} className="lh-cart-order-row group hover:bg-slate-800/50 transition-colors">
+                                          <div className="flex flex-col gap-1 flex-1">
+                                             <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-black text-slate-500">#{o.id.slice(-6).toUpperCase()}</span>
+                                                <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${
+                                                   o.status === 'DELIVERED' ? 'bg-emerald-500/20 text-emerald-400' :
+                                                   o.status === 'CANCELLED' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'
+                                                }`}>
+                                                   {o.status}
+                                                </span>
                                              </div>
-                                             <span className="lh-cart-order-amt">{fmt(Number(o.total))}</span>
+                                             <p className="lh-cart-order-name text-slate-300 font-bold">{o.customer_name || 'Guest'}</p>
                                           </div>
-                                       ))}
+                                          <span className={`font-black text-xs ${o.status === 'DELIVERED' ? 'text-white' : 'text-slate-500'}`}>
+                                             {fmt(Number(o.total))}
+                                          </span>
+                                       </div>
+                                    ))}
+                                 </div>
+
+                                 {/* Breakdown */}
+                                 <div className="lh-cart-breakdown bg-black/20 p-4 rounded-xl border border-white/5 space-y-2">
+                                    <div className="lh-cart-line flex justify-between text-xs">
+                                       <span className="text-slate-400">Opening Float</span>
+                                       <span className="text-white font-bold">{fmt(Number(settleRider.active_shift?.opening_float || 0))}</span>
+                                    </div>
+                                    <div className="lh-cart-line flex justify-between text-xs">
+                                       <span className="text-slate-400">Net Sales</span>
+                                       <span className="text-white font-bold">{fmt(settleOrders.reduce((s, o) => s + Number(o.total), 0))}</span>
+                                    </div>
+                                    {settleRider.active_shift && Number(settleRider.active_shift.cash_dropped) > 0 && (
+                                       <div className="lh-cart-line flex justify-between text-xs text-indigo-400">
+                                          <span>Cash Dropped</span>
+                                          <span className="font-bold">-{fmt(Number(settleRider.active_shift.cash_dropped))}</span>
+                                       </div>
+                                    )}
+                                    <div className="h-px bg-white/10 my-2" />
+                                    <div className="lh-cart-line flex justify-between">
+                                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Net Due from Rider</span>
+                                       <span className="text-lg font-black text-indigo-400">{fmt(expectedTotal)}</span>
+                                    </div>
+                                 </div>
+
+                                 <div className="lh-cart-field">
+                                    <div className="flex gap-2">
+                                       <button
+                                          onClick={() => {
+                                             if (selectedSettleIds.length === 0) {
+                                                addNotification?.('error', 'Select at least one order to settle');
+                                                return;
+                                             }
+                                             if (['CASHIER', 'MANAGER', 'ADMIN'].includes(currentUser?.role || '') && !activeSession) {
+                                                addNotification?.('error', 'You must open a Cashier Session in POS before settling orders.');
+                                                return;
+                                             }
+                                             // Pre-fill modal cash with expected total for convenience
+                                             setSettleModalCash(String(selectedSettleTotal));
+                                             setShowSettleModal(true);
+                                          }}
+                                          disabled={isProcessing || selectedSettleIds.length === 0}
+                                          className="lh-btn lh-btn--emerald flex-1"
+                                       >
+                                          <Banknote size={16} /> Settle Selected ({selectedSettleIds.length})
+                                       </button>
+                                       <button
+                                          onClick={() => { setShiftModal({ open: true, mode: 'CASH_DROP', riderId: settleRiderId }); setShiftAmount('0'); }}
+                                          className="lh-btn lh-btn--ghost-indigo"
+                                          title="Record cash deposit without closing session"
+                                       >
+                                          <TrendingUp size={14} /> Cash Drop
+                                       </button>
+                                    </div>
+                                    {selectedSettleIds.length > 0 && <p className="text-[10px] text-emerald-500 font-bold mt-1 text-right">Total: {fmt(selectedSettleTotal)}</p>}
+                                 </div>
+
+                                 <div className="lh-cart-divider" style={{ margin: '14px 0' }} />
+
+                                 {/* Final Reconciliation - Session Exit */}
+                                 <div className="lh-cart-field">
+                                    <label className="lh-cart-label">Final Session Reconciliation (Shift Close)</label>
+                                    <div className="lh-cash-input-wrap">
+                                       <span className="lh-cash-prefix">Rs.</span>
+                                       <input
+                                          type="text"
+                                          inputMode="decimal"
+                                          id="cash_received_input"
+                                          className="lh-cash-input"
+                                          placeholder="Total cash on hand..."
+                                          autoComplete="off"
+                                          value={receivedCash}
+                                          onChange={e => {
+                                             const val = e.target.value;
+                                             if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                                                setReceivedCash(val);
+                                             }
+                                          }}
+                                       />
+                                    </div>
+                                 </div>
+
+                                 {received > 0 && (
+                                    <div className={`lh-diff ${difference >= 0 ? 'lh-diff--ok' : 'lh-diff--short'}`}>
+                                       {difference >= 0
+                                          ? <><TrendingUp size={15} /> Overage: {fmt(difference)}</>
+                                          : <><AlertTriangle size={15} /> Shortage: {fmt(Math.abs(difference))}</>
+                                       }
                                     </div>
                                  )}
 
-                                 {/* Breakdown */}
-                                 <div className="lh-cart-breakdown">
-                                    <div className="lh-cart-line">
-                                       <span>Opening Float</span>
-                                       <span>{fmt(Number(settleRider.active_shift?.opening_float || 0))}</span>
-                                    </div>
-                                    <div className="lh-cart-line">
-                                       <span>Sales ({settleOrders.length} orders)</span>
-                                       <span>{fmt(settleOrders.reduce((s, o) => s + Number(o.total), 0))}</span>
-                                    </div>
-                                    {settleRider.active_shift && Number(settleRider.active_shift.cash_dropped) > 0 && (
-                                       <div className="lh-cart-line" style={{ color: '#a5b4fc' }}>
-                                          <span>Cash Dropped</span>
-                                          <span>-{fmt(Number(settleRider.active_shift.cash_dropped))}</span>
-                                       </div>
-                                    )}
-                                    <div className="lh-cart-divider" style={{ margin: '14px 0' }} />
-
-                                    <div className="lh-cart-field">
-                                       <div className="flex gap-2">
-                                          <button
-                                             onClick={handleOrdersSettle}
-                                             disabled={isProcessing || selectedSettleIds.length === 0}
-                                             className="lh-btn lh-btn--emerald flex-1"
-                                          >
-                                             <Banknote size={16} /> Settle Selected ({selectedSettleIds.length})
-                                          </button>
-                                          <button
-                                             onClick={() => { setShiftModal({ open: true, mode: 'CASH_DROP', riderId: settleRiderId }); setShiftAmount('0'); }}
-                                             className="lh-btn lh-btn--ghost-indigo"
-                                             title="Record cash deposit without closing session"
-                                          >
-                                             <TrendingUp size={14} /> Cash Drop
-                                          </button>
-                                       </div>
-                                       {selectedSettleIds.length > 0 && <p className="text-[10px] text-emerald-500 font-bold mt-1 text-right">Total: {fmt(selectedSettleTotal)}</p>}
-                                    </div>
-
-                                    <div className="lh-cart-divider" style={{ margin: '14px 0' }} />
-
-                                    {/* Final Reconciliation - Session Exit */}
-                                    <div className="lh-cart-field">
-                                       <label className="lh-cart-label">Final Session Reconciliation (Shift Close)</label>
-                                       <div className="lh-cash-input-wrap">
-                                          <span className="lh-cash-prefix">Rs.</span>
-                                          <input
-                                             type="text"
-                                             inputMode="decimal"
-                                             id="cash_received_input"
-                                             className="lh-cash-input"
-                                             placeholder="Total cash on hand..."
-                                             autoComplete="off"
-                                             value={receivedCash}
-                                             onChange={e => {
-                                                const val = e.target.value;
-                                                if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) {
-                                                   setReceivedCash(val);
-                                                }
-                                             }}
-                                          />
-                                       </div>
-                                    </div>
-
-                                    {received > 0 && (
-                                       <div className={`lh-diff ${difference >= 0 ? 'lh-diff--ok' : 'lh-diff--short'}`}>
-                                          {difference >= 0
-                                             ? <><TrendingUp size={15} /> Overage: {fmt(difference)}</>
-                                             : <><AlertTriangle size={15} /> Shortage: {fmt(Math.abs(difference))}</>
-                                          }
-                                       </div>
-                                    )}
-
-                                    {/* Notes */}
-                                    <div className="lh-cart-field">
-                                       <label className="lh-cart-label">Notes (optional)</label>
-                                       <textarea
-                                          className="lh-cart-textarea"
-                                          placeholder="Any discrepancies or incidents..."
-                                          value={settleNotes}
-                                          onChange={e => setSettleNotes(e.target.value)}
-                                          rows={2}
-                                       />
-                                    </div>
-
-                                    {!settleRider.active_shift && (
-                                       <p className="lh-cart-warn"><AlertCircle size={13} /> Rider has no active shift. Open one first from the Fleet panel.</p>
-                                    )}
-                                    {settleRider.onRoad.length > 0 && (
-                                       <p className="lh-cart-warn" style={{ color: '#fbbf24' }}><AlertTriangle size={13} /> {settleRider.onRoad.length} order(s) still on road — mark them delivered first.</p>
-                                    )}
+                                 {/* Notes */}
+                                 <div className="lh-cart-field">
+                                    <label className="lh-cart-label">Notes (optional)</label>
+                                    <textarea
+                                       className="lh-cart-textarea"
+                                       placeholder="Any discrepancies or incidents..."
+                                       value={settleNotes}
+                                       onChange={e => setSettleNotes(e.target.value)}
+                                       rows={2}
+                                    />
                                  </div>
+
+                                 {!settleRider.active_shift && (
+                                    <p className="lh-cart-warn"><AlertCircle size={13} /> Rider has no active shift. Open one first from the Fleet panel.</p>
+                                 )}
+                                 {settleRider.onRoad.length > 0 && (
+                                    <p className="lh-cart-warn" style={{ color: '#fbbf24' }}><AlertTriangle size={13} /> {settleRider.onRoad.length} order(s) still on road — mark them delivered first.</p>
+                                 )}
                               </div>
 
                               {/* STICKY FOOTER — always visible */}
@@ -817,6 +913,126 @@ export const LogisticsHub: React.FC = () => {
                )}
             </div>
          </main>
+
+         {/* ════════ SETTLE CONFIRMATION MODAL ════════ */}
+         {showSettleModal && settleRider && (() => {
+            const modalExpected = (settleRider.float ?? 0) + selectedSettleTotal - (settleRider.dropped ?? 0);
+            const modalReceived = Number(settleModalCash) || 0;
+            const modalDiff = modalReceived - modalExpected;
+            const selectedOrders = settleOrders.filter(o => selectedSettleIds.includes(o.id));
+            return (
+               <div className="lh-overlay" onClick={() => setShowSettleModal(false)}>
+                  <div className="lh-modal lh-modal--wide" onClick={e => e.stopPropagation()} style={{ width: 500, maxHeight: '90vh', overflowY: 'auto' }}>
+                     <div className="lh-modal-header">
+                        <div className="lh-modal-icon lh-modal-icon--indigo"><Banknote size={22} /></div>
+                        <div style={{ flex: 1 }}>
+                           <h3 className="lh-modal-title">Settle Cash — {settleRider.name}</h3>
+                           <p className="lh-modal-sub">Review totals before confirming cash receipt</p>
+                        </div>
+                        <button onClick={() => setShowSettleModal(false)} className="lh-modal-close"><X size={18} /></button>
+                     </div>
+
+                     {/* Orders being settled */}
+                     <div style={{ padding: '0 4px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {selectedOrders.map((o, i) => (
+                           <div key={o.id} className="lh-modal-order-row">
+                              <span className="lh-modal-order-num">{i + 1}</span>
+                              <div className="lh-modal-order-info">
+                                 <p className="lh-modal-order-name">{o.customer_name || 'Guest'}</p>
+                                 <p className="lh-modal-order-addr">{o.delivery_orders?.[0]?.delivery_address || 'No address'}</p>
+                              </div>
+                              <span className="lh-modal-order-amt">{fmt(Number(o.total))}</span>
+                           </div>
+                        ))}
+                     </div>
+
+                     {/* Cash Math Breakdown */}
+                     <div style={{ background: '#060d1a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, margin: '0 0 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
+                           <span>Opening Float (cumulative)</span>
+                           <span style={{ color: '#f1f5f9', fontWeight: 700 }}>{fmt(settleRider.float ?? 0)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
+                           <span>Cash from {selectedOrders.length} order(s)</span>
+                           <span style={{ color: '#34d399', fontWeight: 700 }}>+ {fmt(selectedSettleTotal)}</span>
+                        </div>
+                        {(settleRider.dropped ?? 0) > 0 && (
+                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
+                              <span>Already Deposited (Cash Drops)</span>
+                              <span style={{ color: '#a5b4fc', fontWeight: 700 }}>− {fmt(settleRider.dropped ?? 0)}</span>
+                           </div>
+                        )}
+                        <div style={{ height: 1, background: '#1e293b' }} />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 800 }}>
+                           <span style={{ color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.06em', fontSize: 11 }}>Expected Cash from Rider</span>
+                           <span style={{ color: '#a5b4fc', fontSize: 18 }}>{fmt(modalExpected)}</span>
+                        </div>
+                     </div>
+
+                     {/* Cash Received Input */}
+                     <div className="lh-cart-field" style={{ marginBottom: 12 }}>
+                        <label className="lh-cart-label">Cash Physically Received from Rider</label>
+                        <div className="lh-cash-input-wrap">
+                           <span className="lh-cash-prefix">Rs.</span>
+                           <input
+                              type="text"
+                              inputMode="decimal"
+                              id="settle_modal_cash_input"
+                              className="lh-cash-input"
+                              placeholder="Enter amount received..."
+                              autoFocus
+                              autoComplete="off"
+                              value={settleModalCash}
+                              onChange={e => {
+                                 const val = e.target.value;
+                                 if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) setSettleModalCash(val);
+                              }}
+                           />
+                        </div>
+                     </div>
+
+                     {/* Overage / Shortage */}
+                     {modalReceived > 0 && (
+                        <div className={`lh-diff ${modalDiff >= 0 ? 'lh-diff--ok' : 'lh-diff--short'}`} style={{ marginBottom: 12 }}>
+                           {modalDiff >= 0
+                              ? <><TrendingUp size={15} /> Overage: {fmt(modalDiff)} — return change to rider<br/><span style={{ fontSize: 10, opacity: .7 }}>Journal entry will close this run's liability</span></>
+                              : <><AlertTriangle size={15} /> Shortage: {fmt(Math.abs(modalDiff))} — rider still owes this amount</>}
+                        </div>
+                     )}
+
+                     {/* Notes */}
+                     <div className="lh-cart-field" style={{ marginBottom: 16 }}>
+                        <label className="lh-cart-label">Notes (optional)</label>
+                        <textarea
+                           className="lh-cart-textarea"
+                           placeholder="Any discrepancies or incidents..."
+                           value={settleNotes}
+                           onChange={e => setSettleNotes(e.target.value)}
+                           rows={2}
+                        />
+                     </div>
+
+                     <div className="lh-modal-actions">
+                        <button onClick={() => setShowSettleModal(false)} className="lh-btn lh-btn--ghost lh-btn--full">Cancel</button>
+                        <button
+                           onClick={async () => {
+                              setShowSettleModal(false);
+                              // Sync the received cash back to main cart state before settling
+                              setReceivedCash(settleModalCash);
+                              await handleOrdersSettle();
+                           }}
+                           disabled={isProcessing}
+                           className="lh-btn lh-btn--emerald lh-btn--full"
+                        >
+                           {isProcessing
+                              ? <><RefreshCw size={14} className="animate-spin" /> Posting Entries…</>
+                              : <><CheckCircle2 size={14} /> Confirm &amp; Accept Cash ({selectedSettleIds.length} orders)</>}
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            );
+         })()}
 
          {/* ════════ DISPATCH CONFIRM MODAL ════════ */}
          {dispatchRiderId && (() => {
@@ -862,10 +1078,43 @@ export const LogisticsHub: React.FC = () => {
                         <strong style={{ color: '#34d399' }}>{fmt(dispatchTotal)}</strong>
                      </div>
 
+                     {/* ── Float Input ── */}
+                     <div className="lh-cart-field" style={{ margin: '8px 0 4px' }}>
+                        <label className="lh-cart-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                           <Banknote size={12} style={{ color: '#a5b4fc' }} />
+                           Issue Float with this Run (optional)
+                        </label>
+                        <div className="lh-cash-input-wrap">
+                           <span className="lh-cash-prefix">Rs.</span>
+                           <input
+                              type="text"
+                              inputMode="decimal"
+                              id="dispatch_float_input"
+                              className="lh-cash-input"
+                              style={{ fontSize: 15, padding: '10px 10px 10px 40px' }}
+                              placeholder="0 — leave blank if no float"
+                              autoComplete="off"
+                              value={dispatchFloat}
+                              onChange={e => {
+                                 const val = e.target.value;
+                                 if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) setDispatchFloat(val);
+                              }}
+                           />
+                        </div>
+                        {Number(dispatchFloat) > 0 && (
+                           <p style={{ fontSize: 10, color: '#a5b4fc', marginTop: 2 }}>
+                              Rs. {Number(dispatchFloat).toLocaleString()} will be added to {riderForDispatch?.name}'s shift float and recorded as a ledger entry.
+                           </p>
+                        )}
+                     </div>
+
                      <div className="lh-modal-actions">
-                        <button onClick={() => setDispatchRiderId(null)} className="lh-btn lh-btn--ghost lh-btn--full">Cancel</button>
+                        <button onClick={() => { setDispatchRiderId(null); setDispatchFloat(''); }} className="lh-btn lh-btn--ghost lh-btn--full">Cancel</button>
                         <button onClick={handleDispatch} disabled={isProcessing} className="lh-btn lh-btn--emerald lh-btn--full">
-                           {isProcessing ? <><RefreshCw size={14} className="animate-spin" /> Dispatching…</> : <><Send size={14} /> Send {selectedOrderIds.length} Orders</>}
+                           {isProcessing
+                              ? <><RefreshCw size={14} className="animate-spin" /> Dispatching…</>
+                              : <><Send size={14} /> Send {selectedOrderIds.length} Orders{Number(dispatchFloat) > 0 ? ` + Float` : ''}</>
+                           }
                         </button>
                      </div>
                   </div>
@@ -1101,6 +1350,8 @@ export const LogisticsHub: React.FC = () => {
 
             /* BADGE */
             .lh-badge-blue { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; background:#1e1b4b; color:#a5b4fc; border:1px solid #3730a3; border-radius:8px; padding:4px 10px; }
+            .lh-pill--emerald { background:#064e3b; color:#10b981; border:1px solid #065f46; }
+            .lh-audit-header { padding:14px 20px; background:#111827; border-bottom:1px solid #1e293b; display:flex; align-items:center; gap:8px; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.1em; color:#6366f1; }
 
             /* EMPTY */
             .lh-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding:40px; }
@@ -1175,6 +1426,28 @@ export const LogisticsHub: React.FC = () => {
                .lh-row--data { position: relative; }
             }
          `}</style>
+         {/* Rider Bill Auto-Printer Sequence */}
+         {receiptPrintQueue.length > 0 && (
+            <ReceiptPreviewModal
+               isOpen={true}
+               onClose={() => setReceiptPrintQueue(prev => prev.slice(1))}
+               order={null}
+               orderId={receiptPrintQueue[0]}
+               autoPrint={true}
+               title="Rider Dispatch Bill"
+            />
+         )}
+
+         {/* View Details Modal Component */}
+         <ReceiptPreviewModal
+            isOpen={!!viewOrderId}
+            onClose={() => setViewOrderId(null)}
+            order={null}
+            orderId={viewOrderId || undefined}
+            autoPrint={false}
+            title="Order Details"
+         />
+
       </div >
    );
 };

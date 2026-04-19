@@ -47,7 +47,7 @@ router.get('/customers', async (req, res) => {
                 ]
             },
             include: {
-                addresses: {
+                customer_addresses: {
                     orderBy: { created_at: 'desc' }
                 }
             },
@@ -124,7 +124,7 @@ router.get('/customers/:id', async (req, res) => {
                 restaurant_id: req.restaurantId // SaaS Security
             },
             include: {
-                addresses: true,
+                customer_addresses: true,
                 orders: {
                     where: { is_deleted: false },
                     take: 5,

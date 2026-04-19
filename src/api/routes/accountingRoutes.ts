@@ -337,7 +337,7 @@ router.post('/manual-journal', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, 
                 date: date ? new Date(date) : new Date(),
                 description: description || 'Manual Journal Entry',
                 processed_by: req.staffId!,
-                lines: {
+                journal_entry_lines: {
                     create: lines.map(l => ({
                         account_id: l.accountId,
                         description: l.description || description || 'Manual line',
@@ -348,7 +348,7 @@ router.post('/manual-journal', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, 
                     }))
                 }
             },
-            include: { lines: true }
+            include: { journal_entry_lines: true }
         });
 
         res.json({ success: true, journal });

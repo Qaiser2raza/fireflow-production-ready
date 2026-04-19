@@ -71,7 +71,10 @@ export const LiveFloorView: React.FC<LiveFloorViewProps> = ({
                 />
 
                 {filteredTables.map(table => {
-                    const order = orders.find(o => o.table_id === table.id);
+                    const order = orders.find(o => 
+                        o.table_id === table.id && 
+                        !['CLOSED', 'CANCELLED', 'VOIDED'].includes(o.status)
+                    );
                     const time = getTableTime(order);
                     const isOverCapacity = order && (order.guest_count || 0) > table.capacity;
 

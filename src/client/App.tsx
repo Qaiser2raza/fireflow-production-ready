@@ -1,9 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Supplier, Station } from '../shared/types';
-import { Layout, Grid, LogOut, Settings, Coffee, Bike, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Menu, X, History, Package, Users, Truck } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Vendor, Station } from '../shared/types';
+import { Layout, Grid, LogOut, Settings, Users, Coffee, Bike, ShoppingBag, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
-import { fetchWithAuth, setTargetRestaurant } from '../shared/lib/authInterceptor';
-import { calculateBill, getDefaultBillConfig } from '../lib/billEngine';
 
 declare global {
   interface Window {
@@ -18,14 +16,13 @@ declare global {
 import { LoginView } from '../auth/views/LoginView';
 import { POSView } from '../operations/pos/POSView';
 import { POSViewMobile } from '../operations/pos/POSViewMobile';
-
+import { calculateBill, getDefaultBillConfig } from '../lib/billEngine';
 import { ActivityLog } from '../operations/activity/ActivityLog';
 import { FloorManagementView as OrderCommandHub } from '../operations/dashboard/FloorManagementView';
 import { KDSView } from '../operations/kds/KDSView';
 import { LogisticsHub } from '../operations/logistics/LogisticsHub';
 import { SuperAdminView } from '../features/saas-hq/SuperAdminView';
 import { CustomersView } from '../operations/customers/CustomersView';
-import { SuppliersView } from '../operations/suppliers/SuppliersView';
 import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
 import { TransactionsView } from '../operations/transactions/TransactionsView';
@@ -35,9 +32,6 @@ import { BillingView } from '../features/restaurant/BillingView';
 import FinancialCommandCenter from '../operations/finance/FinancialCommandCenter';
 import { RoleContextBar } from './components/RoleContextBar';
 import { CommandPalette } from './components/CommandPalette';
-import { SessionExpiredView } from '../auth/views/SessionExpiredView';
-import { RiderView } from '../operations/logistics/RiderView';
-import CashierView from '../pages/CashierView';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { PreferencesProvider } from './contexts/PreferencesContext';
 import { RestaurantProvider } from './RestaurantContext';
@@ -45,78 +39,18 @@ import { RestaurantProvider } from './RestaurantContext';
 // Services
 import { tableService } from '../shared/lib/tableService';
 import { socketIO } from '../shared/lib/socketClient';
-import { getDeviceFingerprint } from '../shared/lib/deviceFingerprint';
-import { getBilingualMessage } from '../shared/lib/userMessages';
+import { fetchWithAuth } from '../shared/lib/authInterceptor';
 
 // --- 1. CONTEXT DEFINITION ---
 import { AppContext, useAppContext } from './contexts/AppContext';
+import { CashSessionModal } from '../operations/pos/components/CashSessionModal';
 export { useAppContext };
-
-// --- HELPERS (Global Logic) ---
-const formatMenuItem = (m: any) => ({
-  ...m,
-  price: Number(m.price || 0),
-  available: m.is_available ?? m.available ?? true,
-  is_available: m.is_available ?? m.available ?? true,
-  image_url: m.image_url || m.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80',
-  nameUrdu: m.name_urdu,
-  name_urdu: m.name_urdu,
-  category_rel: m.category_rel
-});
-
-const formatOrder = (o: any, tables: Table[] = []) => {
-  const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
-  const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
-  const delivery = o.delivery_order || (o.delivery_orders && o.delivery_orders[0]);
-
-  // Find the table object
-  const tableObj = Array.isArray(tables) ? tables.find((t: any) => t.id === (dineIn?.table_id || o.table_id)) : null;
-
-  const orderItems = (o.order_items || []).map((item: any) => ({
-    ...item,
-    unit_price: Number(item.unit_price || 0),
-    total_price: Number(item.total_price || (Number(item.unit_price || 0) * (item.quantity || 0))),
-    item_name: item.item_name || item.menu_item?.name || item.item_name || "Unknown Item"
-  }));
-
-  const total = Number(o.total || 0);
-  const tax = Number(o.tax || 0);
-  const service_charge = Number(o.service_charge || 0);
-  const discount = Number(o.discount || 0);
-  const delivery_fee = Number(o.delivery_fee || 0);
-
-  // Ensure breakdown has a valid subtotal
-  const breakdown = o.breakdown && typeof o.breakdown === 'object' ? o.breakdown : {
-    subtotal: total - tax - service_charge - delivery_fee + discount,
-    tax,
-    serviceCharge: service_charge,
-    discount,
-    deliveryFee: delivery_fee,
-    grandTotal: total
-  };
-
-  return {
-    ...o,
-    total,
-    tax,
-    service_charge,
-    delivery_fee,
-    discount,
-    breakdown,
-    tableId: dineIn?.table_id || o.table_id || null,
-    table: tableObj,
-    guestCount: dineIn?.guest_count || o.guest_count || 1,
-    customerName: takeaway?.customer_name || delivery?.customer_name || o.customer_name || "Guest",
-    customerPhone: takeaway?.customer_phone || delivery?.customer_phone || o.customer_phone || "",
-    timestamp: new Date(o.created_at || o.timestamp || Date.now()),
-    order_items: orderItems
-  };
-};
 
 // --- 2. PROVIDER (The Logic Layer) ---
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<Staff | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [optimisticItemStatus, setOptimisticItemStatus] = useState<Record<string, string>>({});
   const [tables, setTables] = useState<Table[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -126,80 +60,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [expenses, setExpenses] = useState<any[]>([]);
   const [reservations, setReservations] = useState<any[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [drivers, setDrivers] = useState<Staff[]>([]);
 
   const [stations, setStations] = useState<Station[]>([]);
-  const [activeSession, setActiveSession] = useState<any | null>(null);
+  const [operationsConfig, setOperationsConfig] = useState<any>(
+    (() => { try { return JSON.parse(localStorage.getItem('fireflow_ops_cfg') || '{}'); } catch { return {}; } })()
+  );
+  const [activeSession, setActiveSessionState] = useState<any | null>(null);
 
-  const [activeView, setActiveView] = useState('LOGIN');
-  const [orderToEdit, setOrderToEdit] = useState<Order | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [isRestaurantLoading, setIsRestaurantLoading] = useState(true);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'disconnected'>('connected');
-  const [lastSyncAt, setLastSyncAt] = useState<Date>(new Date());
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [operationsConfig, setOperationsConfig] = useState<any>(null);
-
-  // Ref to track if we've already joined the room
-  const hasJoinedRoom = useRef(false);
-
-  // --- REFS FOR STABLE SYNC (Avoid closures with stale state) ---
-  const tablesRef = React.useRef(tables);
-  const sectionsRef = React.useRef(sections);
-  const stationsRef = React.useRef(stations);
-
-  React.useEffect(() => { tablesRef.current = tables; }, [tables]);
-  React.useEffect(() => { sectionsRef.current = sections; }, [sections]);
-  React.useEffect(() => { stationsRef.current = stations; }, [stations]);
-
-  // ── Open Drawer modal state ─────────────────────────────────────────────
-  // Shown when the settle endpoint returns HTTP 402 SESSION_REQUIRED.
-  // Stores the exact orderId + payload so the retry uses identical data.
-  const [showOpenDrawerModal, setShowOpenDrawerModal] = useState(false);
-  const [pendingSettlePayload, setPendingSettlePayload] = useState<{
-    orderId: string;
-    payload: any;
-    resolve: (val: boolean) => void;
-    reject: (err: any) => void;
-  } | null>(null);
-  const [drawerFloat, setDrawerFloat] = useState('0');
-  const [drawerSubmitting, setDrawerSubmitting] = useState(false);
-
-  const API_URL = (typeof window !== 'undefined' 
-    ? (window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : window.location.origin + '/api') 
-    : 'http://localhost:3001/api');
-
-  // Helper: Get Authorization header with JWT token
-  const getAuthHeaders = () => {
-    const accessToken = localStorage.getItem('accessToken');
-    const expiry = localStorage.getItem('accessTokenExpiry');
-    
-
-    // Check if token is expired
-    if (expiry && Date.now() > parseInt(expiry)) {
-      console.log('[Auth] Token expired, clearing session');
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
-      localStorage.removeItem('accessTokenExpiry');
-      return { 'Content-Type': 'application/json' };
+  // Sync session to localStorage for fetchWithAuth headers
+  const setActiveSession = (session: any) => {
+    setActiveSessionState(session);
+    if (session?.id) {
+      localStorage.setItem('x-session-id', session.id);
+    } else {
+      localStorage.removeItem('x-session-id');
     }
-    
-    return {
-      'Content-Type': 'application/json',
-      ...(accessToken && { 'Authorization': `Bearer ${accessToken}` })
-    };
   };
 
-  const fetchInitialData = async (userOverride?: any, restaurantIdOverride?: string) => {
+
+
+  const [activeView, setActiveView] = useState('SUPER_ADMIN');
+  const [orderToEdit, setOrderToEdit] = useState<Order | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
+  const [isRestaurantLoading, setIsRestaurantLoading] = useState(true);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('connected');
+  const [lastSyncAt, setLastSyncAt] = useState<Date>(new Date());
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  // Debounce timer for fetchInitialData to prevent duplicate concurrent requests
+  const fetchDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const API_URL = '/api';
+
+
+
+  const fetchInitialData = useCallback(async (userOverride?: any) => {
     const user = userOverride || currentUser;
     if (!user) return;
     
     setLoading(true);
     try {
-      // Get restaurant_id: override (for SUPER_ADMIN mode) > user > localStorage
-      const restaurantId = restaurantIdOverride ||
-                          user.restaurant_id || 
+      // Get restaurant_id from multiple sources for redundancy
+      const restaurantId = user.restaurant_id || 
                           currentUser?.restaurant_id ||
                           localStorage.getItem('restaurant_id');
       
@@ -207,27 +111,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('No restaurant ID available');
       }
       
-
-      
-      const headers = getAuthHeaders();
-      
       const fetches = [
-        fetchWithAuth(`${API_URL}/orders?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/tables?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/sections?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/menu_items?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/menu_categories?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/staff?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/transactions?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/customers?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/suppliers?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/stations?restaurant_id=${restaurantId}`, { headers }),
-        fetchWithAuth(`${API_URL}/operations/config/${restaurantId}`, { headers })
+        fetchWithAuth(`${API_URL}/orders?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/tables?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/sections?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/menu_items?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/menu_categories?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/staff?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/transactions?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/customers?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/vendors?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/stations?restaurant_id=${restaurantId}`),
+        fetchWithAuth(`${API_URL}/cashier/current?restaurantId=${restaurantId}&staffId=${user.id}`),
+        fetchWithAuth(`${API_URL}/operations/config/${restaurantId}`)
       ];
       
-      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, supplierRes, stationRes, configRes] = await Promise.all(fetches);
+      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, vendDataRes, stationRes, sessionRes, opsCfgRes] = await Promise.all(fetches);
 
-      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, supplierData, stationData, configData] = await Promise.all([
+      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, vendData, stationData, sessionData, opsCfgData] = await Promise.all([
         ordersRes.ok ? ordersRes.json() : [],
         tablesRes.ok ? tablesRes.json() : [],
         sectionsRes.ok ? sectionsRes.json() : [],
@@ -236,29 +137,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         staffRes.ok ? staffRes.json() : [],
         trxRes.ok ? trxRes.json() : [],
         custDataRes.ok ? custDataRes.json() : [],
-        supplierRes.ok ? supplierRes.json() : [],
+        vendDataRes.ok ? vendDataRes.json() : [],
         stationRes.ok ? stationRes.json() : [],
-        configRes.ok ? configRes.json() : null
+        sessionRes.ok ? sessionRes.json() : { success: false },
+        opsCfgRes.ok ? opsCfgRes.json() : null
       ]);
 
-      const mappedOrders = (Array.isArray(ordersData) ? ordersData : []).map(o => formatOrder(o, tablesData));
+      if (sessionData.success && sessionData.session) {
+        setActiveSession(sessionData.session);
+      }
+
+      const mapOrder = (o: any) => {
+        const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
+        const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
+        const delivery = o.delivery_order || (o.delivery_orders && o.delivery_orders[0]);
+
+        // Find the table object
+        const tableObj = Array.isArray(tables) ? tables.find((t: any) => t.id === (dineIn?.table_id || o.table_id)) : null;
+
+        return {
+          ...o,
+          total: Number(o.total || 0) > 0 ? Number(o.total) : (o.order_items || []).reduce((acc: number, item: any) => acc + (Number(item.unit_price || 0) * (item.quantity || 0)), 0),
+          tax: Number(o.tax || 0),
+          service_charge: Number(o.service_charge || 0),
+          delivery_fee: Number(o.delivery_fee || 0),
+          tableId: dineIn?.table_id || o.table_id || null,
+          table: tableObj,
+          guestCount: dineIn?.guest_count || o.guest_count || 1,
+          customerName: takeaway?.customer_name || delivery?.customer_name || o.customer_name || "Guest",
+          customerPhone: takeaway?.customer_phone || delivery?.customer_phone || o.customer_phone || "",
+          timestamp: new Date(o.created_at || o.timestamp || Date.now()),
+          order_items: (o.order_items || []).map((item: any) => ({
+            ...item,
+            unit_price: Number(item.unit_price || 0),
+            total_price: Number(item.total_price || 0)
+          }))
+        };
+      };
+
+      const mappedOrders = (Array.isArray(ordersData) ? ordersData : []).map(mapOrder);
+
       setOrders(mappedOrders);
       setTables(Array.isArray(tablesData) ? tablesData : []);
       setSections(Array.isArray(sectionsData) ? sectionsData : []);
-      setMenuItems(Array.isArray(menuData) ? menuData.map(formatMenuItem) : []);
+      setMenuItems(Array.isArray(menuData) ? menuData.map((m: any) => ({
+        ...m,
+        price: Number(m.price || 0),
+        available: m.is_available ?? m.available ?? true,
+        is_available: m.is_available ?? m.available ?? true,
+        image_url: m.image_url || m.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80',
+        nameUrdu: m.name_urdu,
+        name_urdu: m.name_urdu,
+        category_rel: m.category_rel,
+        variant: (m.variant || []).map((v: any) => ({
+          ...v,
+          price: Number(v.price || 0)
+        }))
+      })) : []);
       setMenuCategories(Array.isArray(catData) ? catData : []);
       setServers(Array.isArray(staffData) ? staffData : []);
       setTransactions(Array.isArray(trxData) ? trxData.map((t: any) => ({ ...t, amount: Number(t.amount) })) : []);
       setDrivers(Array.isArray(staffData) ? staffData.filter((s: any) => s.role === 'RIDER' || s.role === 'DRIVER') : []);
       setCustomers(Array.isArray(custData) ? custData : []);
-      setSuppliers(Array.isArray(supplierData) ? supplierData : []);
+      setVendors(Array.isArray(vendData) ? vendData : []);
       setStations(Array.isArray(stationData) ? stationData : []);
-      if (configData && configData.success) {
-        setOperationsConfig(configData.config);
-        localStorage.setItem(`fireflow_operations_config_${restaurantId}`, JSON.stringify(configData.config));
-      }
       setExpenses([]); // TODO: Implement fetch
       setReservations([]); // TODO: Implement fetch
+
+      // Store operations config (tax/svc settings) in state + localStorage cache
+      // API returns { success: true, config: { order_type_defaults, ... } } — unwrap .config
+      const resolvedCfg = opsCfgData?.config || opsCfgData || null;
+      if (resolvedCfg && typeof resolvedCfg === 'object' && !Array.isArray(resolvedCfg)) {
+        setOperationsConfig(resolvedCfg);
+        localStorage.setItem('fireflow_ops_cfg', JSON.stringify(resolvedCfg));
+        // Legacy key used by calculateOrderTotal fallback
+        localStorage.setItem(`fireflow_operations_config_${restaurantId}`, JSON.stringify(resolvedCfg));
+      }
+      
+      if (sessionData.success && sessionData.session) {
+        setActiveSession(sessionData.session);
+      } else {
+        setActiveSession(null);
+      }
+      
       setConnectionStatus('connected');
       setLastSyncAt(new Date());
     } catch (err) {
@@ -268,21 +229,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLoading(false);
       setIsRestaurantLoading(false);
     }
-  };
+  }, []);
 
+  // Debounced version of fetchInitialData to prevent duplicate concurrent requests
+  // Groups rapid calls into a single request with 300ms delay
+  const debouncedFetchInitialData = (userOverride?: any) => {
+    // Cancel previous debounce timer
+    if (fetchDebounceTimerRef.current) {
+      clearTimeout(fetchDebounceTimerRef.current);
+    }
+    
+    // Set new timer
+    fetchDebounceTimerRef.current = setTimeout(() => {
+      fetchInitialData(userOverride);
+      fetchDebounceTimerRef.current = null;
+    }, 300);
+  };
 
   const login = async (pin: string) => {
     try {
-      const deviceFingerprint = getDeviceFingerprint();
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            pin,
-            device_fingerprint: deviceFingerprint,
-            device_name: `${navigator.platform || 'Device'} - ${new Date().toLocaleDateString()}`,
-            user_agent: navigator.userAgent
-        })
+        body: JSON.stringify({ pin })
       });
 
       if (!res.ok) throw new Error('Invalid PIN');
@@ -290,20 +259,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const user = data.staff;
       const restaurant = data.restaurant;
 
-      // ✅ Clear ALL stale session data before applying new session.
-      // This prevents a previous manager/admin session from bleeding into a cashier login.
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
-      localStorage.removeItem('accessTokenExpiry');
-      localStorage.removeItem('saved_pin');
-
       // Store restaurant info
       if (restaurant) {
         localStorage.setItem('currentRestaurant', JSON.stringify(restaurant));
         localStorage.setItem('restaurant_id', restaurant.id);
       }
 
-      // Store new JWT tokens
+      // ✅ Phase 2b: Store JWT tokens if present
       if (data.tokens) {
         localStorage.setItem('accessToken', data.tokens.access_token);
         localStorage.setItem('refreshToken', data.tokens.refresh_token);
@@ -313,14 +275,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       localStorage.setItem('saved_pin', pin);
       setCurrentUser(user);
-
-      // Route based on role — CASHIER gets a dedicated full-screen shell
       if (user.role === 'SUPER_ADMIN') {
         setActiveView('SUPER_ADMIN');
-      } else if (user.role === 'SERVER' || user.role === 'WAITER') {
-        setActiveView('ORDER_HUB');
-      } else if (user.role === 'CASHIER') {
-        setActiveView('CASHIER_VIEW');
       } else {
         setActiveView('DASHBOARD');
       }
@@ -347,237 +303,200 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Clear app state
     setCurrentUser(null);
     setOrders([]);
-    setActiveView('LOGIN');
+    setActiveView('DASHBOARD');
     localStorage.removeItem('saved_pin');
-    hasJoinedRoom.current = false;
   };
 
-  // Validate token on app load and restore session
+  // Validate token on app load
   useEffect(() => {
-    const validateToken = async () => {
-      const token = localStorage.getItem('accessToken');
-      const expiry = localStorage.getItem('accessTokenExpiry');
-      
-      if (token && expiry) {
-        if (Date.now() > parseInt(expiry)) {
-          console.log('[Auth] Token expired on app load');
-          logout();
-        } else {
-          try {
-            // Restore session using token
-            const res = await fetchWithAuth(`${API_URL}/auth/me`);
-            if (res.ok) {
-              const data = await res.json();
-              setCurrentUser(data.staff);
-              if (data.restaurant) {
-                localStorage.setItem('currentRestaurant', JSON.stringify(data.restaurant));
-                localStorage.setItem('restaurant_id', data.restaurant.id);
-              }
-              
-              // Set initial view based on role
-              const user = data.staff;
-              if (user.role === 'SUPER_ADMIN') setActiveView('SUPER_ADMIN');
-              else if (user.role === 'SERVER' || user.role === 'WAITER') setActiveView('ORDER_HUB');
-              else if (user.role === 'CASHIER') setActiveView('CASHIER_VIEW');
-              else setActiveView('DASHBOARD');
-
-              fetchInitialData(data.staff);
-
-            }
-          } catch (err) {
-            console.error('[Auth] Token validation error:', err);
+      const validateToken = async () => {
+        const token = localStorage.getItem('accessToken');
+        const expiry = localStorage.getItem('accessTokenExpiry');
+        
+        if (token && expiry) {
+          if (Date.now() > parseInt(expiry)) {
+            logout();
           }
         }
-      }
-    };
+      };
     
     validateToken();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleDbChange = (payload: any) => {
-    if (process.env.NODE_ENV === 'development') console.log("Real-time DB Change:", payload);
-    const { table, eventType, data, id } = payload;
-
-    if (table === 'orders') {
-      console.log(`[SYNC] Handling ${eventType} for table 'orders':`, data?.id || id);
-      
-      setOrders(prev => {
-        if (eventType === 'INSERT' && data) {
-          if (prev.some(o => o.id === data.id)) return prev;
-          return [...prev, formatOrder(data, tablesRef.current)];
-        }
-        if (eventType === 'UPDATE' && data) {
-          const index = prev.findIndex(o => o.id === data.id);
-          if (index === -1) {
-            // UPSERT: If laptop missed INSERT, add it now
-            return [...prev, formatOrder(data, tablesRef.current)];
-          }
-          
-          // Preserve existing item statuses for items already in PREPARING or DONE state
-          const existingOrder = prev[index];
-          const mergedData = { ...data };
-          
-          if (data.order_items && existingOrder.order_items) {
-              mergedData.order_items = data.order_items.map((newItem: any) => {
-                  const existingItem = existingOrder.order_items?.find(
-                      (ei: any) => ei.id === newItem.id
-                  );
-                  // If item was already PREPARING or DONE, preserve that status
-                  if (existingItem && 
-                      (existingItem.item_status === 'PREPARING' || 
-                       existingItem.item_status === 'DONE')) {
-                      return { ...newItem, item_status: existingItem.item_status };
-                  }
-                  return newItem;
-              });
-          }
-          
-          return prev.map((o, i) => 
-              i === index ? formatOrder({ ...o, ...mergedData }, tablesRef.current) : o
-          );
-        }
-        if (eventType === 'DELETE') {
-          if (id === 'ALL') return [];  // Factory reset clears all orders
-          return prev.filter(o => o.id !== id);
-        }
-        return prev;
-      });
-    }
-
-    if (table === 'tables') {
-      setTables(prev => {
-        if (eventType === 'INSERT' && data) return [...prev, data];
-        if (eventType === 'UPDATE') {
-          // Handle factory reset broadcast (id: 'ALL')
-          if (id === 'ALL') return prev.map(t => ({ ...t, status: 'AVAILABLE', active_order_id: null }));
-          if (data) return prev.map(t => t.id === data.id ? { ...t, ...data } : t);
-          return prev;
-        }
-        if (eventType === 'DELETE') {
-          if (id === 'ALL') return [];
-          return prev.filter(t => t.id !== id);
-        }
-        return prev;
-      });
-    }
-
-    if (table === 'sections') {
-      setSections(prev => {
-        if (eventType === 'INSERT' && data) return [...prev, data];
-        if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-        return prev;
-      });
-    }
-
-    if (table === 'stations') {
-      setStations(prev => {
-        if (eventType === 'INSERT' && data) return [...prev, data];
-        if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-        return prev;
-      });
-    }
-
-    if (table === 'transactions') {
-      setTransactions(prev => {
-        if (eventType === 'INSERT' && data) {
-          if (prev.some(t => t.id === data.id)) return prev;
-          return [{ ...data, amount: Number(data.amount) }, ...prev];
-        }
-        if (eventType === 'UPDATE' && data) return prev.map(t => t.id === data.id ? { ...t, ...data, amount: Number(data.amount) } : t);
-        if (eventType === 'DELETE') return prev.filter(t => t.id !== id);
-        return prev;
-      });
-    }
-
-    if (table === 'staff') {
-      const isRider = (s: any) => s && (s.role === 'RIDER' || s.role === 'DRIVER');
-
-      setDrivers(prev => {
-        if (eventType === 'INSERT' && data && isRider(data)) return [...prev, data];
-        if (eventType === 'UPDATE' && data) {
-          const existing = prev.find(s => s.id === data.id);
-          if (existing) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-          if (isRider(data)) return [...prev, data]; // Was not a rider, now is? Or just new.
-          return prev;
-        }
-        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-        return prev;
-      });
-
-      const updateAllStaff = (prev: Staff[]) => {
-        if (eventType === 'INSERT' && data) return [...prev, data];
-        if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
-        if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
-        return prev;
-      };
-      setServers(prev => updateAllStaff(prev));
-    }
-
-    if (table === 'menu_items') {
-      setMenuItems(prev => {
-        if (eventType === 'INSERT' && data) return [...prev, data];
-        if (eventType === 'UPDATE' && data) return prev.map(i => i.id === data.id ? { ...i, ...data } : i);
-        if (eventType === 'DELETE') return prev.filter(i => i.id !== id);
-        return prev;
-      });
-    }
-
-    if (table === 'menu_categories') {
-      setMenuCategories(prev => {
-        if (eventType === 'INSERT' && data) return [...prev, data];
-        if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
-        if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
-        return prev;
-      });
-    }
-
-    if (table === 'customers') {
-      setCustomers(prev => {
-        if (eventType === 'INSERT' && data) return [...prev, data];
-        if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
-        if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
-        return prev;
-      });
-    }
-  };
-
-  const handleSessionExpired = () => {
-    logout();
-    setActiveView('SESSION_EXPIRED');
-  };
+  }, []);
 
   useEffect(() => {
     socketIO.connect();
-    window.addEventListener('session:expired', handleSessionExpired);
 
-    // Set up db_change listener ONCE — remove previous before adding
-    socketIO.removeAllListeners('db_change');
-    socketIO.on('db_change', handleDbChange);
+    // 🔑 Join the restaurant room AFTER socket connects — not immediately
+    // (the io() call is async, emitting before connect is established can be lost)
+    const handleSocketConnected = () => {
+      if (currentUser?.restaurant_id) {
+        socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
+      }
+    };
+    socketIO.on('connect', handleSocketConnected);
+    // Also emit now in case the socket was already connected before this effect ran
+    if (currentUser?.restaurant_id) {
+      socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
+    }
+
+    // Real-time DB listeners
+    socketIO.on('db_change', (payload: any) => {
+      const { table, eventType, data, id } = payload;
+
+      if (table === 'orders') {
+        const mapOrderLocal = (o: any) => {
+          const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
+          const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
+          const delivery = o.delivery_order || (o.delivery_orders && o.delivery_orders[0]);
+          return {
+            ...o,
+            total: Number(o.total || 0) > 0 ? Number(o.total) : (o.order_items || []).reduce((acc: number, item: any) => acc + (Number(item.unit_price || 0) * (item.quantity || 0)), 0),
+            tax: Number(o.tax || 0),
+            service_charge: Number(o.service_charge || 0),
+            delivery_fee: Number(o.delivery_fee || 0),
+            tableId: dineIn?.table_id || o.table_id || null,
+            guestCount: dineIn?.guest_count || o.guest_count || 1,
+            customerName: takeaway?.customer_name || delivery?.customer_name || o.customer_name || "Guest",
+            customerPhone: takeaway?.customer_phone || delivery?.customer_phone || o.customer_phone || "",
+            timestamp: new Date(o.created_at || o.timestamp || Date.now()),
+            order_items: (o.order_items || []).map((item: any) => ({
+              ...item,
+              unit_price: Number(item.unit_price || 0),
+              total_price: Number(item.total_price || 0)
+            }))
+          };
+        };
+
+        setOrders(prev => {
+          if (eventType === 'INSERT' && data) {
+            if (prev.some(o => o.id === data.id)) return prev;
+            return [...prev, mapOrderLocal(data)];
+          }
+          if (eventType === 'UPDATE' && data) {
+            return prev.map(o => {
+              if (o.id !== data.id) return o;
+              const incoming = mapOrderLocal(data);
+              // ⚠️ SAFE-MERGE: server emits partial payloads (only changed fields).
+              // Never overwrite critical nested/type fields with empty/undefined values.
+              return {
+                ...o,
+                ...incoming,
+                // Preserve type if socket payload doesn’t carry it
+                type: incoming.type || o.type,
+                // Preserve nested arrays if socket payload has them empty/missing
+                order_items: incoming.order_items?.length > 0 ? incoming.order_items : o.order_items,
+                delivery_orders:
+                  incoming.delivery_orders?.length > 0 ? incoming.delivery_orders : o.delivery_orders,
+                dine_in_orders:
+                  incoming.dine_in_orders?.length > 0 ? incoming.dine_in_orders : o.dine_in_orders,
+                takeaway_orders:
+                  incoming.takeaway_orders?.length > 0 ? incoming.takeaway_orders : o.takeaway_orders,
+                // Preserve assigned_driver_id from socket if present; otherwise keep existing
+                assigned_driver_id: incoming.assigned_driver_id !== undefined
+                  ? incoming.assigned_driver_id
+                  : o.assigned_driver_id,
+              };
+            });
+          }
+          if (eventType === 'DELETE') {
+            if (id === 'ALL') return [];  // Factory reset clears all orders
+            return prev.filter(o => o.id !== id);
+          }
+          return prev;
+        });
+      }
+
+      if (table === 'tables') {
+        setTables(prev => {
+          if (eventType === 'INSERT' && data) return [...prev, data];
+          if (eventType === 'UPDATE') {
+            // Handle factory reset broadcast (id: 'ALL')
+            if (id === 'ALL') return prev.map(t => ({ ...t, status: 'AVAILABLE', active_order_id: null }));
+            if (data) return prev.map(t => t.id === data.id ? { ...t, ...data } : t);
+            return prev;
+          }
+          if (eventType === 'DELETE') {
+            if (id === 'ALL') return [];
+            return prev.filter(t => t.id !== id);
+          }
+          return prev;
+        });
+      }
+
+      if (table === 'sections') {
+        setSections(prev => {
+          if (eventType === 'INSERT' && data) return [...prev, data];
+          if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
+          if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
+          return prev;
+        });
+      }
+
+      if (table === 'stations') {
+        setStations(prev => {
+          if (eventType === 'INSERT' && data) return [...prev, data];
+          if (eventType === 'UPDATE' && data) return prev.map(s => s.id === data.id ? { ...s, ...data } : s);
+          if (eventType === 'DELETE') return prev.filter(s => s.id !== id);
+          return prev;
+        });
+      }
+
+      if (table === 'transactions') {
+        setTransactions(prev => {
+          if (eventType === 'INSERT' && data) {
+            if (prev.some(t => t.id === data.id)) return prev;
+            return [{ ...data, amount: Number(data.amount) }, ...prev];
+          }
+          if (eventType === 'UPDATE' && data) return prev.map(t => t.id === data.id ? { ...t, ...data, amount: Number(data.amount) } : t);
+          if (eventType === 'DELETE') return prev.filter(t => t.id !== id);
+          return prev;
+        });
+      }
+
+      if (table === 'staff' || table === 'rider_shifts') {
+        // Staff changes or Shift changes both affect the 'drivers' state
+        // The most reliable way is to re-sync initial data to get full nested objects
+        debouncedFetchInitialData();
+      }
+
+      if (table === 'menu_items') {
+        setMenuItems(prev => {
+          if (eventType === 'INSERT' && data) return [...prev, data];
+          if (eventType === 'UPDATE' && data) return prev.map(i => i.id === data.id ? { ...i, ...data } : i);
+          if (eventType === 'DELETE') return prev.filter(i => i.id !== id);
+          return prev;
+        });
+      }
+
+      if (table === 'menu_categories') {
+        setMenuCategories(prev => {
+          if (eventType === 'INSERT' && data) return [...prev, data];
+          if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
+          if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
+          return prev;
+        });
+      }
+
+      if (table === 'customers') {
+        setCustomers(prev => {
+          if (eventType === 'INSERT' && data) return [...prev, data];
+          if (eventType === 'UPDATE' && data) return prev.map(c => c.id === data.id ? { ...c, ...data } : c);
+          if (eventType === 'DELETE') return prev.filter(c => c.id !== id);
+          return prev;
+        });
+      }
+    });
 
     const savedPin = localStorage.getItem('saved_pin');
-    const token = localStorage.getItem('accessToken');
-    
-    // Only auto-login with PIN if there is no token (first time or session cleared)
-    if (savedPin && !currentUser && !token) {
-      login(savedPin);
-    }
+    if (savedPin && !currentUser) login(savedPin);
 
     return () => {
-      window.removeEventListener('session:expired', handleSessionExpired);
-      socketIO.removeAllListeners('db_change');
+      socketIO.off('db_change');
+      socketIO.off('connect');
+      // We don't call disconnect() here to prevent "flapping"
+      // when React unmounts/remounts during login cycles.
     };
-  }, []); // Run ONCE on mount
-
-  // Separate useEffect ONLY for room joining
-  useEffect(() => {
-    if (currentUser?.restaurant_id && !hasJoinedRoom.current) {
-      console.log(`[SOCKET] Joining room: restaurant:${currentUser.restaurant_id}`);
-      socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
-      hasJoinedRoom.current = true;
-    }
-  }, [currentUser?.restaurant_id]); // Only re-run when restaurant_id changes
+  }, [currentUser]);
 
   // AUTO-CLEANUP: Delete active orders older than 24 hours (v3.0: DRAFT is now ACTIVE)
   useEffect(() => {
@@ -602,8 +521,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (oldDrafts.length > 0) {
-        addNotification('info', `Cleaned up ${oldDrafts.length} old empty order(s)`);
-        setOrders(prev => prev.filter(o => !oldDrafts.some(od => od.id === o.id)));
+        // Suppressed notification and loop trigger safely
       }
     };
 
@@ -614,13 +532,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     cleanupDrafts();
 
     return () => clearInterval(cleanupInterval);
-  }, [currentUser]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentUser]); // REMOVED `orders` from dependency array to prevent infinite loops
 
-  const addNotification = (type: 'success' | 'error' | 'info' | 'warning', message: string, messageCode?: string) => {
+  const addNotification = (type: 'success' | 'error' | 'info' | 'warning', message: string) => {
     const id = Math.random().toString(36).substring(7);
-    const finalMessage = messageCode ? getBilingualMessage(messageCode) : message;
-    setNotifications(prev => [...prev, { id, type, message: finalMessage }]);
-    setTimeout(() => removeNotification(id), type === 'error' ? 5000 : 3000);
+    setNotifications(prev => [...prev, { id, type, message }]);
+    setTimeout(() => removeNotification(id), 5000);
   };
 
   const removeNotification = (id: string) => {
@@ -628,7 +545,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const calculateOrderTotal = (items: OrderItem[], type: OrderType, _guests: number, fee?: number): PaymentBreakdown => {
-    const cfg = operationsConfig || JSON.parse(localStorage.getItem(`fireflow_operations_config_${currentUser?.restaurant_id}`) || '{}');
+    const cfg = JSON.parse(localStorage.getItem(`fireflow_operations_config_${currentUser?.restaurant_id}`) || '{}');
     const billConfig = getDefaultBillConfig(type, cfg);
     
     // Use provided fee override, otherwise use the one from config
@@ -664,7 +581,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const res = await fetchWithAuth(`${API_URL}/floor/seat-party`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           restaurantId: currentUser?.restaurant_id,
           tableId,
@@ -697,235 +613,174 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Opens cashier session then retries the pending settle call with the exact same payload.
-  const handleOpenDrawerAndRetry = async () => {
-    if (!pendingSettlePayload || drawerSubmitting) return;
-    setDrawerSubmitting(true);
-    
-    // Capture state
-    const { orderId, payload, resolve, reject } = pendingSettlePayload;
-
-    try {
-      const openRes = await fetchWithAuth(`${API_URL}/cashier/open`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          restaurantId: currentUser?.restaurant_id,
-          staffId: currentUser?.id,
-          openingFloat: Number(drawerFloat) || 0
-        })
-      });
-      if (!openRes.ok) {
-        const err = await openRes.json();
-        throw new Error(err.error || 'Failed to open cashier session');
-      }
-      const sessionData = await openRes.json();
-      setActiveSession(sessionData.session);
-      addNotification('success', 'Drawer opened — retrying payment...');
-
-      setShowOpenDrawerModal(false);
-      setPendingSettlePayload(null);
-
-      // Retry the exact same settle call
-      const retryRes = await fetchWithAuth(`${API_URL}/orders/${orderId}/settle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!retryRes.ok) {
-        const err = await retryRes.json();
-        throw new Error(err.error || 'Payment failed after session open');
-      }
-      setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'CLOSED' as OrderStatus, payment_status: 'PAID' as any } as Order) : o));
-      addNotification('success', 'Payment processed successfully');
-      resolve(true);
-    } catch (e: any) {
-      addNotification('error', e.message);
-      reject(e);
-      setShowOpenDrawerModal(false);
-      setPendingSettlePayload(null);
-    } finally {
-      setDrawerSubmitting(false);
-    }
-  };
-
   return (
     <AppContext.Provider value={{
-      currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, suppliers, stations,
+      currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, vendors,
       connectionStatus, lastSyncAt, notifications, activeView, loading, isRestaurantLoading, orderToEdit,
+      optimisticItemStatus, setOptimisticItemStatus,
       socket: socketIO,
-      activeSession, setActiveSession,
       setActiveView, setOrderToEdit, addNotification, removeNotification,
-      login, logout, fetchInitialData,
-      calculateOrderTotal, seatGuests, operationsConfig,
+      login, logout, fetchInitialData: debouncedFetchInitialData,
+      calculateOrderTotal, seatGuests,
+      operationsConfig,
+      activeSession,
+      setActiveSession,
+      openSession: async (openingFloat: number) => {
+        try {
+          const terminalId = localStorage.getItem('x-terminal-id') ||
+                             sessionStorage.getItem('x-terminal-id') ||
+                             `terminal-${navigator.userAgent.slice(0,8)}-${Date.now()}`;
+          const res = await fetchWithAuth(`${API_URL}/cashier/open`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              restaurantId: currentUser?.restaurant_id,
+              staffId: currentUser?.id,
+              openingFloat,
+              terminalId
+            })
+          });
+          if (!res.ok) throw new Error('Failed to open session');
+          const data = await res.json();
+          // Persist the terminal ID for this session
+          localStorage.setItem('x-terminal-id', terminalId);
+          setActiveSession(data.session);
+          addNotification('success', 'Cashier session opened');
+          return true;
+        } catch (e: any) {
+          addNotification('error', e.message);
+          return false;
+        }
+      },
+      closeSession: async (actualCash: number, notes: string) => {
+        try {
+          const res = await fetchWithAuth(`${API_URL}/cashier/close`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: activeSession?.id,
+              actualCash,
+              closedBy: currentUser?.id,
+              notes
+            })
+          });
+          if (!res.ok) throw new Error('Failed to close session');
+          setActiveSession(null);
+          addNotification('success', 'Cashier session closed and audited');
+          return true;
+        } catch (e: any) {
+          addNotification('error', e.message);
+          return false;
+        }
+      },
+      currentRestaurant: currentUser ? {
+        id: currentUser.restaurant_id,
+        name: 'Fireflow Restaurant' // Fallback or fetch from metadata
+      } : null,
       updateTableStatus: async (id: string, status: TableStatus) => {
         const restaurant_id = currentUser?.restaurant_id || localStorage.getItem('restaurant_id');
         await tableService.updateTable(id, { status, restaurant_id: restaurant_id as string });
-        setTables(prev => prev.map(t => t.id === id ? { ...t, status } : t));
+        await debouncedFetchInitialData();
         return true;
+      },
+      recallOrder: async (id: string) => {
+        try {
+          const res = await fetchWithAuth(`${API_URL}/orders/${id}/recall`, {
+            method: 'POST'
+          });
+          if (!res.ok) throw new Error('Recall failed');
+          const result = await res.json();
+          addNotification('success', 'Order recalled and unlocked');
+          await debouncedFetchInitialData();
+          return result;
+        } catch (e: any) {
+          addNotification('error', e.message);
+          return null;
+        }
       },
       addOrder: async (order: any) => {
         const restaurant_id = currentUser?.restaurant_id || localStorage.getItem('restaurant_id');
         const res = await fetchWithAuth(`${API_URL}/orders`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...order, restaurant_id })
         });
-        if (!res.ok) throw new Error('Order creation failed');
+        if (!res.ok) return null;
         const result = await res.json();
-        setOrders(prev => [...prev, formatOrder(result, tables)]);
+        await debouncedFetchInitialData();
         return result;
       },
       updateOrder: async (order: any) => {
+        const restaurant_id = currentUser?.restaurant_id || localStorage.getItem('restaurant_id');
         const res = await fetchWithAuth(`${API_URL}/orders/${order.id}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...order, restaurant_id: currentUser?.restaurant_id })
+          body: JSON.stringify({ ...order, restaurant_id })
         });
-        if (!res.ok) return null;
+        if (!res.ok) {
+          console.error('[AppContext] updateOrder failed:', await res.text());
+          return null;
+        }
         const result = await res.json();
-        setOrders(prev => prev.map(o => o.id === result.id ? formatOrder(result, tables) : o));
+        await debouncedFetchInitialData();
         return result;
       },
-      fireOrder: async (id: string, type: string) => {
-        const res = await fetchWithAuth(`${API_URL}/orders/${id}/fire`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type })
-        });
-        if (!res.ok) return null;
-        const result = await res.json();
-        const updatedOrder = result.order;
-        if (updatedOrder) {
-          setOrders(prev => prev.map(o => o.id === updatedOrder.id ? formatOrder(updatedOrder, tables) : o));
-        }
-        return updatedOrder;
-      },
       updateOrderStatus: async (id: string, status: OrderStatus) => {
-        const res = await fetchWithAuth(`${API_URL}/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
-        if (res.ok) {
-          const result = await res.json();
-          setOrders(prev => prev.map(o => o.id === id ? formatOrder(result, tables) : o));
-        }
+        await fetchWithAuth(`${API_URL}/orders/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+        debouncedFetchInitialData();
       },
       assignDriverToOrder: async (orderId: string, driverId: string) => {
-        const res = await fetchWithAuth(`${API_URL}/orders/${orderId}`, {
+        await fetchWithAuth(`${API_URL}/orders/${orderId}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'READY', assigned_driver_id: driverId, dispatched_at: new Date() })
+          body: JSON.stringify({
+            status: 'READY',
+            assigned_driver_id: driverId,
+            dispatched_at: new Date()
+          })
         });
-        if (res.ok) {
-          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'READY' as OrderStatus, assigned_driver_id: driverId, dispatched_at: new Date() } as Order) : o));
+
+        // --- 🖨️ HW: Auto-Print Delivery Slip ---
+        if (window.electronAPI) {
+          window.electronAPI.printDeliverySlip({ orderIds: [orderId], driverId });
         }
+
+        debouncedFetchInitialData();
       },
-      addMenuItem: async (item: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setMenuItems(prev => [...prev, formatMenuItem(result)]); }
-      },
+      addMenuItem: async (item: any) => { await fetchWithAuth(`${API_URL}/menu_items`, { method: 'POST', body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) }); await debouncedFetchInitialData(); },
       updateMenuItem: async (item: any) => {
-        const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) });
-        if (res.ok) { const result = await res.json(); setMenuItems(prev => prev.map(i => i.id === result.id ? formatMenuItem(result) : i)); }
+        const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', body: JSON.stringify({ ...item, restaurant_id: currentUser?.restaurant_id }) });
+        if (!res.ok) console.error('[App] updateMenuItem failed:', await res.text());
+        await debouncedFetchInitialData();
       },
-      deleteMenuItem: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/menu_items?id=${id}`, { method: 'DELETE' }); 
-        if (res.ok) setMenuItems(prev => prev.filter(i => i.id !== id));
-      },
+      deleteMenuItem: async (id: string) => { await fetchWithAuth(`${API_URL}/menu_items?id=${id}`, { method: 'DELETE' }); await debouncedFetchInitialData(); },
       toggleItemAvailability: async (id: string) => {
         const item = menuItems.find(i => i.id === id);
         if (item) {
-          const res = await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, restaurant_id: currentUser?.restaurant_id, is_available: !item.is_available }) });
-          if (res.ok) setMenuItems(prev => prev.map(i => i.id === id ? { ...i, is_available: !i.is_available } : i));
+          await fetchWithAuth(`${API_URL}/menu_items`, { method: 'PATCH', body: JSON.stringify({ id, restaurant_id: currentUser?.restaurant_id, is_available: !item.is_available }) });
+          await debouncedFetchInitialData();
         }
       },
-      addMenuCategory: async (cat: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setMenuCategories(prev => [...prev, result]); }
-      },
-      updateMenuCategory: async (cat: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setMenuCategories(prev => prev.map(c => c.id === result.id ? result : c)); }
-      },
-      deleteMenuCategory: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/menu_categories?id=${id}`, { method: 'DELETE' }); 
-        if (res.ok) setMenuCategories(prev => prev.filter(c => c.id !== id));
-      },
-      addSection: async (sec: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/sections`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setSections(prev => [...prev, result]); }
-      },
-      updateSection: async (sec: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/sections`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setSections(prev => prev.map(s => s.id === result.id ? result : s)); }
-      },
-      deleteSection: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/sections?id=${id}`, { method: 'DELETE' }); 
-        if (res.ok) setSections(prev => prev.filter(s => s.id !== id));
-      },
-      addTable: async (tbl: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/tables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setTables(prev => [...prev, result]); }
-      },
-      updateTable: async (tbl: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/tables`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setTables(prev => prev.map(t => t.id === result.id ? result : t)); }
-      },
-      deleteTable: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/tables?id=${id}`, { method: 'DELETE' }); 
-        if (res.ok) setTables(prev => prev.filter(t => t.id !== id));
-      },
-      addSupplier: async (s: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setSuppliers(prev => [...prev, result]); }
-      },
-      updateSupplier: async (s: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/suppliers/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setSuppliers(prev => prev.map(item => item.id === result.id ? result : item)); }
-      },
-      deleteSupplier: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); 
-        if (res.ok) setSuppliers(prev => prev.filter(s => s.id !== id));
-      },
-      addVendor: async (v: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/suppliers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setSuppliers(prev => [...prev, result]); }
-      },
-      updateVendor: async (v: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/suppliers/${v.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setSuppliers(prev => prev.map(item => item.id === result.id ? result : item)); }
-      },
-      deleteVendor: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/suppliers/${id}`, { method: 'DELETE' }); 
-        if (res.ok) setSuppliers(prev => prev.filter(s => s.id !== id));
-      },
-      addCustomer: async (c: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setCustomers(prev => [...prev, result]); }
-      },
-      updateCustomer: async (c: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/customers/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setCustomers(prev => prev.map(item => item.id === result.id ? result : item)); }
-      },
-      deleteCustomer: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/customers/${id}`, { method: 'DELETE' }); 
-        if (res.ok) setCustomers(prev => prev.filter(c => c.id !== id));
-      },
-      addStation: async (s: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/stations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); 
-        if (res.ok) { const result = await res.json(); setStations(prev => [...prev, result]); }
-      },
-      updateStation: async (s: any) => { 
-        const res = await fetchWithAuth(`${API_URL}/stations`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) }); 
-        if (res.ok) { const result = await res.json(); setStations(prev => prev.map(item => item.id === result.id ? result : item)); }
-      },
-      deleteStation: async (id: string) => { 
-        const res = await fetchWithAuth(`${API_URL}/stations?id=${id}`, { method: 'DELETE' }); 
-        if (res.ok) setStations(prev => prev.filter(s => s.id !== id));
-      },
+      addMenuCategory: async (cat: any) => { await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'POST', body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await debouncedFetchInitialData(); },
+      updateMenuCategory: async (cat: any) => { await fetchWithAuth(`${API_URL}/menu_categories`, { method: 'PATCH', body: JSON.stringify({ ...cat, restaurant_id: currentUser?.restaurant_id }) }); await debouncedFetchInitialData(); },
+      deleteMenuCategory: async (id: string) => { await fetchWithAuth(`${API_URL}/menu_categories?id=${id}`, { method: 'DELETE' }); await debouncedFetchInitialData(); },
+      addSection: async (sec: any) => { await fetchWithAuth(`${API_URL}/sections`, { method: 'POST', body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await debouncedFetchInitialData(); },
+      updateSection: async (sec: any) => { await fetchWithAuth(`${API_URL}/sections`, { method: 'PATCH', body: JSON.stringify({ ...sec, restaurant_id: currentUser?.restaurant_id }) }); await debouncedFetchInitialData(); },
+      deleteSection: async (id: string) => { await fetchWithAuth(`${API_URL}/sections?id=${id}`, { method: 'DELETE' }); await debouncedFetchInitialData(); },
+      addTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'POST', body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await debouncedFetchInitialData(); },
+      updateTable: async (tbl: any) => { await fetchWithAuth(`${API_URL}/tables`, { method: 'PATCH', body: JSON.stringify({ ...tbl, restaurant_id: currentUser?.restaurant_id }) }); await debouncedFetchInitialData(); },
+      deleteTable: async (id: string) => { await fetchWithAuth(`${API_URL}/tables?id=${id}`, { method: 'DELETE' }); await debouncedFetchInitialData(); },
+      addVendor: async (v: any) => { await fetchWithAuth(`${API_URL}/vendors`, { method: 'POST', body: JSON.stringify({ ...v, restaurant_id: currentUser?.restaurant_id }) }); debouncedFetchInitialData(); },
+      addCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); debouncedFetchInitialData(); },
+      updateCustomer: async (c: any) => { await fetchWithAuth(`${API_URL}/customers`, { method: 'POST', body: JSON.stringify({ ...c, restaurant_id: currentUser?.restaurant_id }) }); debouncedFetchInitialData(); },
+      deleteCustomer: async (id: string) => { await fetchWithAuth(`${API_URL}/customers/${id}`, { method: 'DELETE' }); debouncedFetchInitialData(); },
+
+      // Stations CRUD
+      stations,
+      addStation: async (s: any) => { await fetchWithAuth(`${API_URL}/stations`, { method: 'POST', body: JSON.stringify({ ...s, restaurant_id: currentUser?.restaurant_id }) }); debouncedFetchInitialData(); },
+      updateStation: async (s: any) => { await fetchWithAuth(`${API_URL}/stations`, { method: 'PATCH', body: JSON.stringify(s) }); debouncedFetchInitialData(); },
+      deleteStation: async (id: string) => { await fetchWithAuth(`${API_URL}/stations?id=${id}`, { method: 'DELETE' }); debouncedFetchInitialData(); },
       cancelOrder: async (id: string, reason: string, notes?: string) => {
         try {
           const res = await fetchWithAuth(`${API_URL}/orders/${id}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               status: 'CANCELLED',
               cancellation_reason: reason,
@@ -935,7 +790,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             })
           });
           if (!res.ok) throw new Error('Cancellation failed');
-          setOrders(prev => prev.map(o => o.id === id ? ({ ...o, status: 'CANCELLED' as OrderStatus } as Order) : o));
+          debouncedFetchInitialData();
           addNotification('success', 'Order cancelled successfully');
           return true;
         } catch (e: any) {
@@ -948,7 +803,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // 1. Verify Manager PIN first
           const verifyRes = await fetchWithAuth(`${API_URL}/auth/verify-pin`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pin: managerPin, requiredRole: 'MANAGER' })
           });
 
@@ -962,7 +816,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // 2. Perform Void
           const res = await fetchWithAuth(`${API_URL}/orders/${id}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               status: 'VOIDED',
               void_reason: reason,
@@ -974,12 +827,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
 
           if (!res.ok) throw new Error('Void operation failed');
-          setOrders(prev => prev.map(o => o.id === id ? ({ ...o, status: 'VOIDED' as OrderStatus } as Order) : o));
+          debouncedFetchInitialData();
           addNotification('success', 'Order voided successfully');
           return true;
         } catch (e: any) {
           addNotification('error', e.message);
           return false;
+        }
+      },
+      fireOrder: async (id: string, type: string) => {
+        try {
+          const res = await fetchWithAuth(`${API_URL}/orders/${id}/fire`, {
+            method: 'POST',
+            body: JSON.stringify({ type })
+          });
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => null);
+            throw new Error(errorData?.error || errorData?.message || 'Failed to fire order');
+          }
+          const result = await res.json();
+          addNotification('success', 'Order fired to kitchen');
+          debouncedFetchInitialData();
+          return result;
+        } catch (e: any) {
+          addNotification('error', e.message);
+          return null;
         }
       },
       processPayment: async (orderId: string, transaction: any) => {
@@ -1006,26 +878,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
-
-          // 🔒 SESSION GATE: backend returned 402 — no active cashier session.
-          // Save the pending payload and show the Open Drawer modal.
-          // The retry (handleOpenDrawerAndRetry) sends the exact same payload.
-          if (res.status === 402) {
-            const err = await res.json();
-            if (err.error === 'SESSION_REQUIRED') {
-              return new Promise<boolean>((resolve, reject) => {
-                setPendingSettlePayload({ orderId, payload, resolve, reject });
-                setDrawerFloat('0');
-                setShowOpenDrawerModal(true);
-              });
-            }
-          }
-
           if (!res.ok) {
             const err = await res.json();
-            throw new Error(err.error || 'Payment processing failed');
+            if (res.status === 402) {
+              const err402 = { code: 'SESSION_REQUIRED', status: 402 };
+              throw err402;
+            }
+            throw new Error(err.message || err.error || 'Payment processing failed');
           }
-          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'CLOSED' as OrderStatus, payment_status: 'PAID' as any } as Order) : o));
+          debouncedFetchInitialData();
           return true;
         } catch (e: any) {
           console.error('Process Payment Error:', e);
@@ -1033,163 +894,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return false;
         }
       },
-      completeDelivery: async (orderId: string) => {
-        try {
-          const res = await fetchWithAuth(`${API_URL}/orders/${orderId}/mark-delivered`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ processedBy: currentUser?.id })
-          });
-          if (!res.ok) throw new Error('Failed to mark as delivered');
-          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'DELIVERED' as OrderStatus } as Order) : o));
-          addNotification('success', 'Order marked as delivered');
-        } catch (e: any) {
-          addNotification('error', e.message);
-        }
-      },
-      failDelivery: async (orderId: string, reason: string) => {
-        try {
-          const res = await fetchWithAuth(`${API_URL}/orders/${orderId}/mark-failed`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reason, processedBy: currentUser?.id })
-          });
-          if (!res.ok) throw new Error('Failed to mark as failed');
-          setOrders(prev => prev.map(o => o.id === orderId ? ({ ...o, status: 'READY' as OrderStatus } as Order) : o));
-          addNotification('success', 'Order delivery failed (reset to READY)');
-        } catch (e: any) {
-          addNotification('error', e.message);
-        }
-      },
-
     } as any}>
       {children}
-
-      {/* ─── Open Drawer Modal ──────────────────────────────────────────────
-           Triggered when POST /api/orders/:id/settle returns 402 SESSION_REQUIRED.
-           Opens a cashier session then auto-retries the exact same payment payload.
-      ──────────────────────────────────────────────────────────────────── */}
-      {showOpenDrawerModal && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {/* Backdrop */}
-          <div
-            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
-            onClick={() => { 
-                if (!drawerSubmitting) { 
-                    if (pendingSettlePayload?.resolve) pendingSettlePayload.resolve(false);
-                    setShowOpenDrawerModal(false); 
-                    setPendingSettlePayload(null); 
-                } 
-            }}
-          />
-          {/* Panel */}
-          <div style={{
-            position: 'relative', background: '#0B0F19',
-            border: '1px solid rgba(251,191,36,0.25)', borderRadius: '18px',
-            padding: '32px', width: '100%', maxWidth: '430px',
-            boxShadow: '0 30px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04)'
-          }}>
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '16px' }}>
-              <div style={{
-                width: '46px', height: '46px', borderRadius: '12px', flexShrink: 0,
-                background: 'linear-gradient(135deg,rgba(251,191,36,0.2),rgba(251,191,36,0.05))',
-                border: '1px solid rgba(251,191,36,0.35)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px'
-              }}>🗝️</div>
-              <div>
-                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#fff', letterSpacing: '-0.4px' }}>Open Your Drawer</h2>
-                <p style={{ margin: 0, fontSize: '10px', color: '#fbbf24', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Session Required to Process Payment</p>
-              </div>
-            </div>
-            <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '24px', lineHeight: 1.65, borderLeft: '2px solid rgba(251,191,36,0.3)', paddingLeft: '12px' }}>
-              A cashier session must be active before payments can be posted to the General Ledger.
-              Enter your opening float below — your drawer will be opened and the payment will be processed automatically.
-            </p>
-            {/* Float input */}
-            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' }}>Opening Float</label>
-            <div style={{
-              display: 'flex', alignItems: 'center',
-              background: '#020617', border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '10px', overflow: 'hidden', marginBottom: '24px'
-            }}>
-              <span style={{ padding: '0 14px', color: '#475569', fontSize: '14px', fontWeight: 700, borderRight: '1px solid rgba(255,255,255,0.06)' }}>Rs.</span>
-              <input
-                id="drawer-float-input"
-                type="number"
-                min="0"
-                step="1"
-                value={drawerFloat}
-                onChange={e => setDrawerFloat(e.target.value)}
-                onFocus={e => { if (e.target.value === '0') setDrawerFloat(''); }}
-                autoFocus
-                disabled={drawerSubmitting}
-                style={{
-                  flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                  color: '#fff', fontSize: '22px', fontWeight: 700,
-                  padding: '13px 16px', fontFamily: 'monospace'
-                }}
-                placeholder="0"
-              />
-            </div>
-            {/* Actions */}
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                id="drawer-cancel-btn"
-                onClick={() => { 
-                    if (pendingSettlePayload?.resolve) pendingSettlePayload.resolve(false);
-                    setShowOpenDrawerModal(false); 
-                    setPendingSettlePayload(null); 
-                }}
-                disabled={drawerSubmitting}
-                style={{
-                  flex: 1, padding: '13px', borderRadius: '10px',
-                  background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
-                  color: '#64748b', fontSize: '13px', fontWeight: 700,
-                  cursor: drawerSubmitting ? 'not-allowed' : 'pointer'
-                }}
-              >Cancel</button>
-              <button
-                id="drawer-open-btn"
-                onClick={handleOpenDrawerAndRetry}
-                disabled={drawerSubmitting}
-                style={{
-                  flex: 2, padding: '13px', borderRadius: '10px',
-                  background: drawerSubmitting ? '#1e293b' : 'linear-gradient(135deg,#fbbf24,#f59e0b)',
-                  border: 'none', color: '#000',
-                  fontSize: '13px', fontWeight: 800,
-                  cursor: drawerSubmitting ? 'not-allowed' : 'pointer',
-                  letterSpacing: '0.02em', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px'
-                }}
-              >
-                {drawerSubmitting ? (
-                  <><span style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid rgba(0,0,0,0.3)', borderTopColor: '#000', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} /> Opening...</>
-                ) : (
-                  <>🗂️ Open Drawer &amp; Process Payment</>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </AppContext.Provider>
   );
 };
 
 // --- 3. THE UI CONTENT WRAPPER ---
 const AppContent = () => {
-  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, connectionStatus } = useAppContext();
+  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, activeSession } = useAppContext();
   const isMobile = useIsMobile();
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [showSessionModal, setShowSessionModal] = useState(false);
+  const [showDevicePairing, setShowDevicePairing] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const { theme, toggleTheme } = useTheme();
-  const [showMobileMenu, setShowMobileMenu] = useState(false);
-
-  // SUPER_ADMIN restaurant mode: stores the restaurant being managed locally in the UI
-  const [superAdminRestaurantId, setSuperAdminRestaurantId] = useState<string | null>(null);
-  const [superAdminRestaurantName, setSuperAdminRestaurantName] = useState<string | null>(null);
 
   // Live clock update
   useEffect(() => {
@@ -1213,90 +934,57 @@ const AppContent = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  if (activeView === 'SESSION_EXPIRED') {
-    return <SessionExpiredView onBackToLogin={() => setActiveView('LOGIN')} />;
+  if (showDevicePairing) {
+    const { DevicePairingVerificationView } = require('../auth/views/DevicePairingVerificationView');
+    return (
+      <DevicePairingVerificationView
+        onPairingSuccess={() => {
+          setShowDevicePairing(false);
+          // Reload to pick up auth token and proceed to login
+          window.location.reload();
+        }}
+        onCancel={() => setShowDevicePairing(false)}
+      />
+    );
   }
 
-  if (!currentUser) return <LoginView onLogin={login} />;
-  
-  // Cashier full-screen takeover
-  if (activeView === 'CASHIER_VIEW') return <CashierView />;
+  if (!currentUser) return <LoginView onLogin={login} onStartRegistration={() => setShowDevicePairing(true)} />;
 
-  // SUPER_ADMIN handlers
-  const handleEnterRestaurant = (restaurantId: string, restaurantName: string) => {
-    setSuperAdminRestaurantId(restaurantId);
-    setSuperAdminRestaurantName(restaurantName);
-    setTargetRestaurant(restaurantId); // Make fetchWithAuth include x-target-restaurant
-    setTimeout(() => {
-      fetchInitialData(currentUser, restaurantId);
-    }, 50);
-    setActiveView('DASHBOARD');
-  };
-
-  const handleExitToHQ = () => {
-    setSuperAdminRestaurantId(null);
-    setSuperAdminRestaurantName(null);
-    setTargetRestaurant(null); // Clear header
-    setActiveView('SUPER_ADMIN');
-  };
-
-  const getMenuItems = () => {
-    if (currentUser.role === 'SUPER_ADMIN' && !superAdminRestaurantId) {
-      return [{ id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' }];
-    }
-    if (currentUser.role === 'SUPER_ADMIN' && superAdminRestaurantId) {
-      // In restaurant mode: show full menu + HQ exit button
-      return [
-        { id: 'SUPER_ADMIN', icon: Shield, label: '← Back to HQ' },
-        { id: 'DASHBOARD', icon: Layout, label: 'Dashboard' },
-        { id: 'POS', icon: Grid, label: 'POS Control' },
-        { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Hub' },
-        { id: 'ACTIVITY', icon: History, label: 'Command Hub' },
-        { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
-        { id: 'SETTINGS', icon: Settings, label: 'Settings' },
-      ];
-    }
-
-    const allItems = [
-      { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash', roles: ['ADMIN', 'MANAGER'] },
-      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Hub', roles: ['ADMIN', 'MANAGER', 'SERVER', 'WAITER', 'CASHIER'] },
-      { id: 'POS', icon: Grid, label: 'POS Control', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
-      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed', roles: ['ADMIN', 'MANAGER', 'CHEF'] },
-      { id: 'LOGISTICS', icon: Package, label: 'Logistics Hub', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
-      { id: 'RIDER_VIEW', icon: Bike, label: 'Rider Portal', roles: ['RIDER'] },
-      { id: 'ACTIVITY', icon: History, label: 'Command Hub', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
-      { id: 'FINANCE', icon: CreditCard, label: 'Finance', roles: ['ADMIN', 'MANAGER'] },
-      { id: 'REGISTER', icon: CreditCard, label: 'Register', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
-      { id: 'CUSTOMERS', icon: Users, label: 'Patrons', roles: ['ADMIN', 'MANAGER', 'CASHIER'] },
-      { id: 'SUPPLIERS', icon: Truck, label: 'Suppliers', roles: ['ADMIN', 'MANAGER'] },
-      { id: 'SETTINGS', icon: Settings, label: 'System', roles: ['ADMIN', 'MANAGER'] },
-    ];
-
-    return allItems.filter(item => 
-      !item.roles || item.roles.includes(currentUser.role as any) || currentUser.role === 'ADMIN' || currentUser.role === 'MANAGER'
-    ).map(({ roles, ...rest }) => rest);
-  };
-
-  const menuItems = getMenuItems();
+  const menuItems = currentUser.role === 'SUPER_ADMIN' ? [
+    { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
+  ] : [
+    { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
+    { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+    { id: 'POS', icon: Grid, label: 'POS Control' },
+    { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+    { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+    { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
+    { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+    { id: 'REGISTER', icon: CreditCard, label: 'Register' },
+    { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+    { id: 'STAFF', icon: Users, label: 'Personnel' },
+    { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+    { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
+    { id: 'SETTINGS', icon: Settings, label: 'System' },
+  ];
 
   // Command palette commands
   const commands = [
     // Navigation
-    { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: '📊', roles: ['ADMIN', 'MANAGER'], action: () => setActiveView('DASHBOARD') },
-    { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: '🛒', roles: ['ADMIN', 'MANAGER', 'CASHIER'], action: () => setActiveView('POS') },
-    { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: '👨‍🍳', roles: ['ADMIN', 'MANAGER', 'CHEF'], action: () => setActiveView('KITCHEN') },
-    { id: 'nav-orders', label: 'Go to Dine-In Hub', shortcut: 'G O', category: 'Navigation', icon: '🍽️', roles: ['ADMIN', 'MANAGER', 'SERVER', 'WAITER', 'CASHIER'], action: () => setActiveView('ORDER_HUB') },
-    { id: 'nav-logistics', label: 'Go to Logistics', shortcut: 'G L', category: 'Navigation', icon: '🚚', roles: ['ADMIN', 'MANAGER', 'CASHIER'], action: () => setActiveView('LOGISTICS') },
-    { id: 'nav-rider-view', label: 'Go to Rider Portal', shortcut: 'G R', category: 'Navigation', icon: '🏍️', roles: ['RIDER'], action: () => setActiveView('RIDER_VIEW') },
-    { id: 'nav-activity', label: 'Go to Command Hub', shortcut: 'G A', category: 'Navigation', icon: '⚡', roles: ['ADMIN', 'MANAGER', 'SERVER', 'CASHIER'], action: () => setActiveView('ACTIVITY') },
-    { id: 'nav-billing', label: 'Go to Billing', shortcut: 'G B', category: 'Navigation', icon: '💳', roles: ['ADMIN', 'MANAGER'], action: () => setActiveView('BILLING') },
-    { id: 'nav-menu', label: 'Go to Menu', shortcut: 'G M', category: 'Navigation', icon: '☕', roles: ['ADMIN', 'MANAGER'], action: () => setActiveView('MENU') },
-    { id: 'nav-settings', label: 'Go to Settings', shortcut: 'G S', category: 'Navigation', icon: '⚙️', roles: ['ADMIN', 'MANAGER'], action: () => setActiveView('SETTINGS') },
+    { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: 'ðŸ“Š', action: () => setActiveView('DASHBOARD') },
+    { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: 'ðŸ›’', action: () => setActiveView('POS') },
+    { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: 'ðŸ‘¨â€ðŸ³', action: () => setActiveView('KITCHEN') },
+    { id: 'nav-orders', label: 'Go to Dine-In Order Hub', shortcut: 'G O', category: 'Navigation', icon: 'ðŸ½ï¸', action: () => setActiveView('ORDER_HUB') },
+    { id: 'nav-logistics', label: 'Go to Logistics', shortcut: 'G L', category: 'Navigation', icon: 'ðŸšš', action: () => setActiveView('LOGISTICS') },
+    { id: 'nav-billing', label: 'Go to Billing', shortcut: 'G B', category: 'Navigation', icon: 'ðŸ’³', action: () => setActiveView('BILLING') },
+    { id: 'nav-settlement', label: 'Go to Settlement', shortcut: 'G $', category: 'Navigation', icon: 'ðŸ’°', action: () => setActiveView('SETTLEMENT') },
+    { id: 'nav-menu', label: 'Go to Menu', shortcut: 'G M', category: 'Navigation', icon: 'â˜•', action: () => setActiveView('MENU') },
+    { id: 'nav-settings', label: 'Go to Settings', shortcut: 'G S', category: 'Navigation', icon: 'âš™ï¸', action: () => setActiveView('SETTINGS') },
     // Actions
-    { id: 'action-refresh', label: 'Refresh Data', shortcut: 'Ctrl+R', category: 'Actions', icon: '🔄', action: () => fetchInitialData() },
-    { id: 'action-theme', label: 'Toggle Theme', shortcut: 'Ctrl+T', category: 'Actions', icon: '🌙', action: toggleTheme },
-    { id: 'action-logout', label: 'Logout', shortcut: 'Ctrl+Q', category: 'Actions', icon: '🚪', action: logout },
-  ].filter(cmd => !cmd.roles || cmd.roles.includes(currentUser.role as any) || currentUser.role === 'ADMIN' || currentUser.role === 'MANAGER');
+    { id: 'action-refresh', label: 'Refresh Data', shortcut: 'Ctrl+R', category: 'Actions', icon: 'ðŸ”„', action: () => fetchInitialData() },
+    { id: 'action-theme', label: 'Toggle Theme', shortcut: 'Ctrl+T', category: 'Actions', icon: 'ðŸŒ™', action: toggleTheme },
+    { id: 'action-logout', label: 'Logout', shortcut: 'Ctrl+Q', category: 'Actions', icon: 'ðŸšª', action: logout },
+  ];
 
 
 
@@ -1308,21 +996,14 @@ const AppContent = () => {
         onMouseLeave={() => setSidebarExpanded(false)}
       >
         <div className="p-4 flex items-center gap-3 overflow-hidden border-b border-slate-800">
-          <div className="bg-gold-500 p-2 rounded-lg text-black font-bold shrink-0">⚡</div>
+          <div className="bg-gold-500 p-2 rounded-lg text-black font-bold shrink-0">âš¡</div>
           <h1 className={`font-serif text-2xl font-bold text-white tracking-tight whitespace-nowrap transition-opacity duration-300 ${sidebarExpanded ? 'opacity-100' : 'opacity-0 w-0'}`}>FIREFLOW</h1>
         </div>
         <nav className="flex-1 px-2 space-y-1 py-4 overflow-y-auto custom-scrollbar">
           {menuItems.map((item) => (
             <button
               key={item.id}
-              onClick={() => {
-                // SUPER_ADMIN: '← Back to HQ' exits restaurant mode
-                if (currentUser?.role === 'SUPER_ADMIN' && item.id === 'SUPER_ADMIN' && superAdminRestaurantId) {
-                  handleExitToHQ();
-                } else {
-                  setActiveView(item.id);
-                }
-              }}
+              onClick={() => setActiveView(item.id)}
               className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${activeView === item.id ? 'bg-gold-500 text-black font-bold' : 'text-slate-400 hover:bg-slate-800'}`}
             >
               <item.icon size={18} className="shrink-0" />
@@ -1348,6 +1029,29 @@ const AppContent = () => {
             </div>
           </div>
 
+
+          {/* Active Session / Shift Status Widget */}
+          {['CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') && (
+            <div className={`p-2 rounded-xl transition-all border ${activeSession ? 'bg-green-500/10 border-green-500/20' : 'bg-red-500/10 border-red-500/20'} ${sidebarExpanded ? 'mx-1' : 'mx-0 flex justify-center'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 shadow-lg border border-white/10 ${activeSession ? 'bg-green-600' : 'bg-red-600'}`}>
+                  <Shield size={16} />
+                </div>
+                <div className={`transition-all duration-300 ${sidebarExpanded ? 'opacity-100 min-w-[120px]' : 'opacity-0 w-0 overflow-hidden'}`}>
+                  <div className="text-[10px] font-black uppercase leading-tight text-white">
+                    {activeSession ? 'Shift Active' : 'No Active Shift'}
+                  </div>
+                  <button 
+                    onClick={() => setShowSessionModal(true)}
+                    className={`text-[8px] font-black uppercase tracking-widest underline transition-colors ${activeSession ? 'text-green-500 hover:text-green-400' : 'text-red-500 hover:text-red-400'}`}
+                  >
+                    {activeSession ? 'End Session' : 'Start Session'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <button onClick={() => fetchInitialData()} className="w-full flex items-center gap-3 px-3 py-2 text-slate-500 hover:text-white text-[10px] font-black uppercase rounded-lg hover:bg-slate-800 transition-all">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             <span className={`tracking-widest transition-all duration-300 ${sidebarExpanded ? 'opacity-100 w-auto' : 'opacity-0 w-0'}`}>Sync</span>
@@ -1364,35 +1068,8 @@ const AppContent = () => {
       </aside>
 
       <main className="flex-1 min-w-0 relative bg-slate-950 flex flex-col overflow-hidden">
-        {/* Mobile Slim Header */}
-        {isMobile && activeView !== 'POS' && (
-          <header className="bg-[#0B0F19]/95 backdrop-blur-xl border-b border-white/5 px-4 py-2.5 flex items-center justify-between sticky top-0 z-[60]">
-            <div className="flex items-center gap-2">
-              <div className="bg-gold-500 w-7 h-7 rounded-lg flex items-center justify-center text-black font-black text-[10px]">FF</div>
-              <span className="text-xs font-black text-white uppercase tracking-tighter italic">{activeView?.replace('_', ' ')}</span>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              <button 
-                onClick={() => setShowNotifications(!showNotifications)}
-                className="relative p-2 bg-slate-900 rounded-xl"
-              >
-                <Bell size={16} className="text-slate-400" />
-                {notifications.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>}
-              </button>
-              
-              <div 
-                onClick={() => setShowMobileMenu(true)}
-                className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-800 to-slate-900 border border-white/10 flex items-center justify-center text-[10px] font-black text-gold-500 uppercase"
-              >
-                {currentUser?.name?.[0]}
-              </div>
-            </div>
-          </header>
-        )}
-
-        {/* Global Desktop Header - Redesigned */}
-        {!isMobile && activeView !== 'POS' && (
+        {/* Global Header - Redesigned */}
+        {activeView !== 'POS' && (
           <header className="bg-[#0B0F19]/98 backdrop-blur-md border-b border-slate-800/50 px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
             {/* LEFT: Branding + Clock */}
             <div className="flex items-center gap-6">
@@ -1409,19 +1086,11 @@ const AppContent = () => {
               </div>
             </div>
 
-            {/* CENTER: Restaurant Mode Banner or Connection Status */}
-            {currentUser?.role === 'SUPER_ADMIN' && superAdminRestaurantId ? (
-              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-gold-500/10 rounded-lg border border-gold-500/30 cursor-pointer hover:bg-gold-500/20 transition-all" onClick={handleExitToHQ}>
-                <Shield size={12} className="text-gold-500" />
-                <span className="text-[10px] text-gold-500 font-black uppercase tracking-widest">Managing: {superAdminRestaurantName}</span>
-                <span className="text-[9px] text-gold-500/60 font-bold">← Exit</span>
-              </div>
-            ) : (
-              <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-700/50">
-                <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
-                <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Live</span>
-              </div>
-            )}
+            {/* CENTER: Connection Status */}
+            <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-900/50 rounded-lg border border-slate-700/50">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
+              <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Live</span>
+            </div>
 
             {/* RIGHT: Notifications + Theme */}
             <div className="flex items-center gap-2">
@@ -1459,11 +1128,10 @@ const AppContent = () => {
           </header>
         )}
 
-        {/* Role Context Bar - Hidden on Mobile and POS to maximize space */}
-        {!isMobile && activeView !== 'POS' && (
+        {/* Role Context Bar - Hidden in POS to maximize space */}
+        {activeView !== 'POS' && (
           <RoleContextBar
             currentUser={currentUser}
-            connectionStatus={connectionStatus}
             pendingBills={orders.filter((o: Order) => o.status === 'READY').length}
             activeTables={tables.filter((t: Table) => t.status === TableStatus.OCCUPIED).length}
             pendingOrders={orders.filter(o => {
@@ -1478,121 +1146,28 @@ const AppContent = () => {
 
         {/* Main Content */}
         <div className="flex-1 overflow-auto">
-          {activeView === 'SUPER_ADMIN' ? <SuperAdminView onEnterRestaurant={handleEnterRestaurant} /> :
+          {activeView === 'SUPER_ADMIN' ? <SuperAdminView /> :
             activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
               activeView === 'MENU' ? <MenuView /> :
                 activeView === 'DASHBOARD' ? <DashboardView /> :
                   activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
                     activeView === 'KITCHEN' ? <KDSView /> :
-                      activeView === 'RIDER_VIEW' ? <RiderView /> :
-                        activeView === 'LOGISTICS' ? <LogisticsHub /> :
+                      activeView === 'LOGISTICS' ? <LogisticsHub /> :
                         activeView === 'ACTIVITY' ? <ActivityLog /> :
                           activeView === 'REGISTER' ? <TransactionsView /> :
                             activeView === 'BILLING' ? <BillingView /> :
                               activeView === 'FINANCE' ? <FinancialCommandCenter /> :
                                 activeView === 'STAFF' ? <StaffView /> :
                                   activeView === 'CUSTOMERS' ? <CustomersView /> :
-                                    activeView === 'SUPPLIERS' ? <SuppliersView /> :
-                                      activeView === 'SETTINGS' ? <SettingsView /> :
+                                    activeView === 'SETTINGS' ? <SettingsView /> :
                                       <div className="p-20 text-slate-700 font-black uppercase tracking-[0.3em]">SECURE SECTOR NOT SELECTED</div>}
         </div>
-
-        {/* Mobile Bottom Navigation Bar */}
-        {isMobile && currentUser && (
-          <nav className="bg-[#0B0F19]/95 backdrop-blur-2xl border-t border-white/5 px-2 py-3 flex items-center justify-around shrink-0 relative z-[70] pb-6">
-            {menuItems.slice(0, 4).map((item) => (
-              <button 
-                key={item.id}
-                onClick={() => setActiveView(item.id)}
-                className={`flex flex-col items-center gap-1.5 transition-all ${activeView === item.id ? 'text-gold-500 translate-y-[-2px]' : 'text-slate-500'}`}
-              >
-                {item.id === 'POS' ? (
-                  <div className={`p-2 rounded-2xl ${activeView === 'POS' ? 'bg-gold-500 text-black shadow-lg shadow-gold-500/20 ring-4 ring-gold-500/10' : 'bg-slate-900'}`}>
-                    <item.icon size={22} />
-                  </div>
-                ) : (
-                  <>
-                    <item.icon size={20} className={activeView === item.id ? 'fill-gold-500/20' : ''} />
-                    <span className="text-[8px] font-black uppercase tracking-widest">{item.label}</span>
-                  </>
-                )}
-              </button>
-            ))}
-            
-            <button 
-              onClick={() => setShowMobileMenu(true)}
-              className={`flex flex-col items-center gap-1.5 transition-all ${showMobileMenu ? 'text-gold-500' : 'text-slate-500'}`}
-            >
-              <Menu size={20} />
-              <span className="text-[8px] font-black uppercase tracking-widest">More</span>
-            </button>
-          </nav>
-        )}
       </main>
 
-      {/* Mobile Drawer (More Menu) */}
-      {isMobile && showMobileMenu && (
-        <div className="fixed inset-0 z-[100] animate-in fade-in duration-300">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={() => setShowMobileMenu(false)} />
-          <aside className="absolute inset-y-0 right-0 w-4/5 max-w-sm bg-[#0B0F19] border-l border-white/5 shadow-2xl flex flex-col animate-in slide-in-from-right duration-500">
-            <div className="p-6 border-b border-white/5 flex items-center justify-between">
-               <div className="flex flex-col">
-                  <span className="text-[10px] font-black text-gold-500 uppercase tracking-widest">Active Profile</span>
-                  <span className="text-xl font-black text-white uppercase tracking-tighter">{currentUser?.name}</span>
-               </div>
-               <button onClick={() => setShowMobileMenu(false)} className="p-2 bg-slate-900 rounded-xl text-slate-500">
-                 <X size={20} />
-               </button>
-            </div>
-
-            <nav className="flex-1 overflow-y-auto p-4 space-y-1 custom-scrollbar">
-               {menuItems.filter(item => !['DASHBOARD', 'ORDER_HUB', 'POS', 'KITCHEN'].includes(item.id)).map(item => (
-                 <button 
-                   key={item.id}
-                   onClick={() => {
-                     setActiveView(item.id);
-                     setShowMobileMenu(false);
-                   }}
-                   className={`w-full flex items-center gap-4 px-4 py-4 rounded-2xl transition-all ${activeView === item.id ? 'bg-gold-500 text-black shadow-lg shadow-gold-500/20' : 'text-slate-400 hover:bg-slate-900'}`}
-                 >
-                   <item.icon size={20} />
-                   <span className="text-[10px] font-black uppercase tracking-widest">{item.label}</span>
-                 </button>
-               ))}
-            </nav>
-
-            <div className="p-4 border-t border-white/5 space-y-3">
-               <button 
-                onClick={toggleTheme}
-                className="w-full flex items-center justify-between px-4 py-4 bg-slate-900 rounded-2xl text-slate-400 active:scale-95 transition-all"
-               >
-                 <div className="flex items-center gap-4">
-                    {theme === 'dark' ? <Moon size={18}/> : <Sun size={18}/>}
-                    <span className="text-[10px] font-black uppercase tracking-widest">Visual Mode</span>
-                 </div>
-                 <span className="text-[8px] font-bold text-gold-500 bg-gold-500/10 px-2 py-0.5 rounded-full uppercase">{theme}</span>
-               </button>
-
-               <button 
-                onClick={logout}
-                className="w-full flex items-center gap-4 px-4 py-4 bg-red-500/10 text-red-500 rounded-2xl font-black uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-red-500/5"
-               >
-                 <LogOut size={18} />
-                 <span>Security Logout</span>
-               </button>
-            </div>
-          </aside>
-        </div>
-      )}
-
       {/* Global Notifications UI */}
-      <div className="fixed bottom-4 right-4 z-[100] space-y-2 max-w-sm">
+      <div className="fixed bottom-4 right-4 z-[100] space-y-2">
         {notifications.map(n => (
-          <div key={n.id} className={`p-4 rounded-xl shadow-2xl border backdrop-blur-md ${
-            n.type === 'error' ? 'bg-red-900/90 border-red-500/50 text-white' : 
-            n.type === 'warning' ? 'bg-amber-900/90 border-amber-500/50 text-white' :
-            'bg-slate-900/90 border-gold-500/50 text-white'
-          } text-xs font-medium whitespace-pre-line animate-in slide-in-from-right duration-300`}>
+          <div key={n.id} className={`p-4 rounded-lg shadow-2xl border ${n.type === 'error' ? 'bg-red-900/80 border-red-500' : 'bg-slate-900/80 border-gold-500'} text-white text-xs font-bold uppercase tracking-widest animate-in slide-in-from-right`}>
             {n.message}
           </div>
         ))}
@@ -1604,6 +1179,13 @@ const AppContent = () => {
         onClose={() => setShowCommandPalette(false)}
         commands={commands}
       />
+      {showSessionModal && (
+        <CashSessionModal
+          mode={activeSession ? 'CLOSE' : 'OPEN'}
+          onClose={() => setShowSessionModal(false)}
+          onSuccess={fetchInitialData}
+        />
+      )}
     </div>
   );
 };

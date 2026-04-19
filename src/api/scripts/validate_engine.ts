@@ -98,7 +98,7 @@ async function main() {
                     reference_id: 'T01',
                     date: new Date(),
                     description: 'Cash Sale T01',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1000'], debit: 1000.00, credit: 0, reference_type: 'ORDER', reference_id: order1.id },
                             { account_id: accountMap['2100'], debit: 0, credit: 137.93, reference_type: 'ORDER', reference_id: order1.id },
@@ -106,12 +106,12 @@ async function main() {
                         ]
                     }
                 },
-                include: { lines: true }
+                include: { journal_entry_lines: true }
             });
 
             // Validate T01
-            const drT01 = journal1.lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
-            const crT01 = journal1.lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
+            const drT01 = journal1.journal_entry_lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
+            const crT01 = journal1.journal_entry_lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
             if (!drT01.equals(crT01)) {
                 throw new Error(`FAILED AT: T01. REASON: Imbalance DR(${drT01}) != CR(${crT01})`);
             }
@@ -139,7 +139,7 @@ async function main() {
                     reference_id: 'T02',
                     date: new Date(),
                     description: 'Card Sale T02',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1010'], debit: 2200.00, credit: 0, reference_type: 'ORDER', reference_id: order2.id },
                             { account_id: accountMap['2100'], debit: 0, credit: 275.86, reference_type: 'ORDER', reference_id: order2.id },
@@ -148,11 +148,11 @@ async function main() {
                         ]
                     }
                 },
-                include: { lines: true }
+                include: { journal_entry_lines: true }
             });
 
-            const drT02 = journal2.lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
-            const crT02 = journal2.lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
+            const drT02 = journal2.journal_entry_lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
+            const crT02 = journal2.journal_entry_lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
             if (!drT02.equals(crT02)) {
                 throw new Error(`FAILED AT: T02. REASON: Imbalance DR(${drT02}) != CR(${crT02})`);
             }
@@ -179,7 +179,7 @@ async function main() {
                     reference_id: 'T03',
                     date: new Date(),
                     description: 'Split Payment T03',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1000'], debit: 1500.00, credit: 0, reference_type: 'ORDER', reference_id: order3.id },
                             { account_id: accountMap['1010'], debit: 1500.00, credit: 0, reference_type: 'ORDER', reference_id: order3.id },
@@ -188,18 +188,18 @@ async function main() {
                         ]
                     }
                 },
-                include: { lines: true }
+                include: { journal_entry_lines: true }
             });
 
             // Validate T03 lines
-            const cashLines = journal3.lines.filter(l => l.account_id === accountMap['1000']);
-            const cardLines = journal3.lines.filter(l => l.account_id === accountMap['1010']);
+            const cashLines = journal3.journal_entry_lines.filter(l => l.account_id === accountMap['1000']);
+            const cardLines = journal3.journal_entry_lines.filter(l => l.account_id === accountMap['1010']);
             if (cashLines.length !== 1 || cardLines.length !== 1) {
                 throw new Error(`FAILED AT: T03. REASON: Split payment lines missing (Cash: ${cashLines.length}, Card: ${cardLines.length})`);
             }
 
-            const drT03 = journal3.lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
-            const crT03 = journal3.lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
+            const drT03 = journal3.journal_entry_lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
+            const crT03 = journal3.journal_entry_lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
             if (!drT03.equals(crT03)) {
                 throw new Error(`FAILED AT: T03. REASON: Imbalance DR(${drT03}) != CR(${crT03})`);
             }
@@ -227,7 +227,7 @@ async function main() {
                     reference_id: 'T04',
                     date: new Date(),
                     description: 'Credit Sale T04',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1040'], debit: 1500.00, credit: 0, reference_type: 'ORDER', reference_id: order4.id },
                             { account_id: accountMap['2100'], debit: 0, credit: 206.90, reference_type: 'ORDER', reference_id: order4.id },
@@ -235,7 +235,7 @@ async function main() {
                         ]
                     }
                 },
-                include: { lines: true }
+                include: { journal_entry_lines: true }
             });
 
             // Customer Ledger Row
@@ -251,8 +251,8 @@ async function main() {
                 }
             });
 
-            const drT04 = journal4.lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
-            const crT04 = journal4.lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
+            const drT04 = journal4.journal_entry_lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
+            const crT04 = journal4.journal_entry_lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
             if (!drT04.equals(crT04)) {
                 throw new Error(`FAILED AT: T04. REASON: Imbalance DR(${drT04}) != CR(${crT04})`);
             }
@@ -275,7 +275,7 @@ async function main() {
                     reference_id: 'T05',
                     date: new Date(),
                     description: 'Void Reversal of T01',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1000'], debit: 0, credit: 1000.00, reference_type: 'ORDER', reference_id: order1.id },
                             { account_id: accountMap['2100'], debit: 137.93, credit: 0, reference_type: 'ORDER', reference_id: order1.id },
@@ -283,11 +283,11 @@ async function main() {
                         ]
                     }
                 },
-                include: { lines: true }
+                include: { journal_entry_lines: true }
             });
 
-            const drT05 = journal5.lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
-            const crT05 = journal5.lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
+            const drT05 = journal5.journal_entry_lines.reduce((sum, l) => sum.add(l.debit), new Decimal(0));
+            const crT05 = journal5.journal_entry_lines.reduce((sum, l) => sum.add(l.credit), new Decimal(0));
             if (!drT05.equals(crT05)) {
                 throw new Error(`FAILED AT: T05. REASON: Imbalance DR(${drT05}) != CR(${crT05})`);
             }

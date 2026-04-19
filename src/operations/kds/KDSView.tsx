@@ -1,24 +1,26 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAppContext } from '../../client/App';
 import { Order, Station } from '../../shared/types';
 import { Clock, AlertCircle, CheckCircle2, ChefHat, Bike, ShoppingBag, CheckSquare, RotateCcw, Circle } from 'lucide-react';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 export const KDSView: React.FC = () => {
-  const { orders, updateOrder, cancelOrder, stations, tables, addNotification, currentUser } = useAppContext();
+  const { orders, cancelOrder, stations, tables, addNotification, currentUser, fetchInitialData, optimisticItemStatus, setOptimisticItemStatus } = useAppContext();
   const [activeStationId, setActiveStationId] = useState<string>('ALL');
   const [undoStack, setUndoStack] = useState<{ order: Order, items: any[], status: any }[]>([]);
   const [showSafetyModal, setShowSafetyModal] = useState<{ show: boolean, order?: Order }>({ show: false });
+  const inFlightItems = useRef<Set<string>>(new Set());
 
   // Robust Station Matcher
   const isItemForStation = (item: any, stationId: string) => {
     if (stationId === 'ALL') return true;
-    const stationObj = stations.find(s => s.id === stationId);
+    const stationObj = stations.find((s: any) => s.id === stationId);
     return item.station_id === stationId || (stationObj && item.station === stationObj.name);
   };
 
   // Filter orders for KDS
   const kdsOrders = useMemo(() => {
-    return orders.filter(o => {
+    return orders.filter((o: any) => {
       // v3.0 logic: Exclude finished or aborted orders
       if (['CLOSED', 'CANCELLED', 'VOIDED'].includes(o.status)) {
         return false;
@@ -28,28 +30,58 @@ export const KDSView: React.FC = () => {
   }, [orders]);
 
   const activeOrders = useMemo(() => {
-    return kdsOrders.filter(o => {
-      const items = o.order_items || [];
-      const hasVisibleItems = items.some(item => {
-        const stationMatch = isItemForStation(item, activeStationId);
-        // v3.0 logic: Item is visible if waiting or in progress
-        const isVisible = item.item_status === 'PENDING' || item.item_status === 'PREPARING';
-        return stationMatch && isVisible;
+    return kdsOrders
+      .map((o: Order) => ({
+        ...o,
+        order_items: (o.order_items || []).map((item: any) => ({
+          ...item,
+          item_status: item.id ? (optimisticItemStatus[item.id] || item.item_status) : item.item_status
+        }))
+      }))
+      .filter((o: Order) => {
+        const items = o.order_items || [];
+        const hasVisibleItems = items.some((item: any) => {
+          const stationMatch = isItemForStation(item, activeStationId);
+          const isVisible = item.item_status === 'PENDING' || item.item_status === 'PREPARING';
+
+          // Safety: ALL station shows even orphaned items
+          if (activeStationId === 'ALL') return isVisible;
+          return stationMatch && isVisible;
+        });
+        return hasVisibleItems;
+      })
+      .sort((a: Order, b: Order) => {
+        const timeA = new Date(a.created_at || (a as any).timestamp || 0).getTime();
+        const timeB = new Date(b.created_at || (b as any).timestamp || 0).getTime();
+        return timeA - timeB;
       });
-      return hasVisibleItems;
-    }).sort((a, b) => new Date(a.created_at || (a as any).timestamp || 0).getTime() - new Date(b.created_at || (b as any).timestamp || 0).getTime());
-  }, [kdsOrders, activeStationId, stations]);
+  }, [kdsOrders, activeStationId, stations, optimisticItemStatus]);
 
   const handleUndo = async () => {
     if (undoStack.length === 0) return;
     const last = undoStack[undoStack.length - 1];
-    try {
-      await updateOrder({
-        ...last.order,
-        order_items: last.items,
-        status: last.status,
-        last_action_desc: 'Undo last KDS action'
+    const order = last.order;
+
+    setOptimisticItemStatus(prev => {
+      const next = { ...prev };
+      last.items.filter(item => item.id).forEach(item => {
+        next[item.id] = item.item_status;
       });
+      return next;
+    });
+
+    try {
+      await Promise.all(
+        last.items
+          .filter(item => item.id)
+          .map(item =>
+            fetchWithAuth(`/api/orders/${order.id}/items/${item.id}/status`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ newStatus: item.item_status })
+            })
+          )
+      );
       setUndoStack(prev => prev.slice(0, -1));
       addNotification('success', 'Action Reverted');
     } catch (e) {
@@ -57,55 +89,71 @@ export const KDSView: React.FC = () => {
     }
   };
 
-  const [, setTick] = useState(0);
+
   useEffect(() => {
-    const timer = setInterval(() => setTick(t => t + 1), 30000);
+    console.log('[KDS_MOUNT] optimisticItemStatus on mount:', optimisticItemStatus);
+    
+    // Set up periodic sync as a safety net for sockets
+    const timer = setInterval(() => {
+      if (inFlightItems.current.size > 0) return;
+      if (fetchInitialData) fetchInitialData();
+    }, 15000); 
     return () => clearInterval(timer);
-  }, []);
+  }, [fetchInitialData, optimisticItemStatus]);
 
   const handleItemToggle = async (order: Order, itemIndex: number) => {
     const items = [...(order.order_items || [])];
     const item = items[itemIndex];
+    if (!item || !item.id) return;
 
-    if (!item) return;
+    // Guard: Prevent duplicate requests for the same item (rapid clicks / double-tap)
+    if (inFlightItems.current.has(item.id)) return;
+    inFlightItems.current.add(item.id);
+
+    // Resolve the REAL current status: optimistic (latest click) > rendered prop
+    const effectiveStatus = optimisticItemStatus[item.id] || item.item_status;
 
     let nextStatus: string;
-    // v3.0 flow: PENDING -> PREPARING -> DONE
-    if (item.item_status === 'PENDING') {
-      nextStatus = 'PREPARING';
-    } else if (item.item_status === 'PREPARING') {
-      nextStatus = 'DONE';
-    } else if (item.item_status === 'DONE') {
-      nextStatus = 'PENDING'; // Toggle back if error
-    } else {
-      return;
-    }
+    if (effectiveStatus === 'PENDING') nextStatus = 'PREPARING';
+    else if (effectiveStatus === 'PREPARING') nextStatus = 'DONE';
+    else if (effectiveStatus === 'DONE') nextStatus = 'DONE'; // Backend treats DONE->DONE as an Undo
+    else { inFlightItems.current.delete(item.id); return; }
 
-    const updatedItems = items.map((itm, idx) =>
-      idx === itemIndex ? { ...itm, item_status: nextStatus } : itm
-    );
+    setOptimisticItemStatus(prev => ({ ...prev, [item.id]: nextStatus }));
 
-    setUndoStack(prev => [...prev.slice(-10), { order, items: order.order_items || [], status: order.status }]);
-
-    const allReady = updatedItems.every(i => 
-      ['DONE', 'SERVED', 'SKIPPED', 'CANCELLED', 'VOIDED'].includes(i.item_status)
-    );
-    const anyPreparing = updatedItems.some(i => i.item_status === 'PREPARING');
-
-    let orderStatus: any = order.status;
-    if (allReady) orderStatus = 'READY';
-    else if (anyPreparing) orderStatus = 'ACTIVE';
-    else orderStatus = 'ACTIVE';
+    setUndoStack(prev => [...prev.slice(-10), {
+      order,
+      items: [{ id: item.id, item_status: item.item_status }],
+      status: order.status
+    }]);
 
     try {
-      await updateOrder({
-        ...order,
-        order_items: updatedItems,
-        status: orderStatus,
-        last_action_desc: `Item ${item.item_name} marked as ${nextStatus}`
+      const res = await fetchWithAuth(
+        `/api/orders/${order.id}/items/${item.id}/status`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newStatus: nextStatus })
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || body.message || 'Update failed');
+      }
+      // Force context refresh in background
+      if (fetchInitialData) {
+        fetchInitialData();
+      }
+    } catch (error: any) {
+      // Rollback on fail
+      setOptimisticItemStatus(prev => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
       });
-    } catch (error) {
-      addNotification('error', 'Update Failed');
+      addNotification('error', `Status Update Failed: ${error.message}`);
+    } finally {
+      inFlightItems.current.delete(item.id);
     }
   };
 
@@ -118,28 +166,41 @@ export const KDSView: React.FC = () => {
     const order = showSafetyModal.order;
     const items = [...(order.order_items || [])];
 
-    const updatedItems = items.map(item => {
+    const itemsToUpdate = items.filter(item => {
       const isRelevant = isItemForStation(item, activeStationId);
-      if (isRelevant && (item.item_status === 'PENDING' || item.item_status === 'PREPARING')) {
-        return { ...item, item_status: 'DONE' };
-      }
-      return item;
+      return isRelevant &&
+        (item.item_status === 'PENDING' || item.item_status === 'PREPARING') &&
+        item.id;
     });
 
-    const allReady = updatedItems.every(i => 
-      ['DONE', 'SERVED', 'SKIPPED', 'CANCELLED', 'VOIDED'].includes(i.item_status)
-    );
+    setOptimisticItemStatus(prev => {
+      const next = { ...prev };
+      itemsToUpdate.forEach(item => {
+        next[item.id] = 'DONE';
+      });
+      return next;
+    });
 
     try {
-      await updateOrder({
-        ...order,
-        order_items: updatedItems,
-        status: (allReady ? 'READY' : 'ACTIVE') as any,
-        last_action_desc: `Station items marked as READY`
-      });
+      await Promise.all(
+        itemsToUpdate.map(item =>
+          fetchWithAuth(`/api/orders/${order.id}/items/${item.id}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ newStatus: 'DONE' })
+          })
+        )
+      );
       setShowSafetyModal({ show: false });
       addNotification('success', 'Station Clearance Successful');
     } catch (error) {
+      setOptimisticItemStatus(prev => {
+        const next = { ...prev };
+        itemsToUpdate.forEach(item => {
+          delete next[item.id];
+        });
+        return next;
+      });
       addNotification('error', 'Batch Update Failed');
     }
   };
@@ -167,17 +228,17 @@ export const KDSView: React.FC = () => {
 
         {/* Connectivity Monitor */}
         <div className="hidden md:flex items-center gap-4 bg-slate-900/50 border border-slate-800 px-4 py-2 rounded-2xl">
-           <div className="flex flex-col items-end">
-              <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">Station Connectivity</span>
-              <span className="text-[10px] text-green-400 font-bold uppercase">All Stations Operational</span>
-           </div>
-           <div className="flex -space-x-1">
-              {stations.filter(s => s.is_active).map(s => (
-                <div key={s.id} title={s.name} className="w-6 h-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center">
-                   <Circle size={8} className="text-green-500 fill-green-500/20" />
-                </div>
-              ))}
-           </div>
+          <div className="flex flex-col items-end">
+            <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">Station Connectivity</span>
+            <span className="text-[10px] text-green-400 font-bold uppercase">All Stations Operational</span>
+          </div>
+          <div className="flex -space-x-1">
+            {stations.filter((s: Station) => s.is_active).map((s: Station) => (
+              <div key={s.id} title={s.name} className="w-6 h-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center">
+                <Circle size={8} className="text-green-500 fill-green-500/20" />
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="flex flex-1 w-full xl:w-auto overflow-x-auto no-scrollbar items-center gap-2">
@@ -194,7 +255,7 @@ export const KDSView: React.FC = () => {
             <div className="w-px h-4 bg-slate-800 mx-1"></div>
 
             <div className="flex gap-1">
-              {stations.filter(s => s.is_active).map(station => (
+              {stations.filter((s: Station) => s.is_active).map((station: Station) => (
                 <button
                   key={station.id}
                   onClick={() => setActiveStationId(station.id)}
@@ -222,7 +283,7 @@ export const KDSView: React.FC = () => {
 
       <div className="flex-1 overflow-y-auto p-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 auto-rows-max">
-          {activeOrders.map(order => (
+          {activeOrders.map((order: any) => (
             <KDSTicket
               key={order.id}
               order={order}

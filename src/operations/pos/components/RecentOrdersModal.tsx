@@ -13,13 +13,14 @@ interface RecentOrdersModalProps {
     isOpen: boolean;
     onClose: () => void;
     orders: Order[];
+    tables: any[];
     activeSession: any;
     onEditOrder: (order: Order) => void;
     onPrintReceipt: (order: Order) => void;
 }
 
 export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
-    isOpen, onClose, orders, activeSession, onEditOrder, onPrintReceipt
+    isOpen, onClose, orders, tables, activeSession, onEditOrder, onPrintReceipt
 }) => {
     const [search, setSearch] = useState('');
     const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'READY' | 'CLOSED'>('ALL');
@@ -123,6 +124,7 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
                                 <OrderCard 
                                     key={order.id} 
                                     order={order} 
+                                    tables={tables}
                                     onEdit={() => onEditOrder(order)}
                                     onPrint={() => onPrintReceipt(order)}
                                 />
@@ -146,8 +148,8 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
                         </div>
                         <div className="w-px h-8 bg-slate-800" />
                         <div className="flex flex-col">
-                            <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest text-gold-500">Shift Total</span>
-                            <span className="text-lg font-black text-white font-mono">Rs. {filteredOrders.reduce((sum, o) => sum + Number(o.total), 0).toLocaleString()}</span>
+                            <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest text-gold-500">Valid Shift Total</span>
+                            <span className="text-lg font-black text-white font-mono">Rs. {filteredOrders.filter(o => o.status !== 'CANCELLED' && o.status !== 'VOIDED').reduce((sum, o) => sum + (Math.round(Number(o.total) / 10) * 10), 0).toLocaleString()}</span>
                         </div>
                     </div>
                     <div className="flex gap-3">
@@ -164,9 +166,8 @@ export const RecentOrdersModal: React.FC<RecentOrdersModalProps> = ({
     );
 };
 
-const OrderCard: React.FC<{ order: Order, onEdit: () => void, onPrint: () => void }> = ({ order, onEdit, onPrint }) => {
+const OrderCard: React.FC<{ order: Order, tables: any[], onEdit: () => void, onPrint: () => void }> = ({ order, tables, onEdit, onPrint }) => {
 
-    
     const getIcon = () => {
         if (order.type === 'DINE_IN') return <Utensils className="w-4 h-4" />;
         if (order.type === 'TAKEAWAY') return <ShoppingBag className="w-4 h-4" />;
@@ -180,6 +181,20 @@ const OrderCard: React.FC<{ order: Order, onEdit: () => void, onPrint: () => voi
         'CANCELLED': 'bg-red-500/20 text-red-400 border-red-500/30',
         'VOIDED': 'bg-purple-500/20 text-purple-400 border-purple-500/30'
     };
+
+    let orderIdentity = 'Customer Guest';
+    if (order.type === 'DINE_IN') {
+        const tableId = (order as any).table_id || (order as any).tableId;
+        const tableInfo = tables.find(t => t.id === tableId);
+        orderIdentity = tableInfo ? `Table: ${tableInfo.name}` : `Table: Unassigned`;
+    } else {
+        const nameAndPhone = [order.customer_name, order.customer_phone].filter(Boolean).join(' - ');
+        if (nameAndPhone) {
+            orderIdentity = nameAndPhone;
+        } else if (order.type === 'DELIVERY' && order.delivery_address) {
+            orderIdentity = `Delivery: ${order.delivery_address.substring(0, 15)}...`;
+        }
+    }
 
     return (
         <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 hover:border-slate-700 transition-all group hover:bg-slate-900/80">
@@ -200,9 +215,9 @@ const OrderCard: React.FC<{ order: Order, onEdit: () => void, onPrint: () => voi
 
             <div className="flex justify-between items-end">
                 <div>
-                   <div className="text-lg font-black text-white italic tracking-tighter">Rs. {Number(order.total).toLocaleString()}</div>
+                   <div className="text-lg font-black text-white italic tracking-tighter">Rs. {(Math.round(Number(order.total) / 10) * 10).toLocaleString()}</div>
                    <div className="text-[9px] text-slate-500 font-bold uppercase mt-1 flex items-center gap-1.5 whitespace-nowrap overflow-hidden">
-                       <Phone size={10} className="text-gold-500" /> {order.customer_phone || 'Customer Guest'}
+                       <Phone size={10} className="text-gold-500" /> {orderIdentity}
                    </div>
                 </div>
                 <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">

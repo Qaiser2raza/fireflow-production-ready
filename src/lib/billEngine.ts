@@ -42,6 +42,7 @@ export interface BillResult extends PaymentBreakdown {
   discountPercent: number;        // Resolved % (for display)
   taxableSubtotal: number;        // Subtotal after discount, before tax
   taxExemptAmount: number;        // Items that were skipped from tax
+  rawTotal: number;               // Precise 2dp total before rounding to nearest 10
 }
 
 // ─────────────────────────────────────────────
@@ -112,39 +113,40 @@ export const calculateBill = (
 
   // 2. Discount -> Taxable Amount
   const discountAmount = Math.min(config.discountValue || 0, subtotal);
-  const taxableAmount = Math.max(0, subtotal - discountAmount);
+  const afterDiscount = Math.max(0, subtotal - discountAmount);
   const discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
 
-  // 3. Tax & Net Price Calculation
+  // 3. Tax Calculation (Informational only for Inclusive)
   let tax = 0;
-  let netPrice = taxableAmount; // Default to subtotal (discounted)
   
   if (config.taxEnabled && !config.tax_exempt) {
     const rate = config.taxRate / 100;
     if (config.tax_type === 'INCLUSIVE') {
-      tax = taxableAmount - (taxableAmount / (1 + rate));
-      netPrice = taxableAmount - tax; // Extract net price for SC calculation
+      tax = afterDiscount - (afterDiscount / (1 + rate));
     } else {
-      tax = taxableAmount * rate;
-      netPrice = taxableAmount; // Taxable amount is already net in exclusive
+      tax = afterDiscount * rate;
     }
   }
   tax = Math.round(tax * 100) / 100;
 
-  // 4. Service Charge (ALWAYS on net price before tax)
+  // 4. Service Charge (Calculated on afterDiscount as per Fire Grill requirement)
   const serviceCharge = config.svcEnabled
-    ? Math.round(netPrice * (config.svcRate / 100) * 100) / 100
+    ? Math.round(afterDiscount * (config.svcRate / 100) * 100) / 100
     : 0;
 
   // 5. Delivery Fee
   const deliveryFee = config.deliveryFee || 0;
 
   // 6. Total
-  const totalRaw = config.tax_type === 'INCLUSIVE'
-    ? (taxableAmount + serviceCharge + deliveryFee)
-    : (taxableAmount + tax + serviceCharge + deliveryFee);
+  let totalRaw = afterDiscount + serviceCharge + deliveryFee;
   
-  const total = Math.max(0, Math.round(totalRaw * 100) / 100);
+  if (config.tax_type === 'EXCLUSIVE') {
+    totalRaw += tax;
+  }
+  
+  // Line items stay precise (2dp), grand total rounds to nearest 10
+  const rawTotal = Math.max(0, Math.round(totalRaw * 100) / 100);
+  const total = Math.round(rawTotal / 10) * 10;
 
   return {
     subtotal,
@@ -152,11 +154,12 @@ export const calculateBill = (
     discountAmount,
     discountPercent,
     serviceCharge,
-    taxableSubtotal: taxableAmount,
-    taxExemptAmount: config.tax_exempt ? taxableAmount : 0,
+    taxableSubtotal: afterDiscount,
+    taxExemptAmount: config.tax_exempt ? afterDiscount : 0,
     tax,
     deliveryFee,
     total,
+    rawTotal,  // Precise total before rounding (for accounting reference)
     tax_type: config.tax_type
   };
 };

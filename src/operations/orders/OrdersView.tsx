@@ -65,16 +65,39 @@ export const OrdersView: React.FC = () => {
 
   // --- LOGIC: ADVANCED FILTERING ---
   const filteredOrders = useMemo(() => {
+    const isWaiter = ['WAITER', 'SERVER'].includes(currentUser?.role || '');
+    const TERMINAL_STATUSES = ['CLOSED', 'CANCELLED', 'VOIDED'];
+
     return orders.filter(order => {
-      // 1. View Mode Filter
+      // 1. VIEW MODE: Rider Cash Collections tab
+      //    Shows delivery orders that have been delivered but not yet settled (cash in the field).
       if (viewMode === 'COLLECTIONS') {
-        const isDelivery = order.type === 'DELIVERY';
-        const needsSettlement = order.is_settled_with_rider === false;
-        return isDelivery && needsSettlement;
+        return order.type === 'DELIVERY' && order.status === 'DELIVERED';
       }
 
-      // 2. Search Filter (Search Table Name, Customer, or ID)
+      // 2. TICKET STREAM: Filter out terminal (closed) orders from live view.
+      //    CLOSED, CANCELLED, VOIDED orders scroll to reports — not the live screen.
+      if (TERMINAL_STATUSES.includes(order.status)) {
+        return false;
+      }
+
+      // 3. ROLE-BASED FILTER
+      //    Waiters: Only see dine-in orders assigned to them (their active table orders).
+      //    Cashiers/Managers: See all active orders for full floor/logistics oversight.
+      if (isWaiter) {
+        const waiterId = currentUser?.id;
+        const isAssignedToWaiter = order.dine_in_orders?.[0]?.waiter_id === waiterId;
+        // Also show unassigned dine-in orders and orders created by this waiter
+        const isCreatedByWaiter = (order as any).created_by === waiterId;
+        if (!isAssignedToWaiter && !isCreatedByWaiter) {
+          return false;
+        }
+      }
+
+      // 4. SEARCH FILTER (Table name, customer name, or order ID)
       const searchLower = (searchQuery || '').toLowerCase();
+      if (!searchLower) return true;
+
       const tableName = order.table?.name || '';
       const sectionName = sections.find(s => s.id === order.table?.section_id)?.name || '';
       const customerName = order.customer_name || order.takeaway_orders?.[0]?.customer_name || order.delivery_orders?.[0]?.customer_name || '';
@@ -87,7 +110,7 @@ export const OrdersView: React.FC = () => {
         sectionName.toLowerCase().includes(searchLower)
       );
     }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [orders, searchQuery, viewMode, sections]);
+  }, [orders, searchQuery, viewMode, sections, currentUser]);
 
   const handleOrderClick = (order: any) => {
     if (order.type === 'DELIVERY' && [OrderStatus.READY, OrderStatus.DELIVERED, OrderStatus.CLOSED].includes(order.status)) {

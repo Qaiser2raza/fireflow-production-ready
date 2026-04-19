@@ -1,0 +1,1 @@
+SELECT o.id, o.order_number, o.status, o.type, i.item_name, i.item_status, i.station_id FROM orders o LEFT JOIN order_items i ON o.id = i.order_id WHERE o.order_number IN ('#ORD-131721-KG6', '#ORD-193149-TI6');

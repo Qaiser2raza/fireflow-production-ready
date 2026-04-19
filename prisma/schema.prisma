@@ -7,39 +7,104 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model audit_logs {
-  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String?      @db.Uuid
-  staff_id      String?      @db.Uuid
-  action_type   String       @db.VarChar(50)
-  entity_type   String       @db.VarChar(50)
-  entity_id     String?      @db.Uuid
-  details       Json?
-  ip_address    String?      @db.Inet
-  created_at    DateTime?    @default(now()) @db.Timestamp(6)
-  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  staff         staff?       @relation(fields: [staff_id], references: [id], onUpdate: NoAction)
+model approval_logs {
+  id                                              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id                                   String            @db.Uuid
+  action_type                                     String            @db.VarChar(50)
+  target_entity_type                              String            @db.VarChar(50)
+  target_entity_id                                String            @db.Uuid
+  requested_by_user_id                            String            @db.Uuid
+  approved_by_user_id                             String            @db.Uuid
+  approved_by_session_id                          String?           @db.Uuid
+  reason                                          String?
+  created_at                                      DateTime          @default(now()) @db.Timestamp(6)
+  order_id                                        String?           @db.Uuid
+  cashier_sessions                                cashier_sessions? @relation(fields: [approved_by_session_id], references: [id])
+  staff_approval_logs_approved_by_user_idTostaff  staff             @relation("approval_logs_approved_by_user_idTostaff", fields: [approved_by_user_id], references: [id])
+  orders                                          orders?           @relation(fields: [order_id], references: [id], onUpdate: NoAction)
+  staff_approval_logs_requested_by_user_idTostaff staff             @relation("approval_logs_requested_by_user_idTostaff", fields: [requested_by_user_id], references: [id])
+  restaurants                                     restaurants       @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([created_at])
+  @@index([restaurant_id])
+  @@index([target_entity_id])
 }
 
-model customers {
-  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id   String               @db.Uuid
-  name            String?              @db.VarChar(100)
-  phone           String               @db.VarChar(20)
-  address         String?
-  notes           String?
-  created_at      DateTime?            @default(now()) @db.Timestamp(6)
-  updated_at      DateTime?            @default(now()) @db.Timestamp(6)
-  addresses       customer_addresses[]
-  restaurants     restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  delivery_orders delivery_orders[]
-  orders          orders[]
-  takeaway_orders takeaway_orders[]
-  credit_limit    Decimal              @default(0) @db.Decimal(10, 2)
-  credit_enabled  Boolean              @default(false)
-  customer_ledger customer_ledgers[]
+model audit_logs {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id     String?      @db.Uuid
+  staff_id          String?      @db.Uuid
+  action_type       String       @db.VarChar(50)
+  entity_type       String       @db.VarChar(50)
+  entity_id         String?      @db.Uuid
+  details           Json?
+  ip_address        String?      @db.Inet
+  created_at        DateTime?    @default(now()) @db.Timestamp(6)
+  from_state        String?
+  performed_by_role String?
+  session_id        String?
+  to_state          String?
+  restaurants       restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  staff             staff?       @relation(fields: [staff_id], references: [id], onUpdate: NoAction)
+}
 
-  @@unique([restaurant_id, phone])
+model cashier_sessions {
+  id                                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id                           String               @db.Uuid
+  opened_by                               String               @db.Uuid
+  closed_by                               String?              @db.Uuid
+  opened_at                               DateTime             @default(now()) @db.Timestamp(6)
+  closed_at                               DateTime?            @db.Timestamp(6)
+  opening_float                           Decimal              @default(0) @db.Decimal(10, 2)
+  expected_cash                           Decimal?             @db.Decimal(10, 2)
+  actual_cash                             Decimal?             @db.Decimal(10, 2)
+  difference                              Decimal?             @db.Decimal(10, 2)
+  status                                  String               @default("OPEN") @db.VarChar(20)
+  notes                                   String?
+  terminal_id                             String?
+  approval_logs                           approval_logs[]
+  staff_cashier_sessions_closed_byTostaff staff?               @relation("cashier_sessions_closed_byTostaff", fields: [closed_by], references: [id])
+  staff_cashier_sessions_opened_byTostaff staff                @relation("cashier_sessions_opened_byTostaff", fields: [opened_by], references: [id])
+  restaurants                             restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  cashier_shift_logs                      cashier_shift_logs[]
+  orders                                  orders[]
+}
+
+model cashier_shift_logs {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String           @db.Uuid
+  session_id       String           @db.Uuid
+  type             String           @db.VarChar(20)
+  amount           Decimal          @db.Decimal(10, 2)
+  description      String
+  category         String?          @db.VarChar(50)
+  reference_id     String?          @db.VarChar(100)
+  status           String           @default("PENDING") @db.VarChar(20)
+  processed_by     String?          @db.Uuid
+  created_at       DateTime         @default(now()) @db.Timestamp(6)
+  staff            staff?           @relation(fields: [processed_by], references: [id])
+  restaurants      restaurants      @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  cashier_sessions cashier_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade)
+}
+
+model chart_of_accounts {
+  id                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id           String                @db.Uuid
+  code                    String                @db.VarChar(20)
+  name                    String                @db.VarChar(100)
+  type                    AccountType
+  description             String?
+  parent_id               String?               @db.Uuid
+  is_active               Boolean               @default(true)
+  created_at              DateTime              @default(now()) @db.Timestamp(6)
+  updated_at              DateTime              @default(now()) @db.Timestamp(6)
+  is_system               Boolean               @default(false)
+  chart_of_accounts       chart_of_accounts?    @relation("chart_of_accountsTochart_of_accounts", fields: [parent_id], references: [id])
+  other_chart_of_accounts chart_of_accounts[]   @relation("chart_of_accountsTochart_of_accounts")
+  restaurants             restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  journal_entry_lines     journal_entry_lines[]
+
+  @@unique([restaurant_id, code])
 }
 
 model customer_addresses {
@@ -53,15 +118,60 @@ model customer_addresses {
   customers    customers @relation(fields: [customer_id], references: [id], onDelete: Cascade)
 }
 
+model customer_ledgers {
+  id                 String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String                  @db.Uuid
+  customer_id        String                  @db.Uuid
+  order_id           String?                 @db.Uuid
+  entry_type         CustomerLedgerEntryType
+  amount             Decimal                 @db.Decimal(10, 2)
+  balance_after      Decimal                 @db.Decimal(10, 2)
+  description        String?
+  processed_by       String?
+  created_at         DateTime                @default(now()) @db.Timestamp(6)
+  entry_status       String                  @default("provisional")
+  reviewed_at        DateTime?
+  reviewed_by        String?
+  flag_reason        String?
+  flagged_for_review Boolean                 @default(false)
+  customers          customers               @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  orders             orders?                 @relation(fields: [order_id], references: [id])
+  restaurants        restaurants             @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([customer_id])
+  @@index([restaurant_id])
+}
+
+model customers {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String               @db.Uuid
+  name               String?              @db.VarChar(100)
+  phone              String               @db.VarChar(20)
+  address            String?
+  notes              String?
+  created_at         DateTime?            @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?            @default(now()) @db.Timestamp(6)
+  credit_limit       Decimal              @default(0) @db.Decimal(10, 2)
+  credit_enabled     Boolean              @default(false)
+  customer_addresses customer_addresses[]
+  customer_ledgers   customer_ledgers[]
+  restaurants        restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  delivery_orders    delivery_orders[]
+  orders             orders[]
+  takeaway_orders    takeaway_orders[]
+
+  @@unique([restaurant_id, phone])
+}
+
 model delivery_orders {
   id                        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   order_id                  String     @unique @db.Uuid
   customer_name             String?
   customer_phone            String
   delivery_address          String?
-  customer_id               String?    @db.Uuid
   driver_id                 String?    @db.Uuid
   dispatched_at             DateTime?
+  customer_id               String?    @db.Uuid
   current_lat               Decimal?   @db.Decimal(10, 8)
   current_lng               Decimal?   @db.Decimal(11, 8)
   delivered_at              DateTime?
@@ -78,40 +188,61 @@ model dine_in_orders {
   order_id            String   @unique @db.Uuid
   table_id            String   @db.Uuid
   guest_count         Int
-  guest_count_history Json?
   waiter_id           String?  @db.Uuid
   seated_at           DateTime @default(now())
+  guest_count_history Json?
   orders              orders   @relation(fields: [order_id], references: [id])
   tables              tables   @relation(fields: [table_id], references: [id])
   staff               staff?   @relation(fields: [waiter_id], references: [id])
 }
 
-enum ExpenseCategory {
-  UTILITIES
-  SALARY
-  MAINTENANCE
-  SUPPLIES
-  MARKETING
-  RENT
-  TRANSPORT
-  MISCELLANEOUS
-}
-
 model expenses {
   id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id String          @db.Uuid
-  category      ExpenseCategory @default(MISCELLANEOUS)
-  amount        Decimal         @db.Decimal(10, 2)
   description   String
-  reference_id  String?         @db.VarChar(100)
-  processed_by  String?         @db.Uuid
+  amount        Decimal         @db.Decimal(10, 2)
   created_at    DateTime        @default(now()) @db.Timestamp(6)
+  processed_by  String?         @db.Uuid
+  reference_id  String?         @db.VarChar(100)
+  category      ExpenseCategory @default(MISCELLANEOUS)
+  staff         staff?          @relation(fields: [processed_by], references: [id])
+  restaurants   restaurants     @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
-  restaurants restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  staff       staff?      @relation(fields: [processed_by], references: [id], onDelete: SetNull)
-
-  @@index([restaurant_id])
   @@index([created_at])
+  @@index([restaurant_id])
+}
+
+model fbr_sync_logs {
+  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String      @db.Uuid
+  order_id         String?     @db.Uuid
+  request_payload  Json
+  response_payload Json?
+  status           String
+  error_message    String?
+  created_at       DateTime    @default(now())
+  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
+model fire_batches {
+  id                                           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id                                     String         @db.Uuid
+  version_number                               Int            @default(1)
+  recalled_from_batch_id                       String?        @db.Uuid
+  created_by_user_id                           String         @db.Uuid
+  recalled_at                                  DateTime?
+  recalled_by                                  String?        @db.Uuid
+  metadata_json                                Json?
+  created_at                                   DateTime       @default(now()) @db.Timestamp(6)
+  staff_fire_batches_created_by_user_idTostaff staff          @relation("fire_batches_created_by_user_idTostaff", fields: [created_by_user_id], references: [id])
+  orders                                       orders         @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  staff_fire_batches_recalled_byTostaff        staff?         @relation("fire_batches_recalled_byTostaff", fields: [recalled_by], references: [id])
+  fire_batches                                 fire_batches?  @relation("fire_batchesTofire_batches", fields: [recalled_from_batch_id], references: [id])
+  other_fire_batches                           fire_batches[] @relation("fire_batchesTofire_batches")
+  order_items                                  order_items[]
+
+  @@index([created_at])
+  @@index([order_id])
 }
 
 model installation_logs {
@@ -122,6 +253,63 @@ model installation_logs {
   notes        String?
   created_at   DateTime? @default(now()) @db.Timestamp(6)
   staff        staff?    @relation(fields: [installer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model inventory_items {
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id        String                 @db.Uuid
+  name                 String                 @db.VarChar(100)
+  unit_of_measure      String                 @db.VarChar(20)
+  current_stock        Decimal                @default(0) @db.Decimal(10, 4)
+  minimum_stock        Decimal                @default(0) @db.Decimal(10, 4)
+  unit_cost            Decimal                @default(0) @db.Decimal(10, 4)
+  category             String?                @db.VarChar(50)
+  created_at           DateTime               @default(now())
+  updated_at           DateTime               @default(now())
+  restaurants          restaurants            @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  purchase_order_items purchase_order_items[]
+  recipe_items         recipe_items[]
+}
+
+model journal_entries {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id       String                @db.Uuid
+  reference_type      String                @db.VarChar(50)
+  reference_id        String?
+  date                DateTime              @db.Timestamp(6)
+  description         String?
+  processed_by        String?
+  created_at          DateTime              @default(now()) @db.Timestamp(6)
+  restaurants         restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  journal_entry_lines journal_entry_lines[]
+}
+
+model journal_entry_lines {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  journal_entry_id  String            @db.Uuid
+  account_id        String            @db.Uuid
+  description       String?
+  debit             Decimal           @default(0) @db.Decimal(15, 4)
+  credit            Decimal           @default(0) @db.Decimal(15, 4)
+  meta              Json?
+  reference_id      String            @db.VarChar(100)
+  reference_type    String            @db.VarChar(50)
+  chart_of_accounts chart_of_accounts @relation(fields: [account_id], references: [id])
+  journal_entries   journal_entries   @relation(fields: [journal_entry_id], references: [id], onDelete: Cascade)
+}
+
+model ledger_entries {
+  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String      @db.Uuid
+  account_id       String?     @db.Uuid
+  transaction_type String      @db.VarChar(10)
+  amount           Decimal     @db.Decimal(10, 2)
+  reference_type   String      @db.VarChar(50)
+  reference_id     String?
+  description      String?
+  processed_by     String?
+  created_at       DateTime    @default(now()) @db.Timestamp(6)
+  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
 model license_keys {
@@ -138,22 +326,6 @@ model license_keys {
   restaurants     restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
-model subscription_payments {
-  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id     String      @db.Uuid
-  amount            Decimal     @db.Decimal(10, 2)
-  payment_method    String?     @db.VarChar(50)
-  transaction_id    String      @unique @db.VarChar(100)
-  payment_proof     String?
-  payment_proof_url String?     @db.VarChar(500)
-  status            String      @default("pending") @db.VarChar(20)
-  created_at        DateTime?   @default(now()) @db.Timestamp(6)
-  updated_at        DateTime?   @default(now()) @db.Timestamp(6)
-  verified_at       DateTime?   @db.Timestamp(6)
-  verified_by       String?     @db.VarChar(100)
-  restaurants       restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-}
-
 model menu_categories {
   id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id String       @db.Uuid
@@ -167,162 +339,42 @@ model menu_categories {
   @@unique([restaurant_id, name])
 }
 
-model menu_items {
-  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id   String?          @db.Uuid
-  name            String           @db.VarChar(100)
-  name_urdu       String?          @db.VarChar(100)
-  description     String?
-  cost_price      Decimal?         @db.Decimal(10, 2)
-  price           Decimal          @db.Decimal(10, 2)
-  category        String           @db.VarChar(50)
-  image_url       String?
-  created_at      DateTime?        @default(now()) @db.Timestamp(6)
-  is_available    Boolean?         @default(true)
-  station         String?          @default("KITCHEN") @db.VarChar(20)
-  track_stock     Boolean?         @default(false)
-  daily_stock     Int?             @default(0)
-  category_id     String?          @db.Uuid
-  station_id      String?          @db.Uuid
-  requires_prep   Boolean          @default(true)
-  menu_categories menu_categories? @relation(fields: [category_id], references: [id])
-  restaurants     restaurants?     @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  stations        stations?        @relation(fields: [station_id], references: [id])
-  order_items     order_items[]
-  recipe_items    recipe_items[]
-  variant        menu_item_variants[]
-}
-
 model menu_item_variants {
-  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  menu_item_id  String      @db.Uuid
-  name          String      @db.VarChar(50)
-  name_urdu     String?     @db.VarChar(50)
-  price         Decimal     @db.Decimal(10, 2)
-  created_at    DateTime    @default(now())
-  updated_at    DateTime    @default(now())
-  menu_items    menu_items  @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
-  order_items   order_items[]
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  menu_item_id String        @db.Uuid
+  name         String        @db.VarChar(50)
+  name_urdu    String?       @db.VarChar(50)
+  price        Decimal       @db.Decimal(10, 2)
+  created_at   DateTime      @default(now())
+  updated_at   DateTime      @default(now())
+  menu_items   menu_items    @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+  order_items  order_items[]
 }
 
-model order_items {
-  id                   String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  order_id             String      @db.Uuid
-  menu_item_id         String      @db.Uuid
-  quantity             Int
-  unit_cost            Decimal?    @db.Decimal(10, 2)
-  unit_price           Decimal     @db.Decimal(10, 2)
-  total_price          Decimal     @db.Decimal(10, 2)
-  station              String?
-  started_at           DateTime?
-  completed_at         DateTime?
-  served_at            DateTime?
-  special_instructions String?
-  modifications        Json?
-  item_name            String?
-  category             String?
-  created_at           DateTime    @default(now())
-  station_id           String?     @db.Uuid
-  predicted_ready_time DateTime?
-  force_ready_at       DateTime?
-  force_ready_by       String?     @db.Uuid
-  item_status          ItemStatus? @default(PENDING)
-  variant_id           String?     @db.Uuid
-  menu_items           menu_items  @relation(fields: [menu_item_id], references: [id])
-  variant             menu_item_variants? @relation(fields: [variant_id], references: [id])
-  orders               orders      @relation(fields: [order_id], references: [id])
-  stations             stations?   @relation(fields: [station_id], references: [id])
-}
-
-model orders {
-  id                                     String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id                          String              @db.Uuid
-  total                                  Decimal             @default(0) @db.Decimal(10, 2)
-  items                                  Json?
-  table_id                               String?             @db.Uuid
-  guest_count                            Int?
-  customer_name                          String?
-  customer_phone                         String?
-  delivery_address                       String?
-  is_proforma_printed                    Boolean             @default(false)
-  assigned_waiter_id                     String?             @db.Uuid
-  assigned_driver_id                     String?             @db.Uuid
-  created_at                             DateTime            @default(now())
-  updated_at                             DateTime            @default(now())
-  last_action_at                         DateTime?           @default(now())
-  last_action_by                         String?
-  last_action_desc                       String?
-  service_charge                         Decimal?            @default(0) @db.Decimal(10, 2)
-  delivery_fee                           Decimal?            @default(0) @db.Decimal(10, 2)
-  tax                                    Decimal?            @default(0) @db.Decimal(10, 2)
-  discount                               Decimal?            @default(0) @db.Decimal(10, 2)
-  breakdown                              Json?
-  cancelled_at                           DateTime?
-  cancelled_by                           String?
-  cancellation_reason                    String?
-  cancellation_notes                     String?
-  voided_at                              DateTime?
-  voided_by                              String?
-  void_reason                            String?
-  void_notes                             String?
-  refund_transaction_id                  String?
-  sync_status                            String              @default("PENDING")
-  fbr_invoice_number                     String?
-  fbr_sync_status                        String              @default("PENDING")
-  fbr_synced_at                          DateTime?
-  fbr_qr_code                            String?
-  fbr_response                           String?
-  customer_id                            String?             @db.Uuid
-  order_number                           String?             @unique @db.VarChar(20)
-  payment_status                         PaymentStatus?      @default(UNPAID)
-  predicted_complete_time                DateTime?
-  bottleneck_detected                    Boolean             @default(false)
-  force_settled_at                       DateTime?
-  force_settled_by                       String?             @db.Uuid
-  status                                 OrderStatus?        @default(ACTIVE)
-  type                                   OrderType
-  closed_at                              DateTime?
-  completed_at                           DateTime?
-  rider_shift_id                         String?             @db.Uuid
-  session_id                             String?             @db.Uuid
-  tax_type                               TaxType             @default(INCLUSIVE)
-  tax_exempt                             Boolean             @default(false)
-
-  is_deleted                             Boolean             @default(false)
-  deleted_by                             String?
-  deleted_at                             DateTime?
-  deleted_reason                         String?
-
-  delivery_orders                        delivery_orders?
-  dine_in_orders                         dine_in_orders?
-  order_intelligence                     order_intelligence?
-  order_items                            order_items[]
-  staff_orders_assigned_driver_idTostaff staff?              @relation("orders_assigned_driver_idTostaff", fields: [assigned_driver_id], references: [id])
-  staff_orders_assigned_waiter_idTostaff staff?              @relation("orders_assigned_waiter_idTostaff", fields: [assigned_waiter_id], references: [id])
-  customers                              customers?          @relation(fields: [customer_id], references: [id])
-  restaurants                            restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  rider_shift                            rider_shifts?       @relation(fields: [rider_shift_id], references: [id])
-  tables                                 tables?             @relation(fields: [table_id], references: [id])
-  cashier_session                        cashier_sessions?   @relation(fields: [session_id], references: [id])
-
-  reservation_orders                     reservation_orders?
-  takeaway_orders                        takeaway_orders?
-  transactions                           transactions[]
-  customer_ledger                        customer_ledgers[]
-
-  @@index([assigned_driver_id])
-  @@index([assigned_waiter_id])
-  @@index([restaurant_id])
-  @@index([table_id])
-}
-
-model parked_orders {
-  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String      @db.Uuid
-  staff_id      String      @db.Uuid
-  data          Json
-  created_at    DateTime    @default(now())
-  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+model menu_items {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String?              @db.Uuid
+  name               String               @db.VarChar(100)
+  name_urdu          String?              @db.VarChar(100)
+  description        String?
+  price              Decimal              @db.Decimal(10, 2)
+  category           String               @db.VarChar(50)
+  image_url          String?
+  created_at         DateTime?            @default(now()) @db.Timestamp(6)
+  is_available       Boolean?             @default(true)
+  station            String?              @default("KITCHEN") @db.VarChar(20)
+  track_stock        Boolean?             @default(false)
+  daily_stock        Int?                 @default(0)
+  cost_price         Decimal?             @db.Decimal(10, 2)
+  category_id        String?              @db.Uuid
+  requires_prep      Boolean              @default(true)
+  station_id         String?              @db.Uuid
+  menu_item_variants menu_item_variants[]
+  menu_categories    menu_categories?     @relation(fields: [category_id], references: [id])
+  restaurants        restaurants?         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  stations           stations?            @relation(fields: [station_id], references: [id])
+  order_items        order_items[]
+  recipe_items       recipe_items[]
 }
 
 model order_intelligence {
@@ -337,24 +389,238 @@ model order_intelligence {
   orders                  orders    @relation(fields: [order_id], references: [id], onDelete: Cascade)
 }
 
+model order_items {
+  id                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id             String              @db.Uuid
+  menu_item_id         String              @db.Uuid
+  quantity             Int
+  unit_price           Decimal             @db.Decimal(10, 2)
+  total_price          Decimal             @db.Decimal(10, 2)
+  station              String?
+  started_at           DateTime?
+  completed_at         DateTime?
+  served_at            DateTime?
+  special_instructions String?
+  modifications        Json?
+  item_name            String?
+  category             String?
+  created_at           DateTime            @default(now())
+  unit_cost            Decimal?            @db.Decimal(10, 2)
+  predicted_ready_time DateTime?
+  force_ready_at       DateTime?
+  force_ready_by       String?             @db.Uuid
+  item_status          ItemStatus?         @default(PENDING)
+  station_id           String?             @db.Uuid
+  variant_id           String?             @db.Uuid
+  fire_batch_id        String?             @db.Uuid
+  fired_at             DateTime?           @db.Timestamp(6)
+  skip_reason          SkipReason?
+  status_updated_at    DateTime?           @db.Timestamp(6)
+  status_updated_by    String?
+  fire_batches         fire_batches?       @relation(fields: [fire_batch_id], references: [id])
+  menu_items           menu_items          @relation(fields: [menu_item_id], references: [id])
+  orders               orders              @relation(fields: [order_id], references: [id])
+  stations             stations?           @relation(fields: [station_id], references: [id])
+  menu_item_variants   menu_item_variants? @relation(fields: [variant_id], references: [id])
+}
+
+model order_type_defaults {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String      @db.Uuid
+  order_type    OrderType
+  tax_enabled   Boolean     @default(true)
+  tax_rate      Decimal     @default(16) @db.Decimal(5, 2)
+  tax_type      TaxType     @default(INCLUSIVE)
+  svc_enabled   Boolean     @default(false)
+  svc_rate      Decimal     @default(6) @db.Decimal(5, 2)
+  delivery_fee  Decimal     @default(0) @db.Decimal(10, 2)
+  discount_max  Decimal     @default(0) @db.Decimal(5, 2)
+  created_at    DateTime    @default(now()) @db.Timestamp(6)
+  updated_at    DateTime    @default(now()) @db.Timestamp(6)
+  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@unique([restaurant_id, order_type])
+}
+
+model orders {
+  id                                     String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id                          String              @db.Uuid
+  total                                  Decimal             @default(0) @db.Decimal(10, 2)
+  items                                  Json?
+  table_id                               String?             @db.Uuid
+  guest_count                            Int?
+  customer_name                          String?
+  customer_phone                         String?
+  delivery_address                       String?
+  assigned_waiter_id                     String?             @db.Uuid
+  assigned_driver_id                     String?             @db.Uuid
+  created_at                             DateTime            @default(now())
+  updated_at                             DateTime            @default(now())
+  service_charge                         Decimal?            @default(0) @db.Decimal(10, 2)
+  delivery_fee                           Decimal?            @default(0) @db.Decimal(10, 2)
+  tax                                    Decimal?            @default(0) @db.Decimal(10, 2)
+  discount                               Decimal?            @default(0) @db.Decimal(10, 2)
+  breakdown                              Json?
+  cancelled_at                           DateTime?
+  cancelled_by                           String?
+  cancellation_reason                    String?
+  cancellation_notes                     String?
+  voided_at                              DateTime?
+  voided_by                              String?
+  void_reason                            String?
+  void_notes                             String?
+  refund_transaction_id                  String?
+  is_proforma_printed                    Boolean             @default(false)
+  payment_status                         PaymentStatus?      @default(UNPAID)
+  predicted_complete_time                DateTime?
+  bottleneck_detected                    Boolean             @default(false)
+  force_settled_at                       DateTime?
+  force_settled_by                       String?             @db.Uuid
+  status                                 OrderStatus?        @default(ACTIVE)
+  type                                   OrderType
+  rider_shift_id                         String?             @db.Uuid
+  closed_at                              DateTime?
+  completed_at                           DateTime?
+  customer_id                            String?             @db.Uuid
+  fbr_invoice_number                     String?
+  fbr_qr_code                            String?
+  fbr_response                           String?
+  fbr_sync_status                        String              @default("PENDING")
+  last_action_at                         DateTime?           @default(now())
+  last_action_by                         String?
+  last_action_desc                       String?
+  order_number                           String?             @unique @db.VarChar(20)
+  sync_status                            String              @default("PENDING")
+  session_id                             String?             @db.Uuid
+  tax_exempt                             Boolean             @default(false)
+  tax_type                               TaxType             @default(INCLUSIVE)
+  deleted_at                             DateTime?
+  deleted_by                             String?
+  deleted_reason                         String?
+  is_deleted                             Boolean             @default(false)
+  fbr_synced_at                          DateTime?
+  approval_logs                          approval_logs[]
+  customer_ledgers                       customer_ledgers[]
+  delivery_orders                        delivery_orders?
+  dine_in_orders                         dine_in_orders?
+  fire_batches                           fire_batches[]
+  order_intelligence                     order_intelligence?
+  order_items                            order_items[]
+  staff_orders_assigned_driver_idTostaff staff?              @relation("orders_assigned_driver_idTostaff", fields: [assigned_driver_id], references: [id])
+  staff_orders_assigned_waiter_idTostaff staff?              @relation("orders_assigned_waiter_idTostaff", fields: [assigned_waiter_id], references: [id])
+  customers                              customers?          @relation(fields: [customer_id], references: [id])
+  restaurants                            restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  rider_shifts                           rider_shifts?       @relation(fields: [rider_shift_id], references: [id])
+  cashier_sessions                       cashier_sessions?   @relation(fields: [session_id], references: [id])
+  tables                                 tables?             @relation(fields: [table_id], references: [id])
+  reservation_orders                     reservation_orders?
+  takeaway_orders                        takeaway_orders?
+  transactions                           transactions[]
+
+  @@index([assigned_driver_id])
+  @@index([assigned_waiter_id])
+  @@index([restaurant_id])
+  @@index([table_id])
+}
+
 model pairing_codes {
-  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id        String               @db.Uuid
-  pairing_code         String               @db.VarChar(10)
-  hashed_code          String               @db.VarChar(100)
-  created_at           DateTime             @default(now()) @db.Timestamp(6)
-  expires_at           DateTime             @default(dbgenerated("(now() + '00:15:00'::interval)")) @db.Timestamp(6)
-  is_used              Boolean              @default(false)
-  used_by              String?              @db.Uuid
-  verified_fingerprint String?
-  device_expiry_duration Int?               @default(0)
-  attempt_count        Int                  @default(0)
-  restaurants          restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  registered_devices   registered_devices[]
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id          String               @db.Uuid
+  pairing_code           String               @db.VarChar(10)
+  created_at             DateTime             @default(now()) @db.Timestamp(6)
+  expires_at             DateTime             @default(dbgenerated("(now() + '00:15:00'::interval)")) @db.Timestamp(6)
+  hashed_code            String               @db.VarChar(100)
+  is_used                Boolean              @default(false)
+  used_by                String?              @db.Uuid
+  verified_fingerprint   String?
+  attempt_count          Int                  @default(0)
+  device_expiry_duration Int?                 @default(0)
+  restaurants            restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  registered_devices     registered_devices[]
 
   @@unique([restaurant_id, pairing_code])
   @@index([expires_at])
   @@index([restaurant_id])
+}
+
+model parked_orders {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String      @db.Uuid
+  staff_id      String      @db.Uuid
+  data          Json
+  created_at    DateTime    @default(now())
+  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
+model payouts {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String             @db.Uuid
+  amount           Decimal            @db.Decimal(10, 2)
+  category         String             @db.VarChar(50)
+  reference_id     String?            @db.Uuid
+  notes            String?
+  processed_by     String             @db.Uuid
+  created_at       DateTime           @default(now()) @db.Timestamp(6)
+  restaurants      restaurants        @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  supplier_ledgers supplier_ledgers[]
+}
+
+model printers {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String      @db.Uuid
+  name          String      @db.VarChar(50)
+  ip_address    String      @db.VarChar(50)
+  port          Int         @default(9100)
+  station_id    String      @db.Uuid
+  is_active     Boolean     @default(true)
+  created_at    DateTime    @default(now()) @db.Timestamp(6)
+  updated_at    DateTime    @default(now()) @db.Timestamp(6)
+  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  stations      stations    @relation(fields: [station_id], references: [id])
+
+  @@unique([restaurant_id, ip_address])
+}
+
+model purchase_order_items {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  purchase_order_id String          @db.Uuid
+  inventory_item_id String          @db.Uuid
+  quantity_ordered  Decimal         @db.Decimal(10, 4)
+  quantity_received Decimal         @default(0) @db.Decimal(10, 4)
+  unit_price        Decimal         @db.Decimal(10, 4)
+  total_price       Decimal         @db.Decimal(10, 2)
+  inventory_items   inventory_items @relation(fields: [inventory_item_id], references: [id])
+  purchase_orders   purchase_orders @relation(fields: [purchase_order_id], references: [id], onDelete: Cascade)
+}
+
+model purchase_orders {
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id        String                 @db.Uuid
+  supplier_id          String                 @db.Uuid
+  po_number            String                 @db.VarChar(50)
+  status               String                 @default("DRAFT") @db.VarChar(20)
+  total_amount         Decimal                @default(0) @db.Decimal(10, 2)
+  expected_date        DateTime?
+  received_date        DateTime?
+  created_at           DateTime               @default(now())
+  updated_at           DateTime               @default(now())
+  purchase_order_items purchase_order_items[]
+  restaurants          restaurants            @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  suppliers            suppliers              @relation(fields: [supplier_id], references: [id])
+
+  @@unique([restaurant_id, po_number])
+}
+
+model recipe_items {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  menu_item_id      String          @db.Uuid
+  inventory_item_id String          @db.Uuid
+  quantity_required Decimal         @db.Decimal(10, 4)
+  created_at        DateTime        @default(now())
+  inventory_items   inventory_items @relation(fields: [inventory_item_id], references: [id], onDelete: Cascade)
+  menu_items        menu_items      @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+
+  @@unique([menu_item_id, inventory_item_id])
 }
 
 model registered_devices {
@@ -367,11 +633,11 @@ model registered_devices {
   platform           String?        @db.VarChar(50)
   auth_token_hash    String         @db.VarChar(100)
   is_active          Boolean        @default(true)
-  expires_at         DateTime?
   last_sync_at       DateTime?
   pairing_code_id    String?        @db.Uuid
   created_at         DateTime       @default(now()) @db.Timestamp(6)
   updated_at         DateTime       @db.Timestamp(6)
+  expires_at         DateTime?
   pairing_codes      pairing_codes? @relation(fields: [pairing_code_id], references: [id], onUpdate: NoAction)
   restaurants        restaurants    @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   staff              staff          @relation(fields: [staff_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -408,6 +674,13 @@ model reservations {
   restaurants      restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
+model restaurant_features {
+  restaurant_id String      @id @db.Uuid
+  features      Json
+  updated_at    DateTime    @default(now()) @db.Timestamp(6)
+  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
 model restaurants {
   id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                    String
@@ -427,35 +700,37 @@ model restaurants {
   tax_rate                Decimal                 @default(0) @db.Decimal(5, 2)
   service_charge_enabled  Boolean                 @default(false)
   service_charge_rate     Decimal                 @default(5) @db.Decimal(5, 2)
+  default_guest_count     Int                     @default(2)
   default_rider_float     Decimal                 @default(5000) @db.Decimal(10, 2)
   fbr_enabled             Boolean                 @default(false)
-  fbr_pos_id              String?
   fbr_ims_url             String?
   fbr_ntn                 String?
-  default_guest_count     Int                     @default(2)
+  fbr_pos_id              String?
   logo_url                String?
   subscription_expires_at DateTime?               @db.Timestamp(6)
   trial_ends_at           DateTime?               @db.Timestamp(6)
+  approval_logs           approval_logs[]
   audit_logs              audit_logs[]
   cashier_sessions        cashier_sessions[]
   cashier_shift_logs      cashier_shift_logs[]
-
   chart_of_accounts       chart_of_accounts[]
+  customer_ledgers        customer_ledgers[]
   customers               customers[]
   expenses                expenses[]
+  fbr_sync_logs           fbr_sync_logs[]
+  inventory_items         inventory_items[]
   journal_entries         journal_entries[]
   ledger_entries          ledger_entries[]
-  customer_ledger         customer_ledgers[]
-  supplier_ledger         supplier_ledgers[]
   license_keys            license_keys[]
   menu_categories         menu_categories[]
   menu_items              menu_items[]
+  order_type_defaults     order_type_defaults[]
   orders                  orders[]
   pairing_codes           pairing_codes[]
   parked_orders           parked_orders[]
   payouts                 payouts[]
   printers                printers[]
-  fbr_sync_logs           fbr_sync_logs[]
+  purchase_orders         purchase_orders[]
   registered_devices      registered_devices[]
   reservations            reservations[]
   restaurant_features     restaurant_features?
@@ -465,40 +740,14 @@ model restaurants {
   staff                   staff[]
   stations                stations[]
   subscription_payments   subscription_payments[]
+  supplier_ledgers        supplier_ledgers[]
+  suppliers               suppliers[]
   system_logs             system_logs[]
   tables                  tables[]
   transactions            transactions[]
   vendors                 vendors[]
-  inventory_items         inventory_items[]
-  suppliers               suppliers[]
-  purchase_orders         purchase_orders[]
-  order_type_defaults     order_type_defaults[]
 
   @@index([slug])
-}
-
-model system_logs {
-  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  timestamp     DateTime     @default(now())
-  level         String
-  service       String
-  restaurant_id String?      @db.Uuid
-  user_id       String?      @db.Uuid
-  action        String
-  duration_ms   Int?
-  metadata      Json?
-  error         Json?
-  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-
-  @@index([timestamp])
-  @@index([restaurant_id])
-}
-
-model restaurant_features {
-  restaurant_id String      @id @db.Uuid
-  features      Json
-  updated_at    DateTime    @default(now()) @db.Timestamp(6)
-  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
 model rider_settlements {
@@ -529,24 +778,24 @@ model rider_shifts {
   closed_at             DateTime?   @db.Timestamp(6)
   opening_float         Decimal     @default(0) @db.Decimal(10, 2)
   closing_cash_received Decimal?    @db.Decimal(10, 2)
-    cash_dropped          Decimal     @default(0) @db.Decimal(10, 2)
   expected_cash         Decimal?    @db.Decimal(10, 2)
   cash_difference       Decimal?    @db.Decimal(10, 2)
   status                String      @default("OPEN") @db.VarChar(20)
   notes                 String?
+  cash_dropped          Decimal     @default(0) @db.Decimal(10, 2)
   orders                orders[]
   restaurants           restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  rider                 staff       @relation("rider_shifts", fields: [rider_id], references: [id])
+  staff                 staff       @relation(fields: [rider_id], references: [id])
 }
 
 model sections {
   id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id String?      @db.Uuid
   name          String       @db.VarChar(50)
-  name_urdu     String?      @db.VarChar(50)
   prefix        String?      @default("T") @db.VarChar(10)
   priority      Int?         @default(0)
   type          String       @default("DINING") @db.VarChar(20)
+  name_urdu     String?      @db.VarChar(50)
   restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   tables        tables[]
 
@@ -567,39 +816,42 @@ model security_events {
 }
 
 model staff {
-  id                                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id                           String               @db.Uuid
-  name                                    String
-  role                                    String
-  pin                                     String
-  hashed_pin                              String?
-  image                                   String?
-  status                                  String?              @default("active")
-  active_tables                           Int?                 @default(0)
-  last_login                              DateTime?
-  created_at                              DateTime             @default(now())
-  total_deliveries                        Int?                 @default(0)
-  average_delivery_time_minutes           Int?
-  current_lat                             Decimal?             @db.Decimal(10, 8)
-  current_lng                             Decimal?             @db.Decimal(11, 8)
-  is_available                            Boolean?             @default(true)
-  audit_logs                              audit_logs[]
-  delivery_orders                         delivery_orders[]
-  dine_in_orders                          dine_in_orders[]
-  expenses                                expenses[]
-  installation_logs                       installation_logs[]
-  orders_orders_assigned_driver_idTostaff orders[]             @relation("orders_assigned_driver_idTostaff")
-  orders_orders_assigned_waiter_idTostaff orders[]             @relation("orders_assigned_waiter_idTostaff")
-  registered_devices                      registered_devices[]
-  rider_settlements                       rider_settlements[]
-  rider_shifts                            rider_shifts[]       @relation("rider_shifts")
-  opened_sessions                         cashier_sessions[]   @relation("opened_sessions")
-  closed_sessions                         cashier_sessions[]   @relation("closed_sessions")
-  processed_shift_logs                    cashier_shift_logs[] @relation("processed_shift_logs")
-
-  security_events                         security_events[]
-  restaurants                             restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  staff_wallet_logs                       staff_wallet_logs[]
+  id                                                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id                                           String               @db.Uuid
+  name                                                    String
+  role                                                    String
+  pin                                                     String
+  image                                                   String?
+  status                                                  String?              @default("active")
+  active_tables                                           Int?                 @default(0)
+  last_login                                              DateTime?
+  created_at                                              DateTime             @default(now())
+  total_deliveries                                        Int?                 @default(0)
+  hashed_pin                                              String?
+  average_delivery_time_minutes                           Int?
+  current_lat                                             Decimal?             @db.Decimal(10, 8)
+  current_lng                                             Decimal?             @db.Decimal(11, 8)
+  is_available                                            Boolean?             @default(true)
+  approval_logs_approval_logs_approved_by_user_idTostaff  approval_logs[]      @relation("approval_logs_approved_by_user_idTostaff")
+  approval_logs_approval_logs_requested_by_user_idTostaff approval_logs[]      @relation("approval_logs_requested_by_user_idTostaff")
+  audit_logs                                              audit_logs[]
+  cashier_sessions_cashier_sessions_closed_byTostaff      cashier_sessions[]   @relation("cashier_sessions_closed_byTostaff")
+  cashier_sessions_cashier_sessions_opened_byTostaff      cashier_sessions[]   @relation("cashier_sessions_opened_byTostaff")
+  cashier_shift_logs                                      cashier_shift_logs[]
+  delivery_orders                                         delivery_orders[]
+  dine_in_orders                                          dine_in_orders[]
+  expenses                                                expenses[]
+  fire_batches_fire_batches_created_by_user_idTostaff     fire_batches[]       @relation("fire_batches_created_by_user_idTostaff")
+  fire_batches_fire_batches_recalled_byTostaff            fire_batches[]       @relation("fire_batches_recalled_byTostaff")
+  installation_logs                                       installation_logs[]
+  orders_orders_assigned_driver_idTostaff                 orders[]             @relation("orders_assigned_driver_idTostaff")
+  orders_orders_assigned_waiter_idTostaff                 orders[]             @relation("orders_assigned_waiter_idTostaff")
+  registered_devices                                      registered_devices[]
+  rider_settlements                                       rider_settlements[]
+  rider_shifts                                            rider_shifts[]
+  security_events                                         security_events[]
+  restaurants                                             restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  staff_wallet_logs                                       staff_wallet_logs[]
 
   @@unique([restaurant_id, name, role])
   @@index([pin])
@@ -631,6 +883,76 @@ model stations {
   restaurants   restaurants   @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
   @@unique([restaurant_id, name])
+}
+
+model subscription_payments {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id     String      @db.Uuid
+  amount            Decimal     @db.Decimal(10, 2)
+  payment_method    String?     @db.VarChar(50)
+  transaction_id    String      @unique @db.VarChar(100)
+  payment_proof     String?
+  payment_proof_url String?     @db.VarChar(500)
+  status            String      @default("pending") @db.VarChar(20)
+  created_at        DateTime?   @default(now()) @db.Timestamp(6)
+  updated_at        DateTime?   @default(now()) @db.Timestamp(6)
+  verified_at       DateTime?   @db.Timestamp(6)
+  verified_by       String?     @db.VarChar(100)
+  restaurants       restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
+model supplier_ledgers {
+  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id String                  @db.Uuid
+  supplier_id   String                  @db.Uuid
+  payout_id     String?                 @db.Uuid
+  entry_type    SupplierLedgerEntryType
+  amount        Decimal                 @db.Decimal(10, 2)
+  balance_after Decimal                 @db.Decimal(10, 2)
+  description   String?
+  processed_by  String?
+  created_at    DateTime                @default(now()) @db.Timestamp(6)
+  entry_status  String                  @default("provisional")
+  reviewed_at   DateTime?
+  reviewed_by   String?
+  payouts       payouts?                @relation(fields: [payout_id], references: [id])
+  restaurants   restaurants             @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  suppliers     suppliers               @relation(fields: [supplier_id], references: [id], onDelete: Cascade)
+
+  @@index([restaurant_id])
+  @@index([supplier_id])
+}
+
+model suppliers {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id    String             @db.Uuid
+  name             String             @db.VarChar(100)
+  contact_name     String?            @db.VarChar(100)
+  phone            String?            @db.VarChar(20)
+  email            String?            @db.VarChar(100)
+  address          String?
+  rating           Int?               @default(5)
+  created_at       DateTime           @default(now())
+  purchase_orders  purchase_orders[]
+  supplier_ledgers supplier_ledgers[]
+  restaurants      restaurants        @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+}
+
+model system_logs {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  timestamp     DateTime     @default(now())
+  level         String
+  service       String
+  restaurant_id String?      @db.Uuid
+  user_id       String?      @db.Uuid
+  action        String
+  duration_ms   Int?
+  metadata      Json?
+  error         Json?
+  restaurants   restaurants? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([restaurant_id])
+  @@index([timestamp])
 }
 
 model tables {
@@ -700,153 +1022,51 @@ model vendors {
   restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
-model ledger_entries {
-  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id    String      @db.Uuid
-  account_id       String?     @db.Uuid
-  transaction_type String      @db.VarChar(10)
-  amount           Decimal     @db.Decimal(10, 2)
-  reference_type   String      @db.VarChar(50)
-  reference_id     String?
-  description      String?
-  processed_by     String?
-  created_at       DateTime    @default(now()) @db.Timestamp(6)
-  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
 }
 
-model payouts {
-  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id   String            @db.Uuid
-  amount          Decimal           @db.Decimal(10, 2)
-  category        String            @db.VarChar(50)
-  reference_id    String?           @db.Uuid
-  notes           String?
-  processed_by    String            @db.Uuid
-  created_at      DateTime          @default(now()) @db.Timestamp(6)
-  restaurants     restaurants       @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  supplier_ledger supplier_ledgers[]
+enum CustomerLedgerEntryType {
+  CHARGE
+  PAYMENT
+  TOP_UP
+  REFUND
+  ADJUSTMENT
 }
 
-model cashier_sessions {
-  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id    String      @db.Uuid
-  opened_by        String      @db.Uuid
-  closed_by        String?     @db.Uuid
-  opened_at        DateTime    @default(now()) @db.Timestamp(6)
-  closed_at        DateTime?   @db.Timestamp(6)
-  opening_float    Decimal     @default(0) @db.Decimal(10, 2)
-  expected_cash    Decimal?    @db.Decimal(10, 2)
-  actual_cash      Decimal?    @db.Decimal(10, 2)
-  difference       Decimal?    @db.Decimal(10, 2)
-  status           String      @default("OPEN") @db.VarChar(20)
-  notes            String?
-  
-  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  opened_by_staff  staff       @relation("opened_sessions", fields: [opened_by], references: [id])
-  closed_by_staff  staff?      @relation("closed_sessions", fields: [closed_by], references: [id])
-  
-  // Link orders to the session they were created in
-  orders           orders[]
-  shift_logs       cashier_shift_logs[]
-}
-
-model cashier_shift_logs {
-  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id    String           @db.Uuid
-  session_id       String           @db.Uuid
-  type             String           @db.VarChar(20)
-  amount           Decimal          @db.Decimal(10, 2)
-  description      String
-  category         String?          @db.VarChar(50)
-  reference_id     String?          @db.VarChar(100)
-  status           String           @default("PENDING") @db.VarChar(20)
-  processed_by     String?          @db.Uuid
-  created_at       DateTime         @default(now()) @db.Timestamp(6)
-
-  restaurants      restaurants      @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  session          cashier_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade)
-  processor        staff?           @relation("processed_shift_logs", fields: [processed_by], references: [id])
-}
-
-model printers {
-  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String      @db.Uuid
-  name          String      @db.VarChar(50)
-  ip_address    String      @db.VarChar(50)
-  port          Int         @default(9100)
-  station_id    String      @db.Uuid
-  is_active     Boolean     @default(true)
-  created_at    DateTime    @default(now()) @db.Timestamp(6)
-  updated_at    DateTime    @default(now()) @db.Timestamp(6)
-  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  stations      stations    @relation(fields: [station_id], references: [id])
-
-  @@unique([restaurant_id, ip_address])
-}
-
-model chart_of_accounts {
-  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id       String                @db.Uuid
-  code                String                @db.VarChar(20)
-  name                String                @db.VarChar(100)
-  type                AccountType
-  description         String?
-  parent_id           String?               @db.Uuid
-  is_active           Boolean               @default(true)
-  is_system           Boolean               @default(false)
-  created_at          DateTime              @default(now()) @db.Timestamp(6)
-  updated_at          DateTime              @default(now()) @db.Timestamp(6)
-  parent              chart_of_accounts?    @relation("SubAccounts", fields: [parent_id], references: [id])
-  children            chart_of_accounts[]   @relation("SubAccounts")
-  restaurants         restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  journal_entry_lines journal_entry_lines[]
-
-  @@unique([restaurant_id, code])
-}
-
-model journal_entries {
-  id             String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id  String                @db.Uuid
-  reference_type String                @db.VarChar(50)
-  reference_id   String?
-  date           DateTime              @db.Timestamp(6)
-  description    String?
-  processed_by   String?
-  created_at     DateTime              @default(now()) @db.Timestamp(6)
-  restaurants    restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  lines          journal_entry_lines[]
-}
-
-model journal_entry_lines {
-  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  journal_entry_id  String            @db.Uuid
-  account_id        String            @db.Uuid
-  description       String?
-  debit             Decimal           @default(0) @db.Decimal(15, 4)
-  credit            Decimal           @default(0) @db.Decimal(15, 4)
-  reference_type    String            @db.VarChar(50)
-  reference_id      String            @db.VarChar(100)
-  meta              Json?
-  chart_of_accounts chart_of_accounts @relation(fields: [account_id], references: [id])
-  journal_entries   journal_entries   @relation(fields: [journal_entry_id], references: [id], onDelete: Cascade)
+enum ExpenseCategory {
+  UTILITIES
+  SALARY
+  MAINTENANCE
+  SUPPLIES
+  MARKETING
+  RENT
+  TRANSPORT
+  MISCELLANEOUS
 }
 
 enum ItemStatus {
-  DRAFT
   PENDING
   PREPARING
   DONE
   SERVED
   SKIPPED
+  DRAFT
 }
 
 enum OrderStatus {
   ACTIVE
   READY
-  DELIVERED
   CLOSED
   CANCELLED
   VOIDED
+  DELIVERED
+  SERVED
+  BILL_REQUESTED
 }
 
 enum OrderType {
@@ -863,114 +1083,11 @@ enum PaymentStatus {
   REFUNDED
 }
 
-enum TableStatus {
-  AVAILABLE
-  OCCUPIED
-  DIRTY
-  CLEANING
-  RESERVED
-  OUT_OF_SERVICE
-}
-
-enum AccountType {
-  ASSET
-  LIABILITY
-  EQUITY
-  REVENUE
-  EXPENSE
-}
-
-model fbr_sync_logs {
-  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id    String      @db.Uuid
-  order_id         String?     @db.Uuid
-  request_payload  Json
-  response_payload Json?
-  status           String
-  error_message    String?
-  created_at       DateTime    @default(now())
-  restaurants      restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-}
-
-model inventory_items {
-  id              String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id   String                 @db.Uuid
-  name            String                 @db.VarChar(100)
-  unit_of_measure String                 @db.VarChar(20)
-  current_stock   Decimal                @default(0) @db.Decimal(10, 4)
-  minimum_stock   Decimal                @default(0) @db.Decimal(10, 4)
-  unit_cost       Decimal                @default(0) @db.Decimal(10, 4)
-  category        String?                @db.VarChar(50)
-  created_at      DateTime               @default(now())
-  updated_at      DateTime               @default(now())
-  restaurants     restaurants            @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  recipe_items    recipe_items[]
-  po_items        purchase_order_items[]
-}
-
-model recipe_items {
-  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  menu_item_id      String          @db.Uuid
-  inventory_item_id String          @db.Uuid
-  quantity_required Decimal         @db.Decimal(10, 4)
-  created_at        DateTime        @default(now())
-  menu_items        menu_items      @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
-  inventory_items   inventory_items @relation(fields: [inventory_item_id], references: [id], onDelete: Cascade)
-
-  @@unique([menu_item_id, inventory_item_id])
-}
-
-model suppliers {
-  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id   String            @db.Uuid
-  name            String            @db.VarChar(100)
-  contact_name    String?           @db.VarChar(100)
-  phone           String?           @db.VarChar(20)
-  email           String?           @db.VarChar(100)
-  address         String?
-  rating          Int?              @default(5)
-  created_at      DateTime          @default(now())
-  restaurants     restaurants       @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  purchase_orders purchase_orders[]
-  supplier_ledger supplier_ledgers[]
-}
-
-model purchase_orders {
-  id            String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String                 @db.Uuid
-  supplier_id   String                 @db.Uuid
-  po_number     String                 @db.VarChar(50)
-  status        String                 @default("DRAFT") @db.VarChar(20)
-  total_amount  Decimal                @default(0) @db.Decimal(10, 2)
-  expected_date DateTime?
-  received_date DateTime?
-  created_at    DateTime               @default(now())
-  updated_at    DateTime               @default(now())
-  restaurants   restaurants            @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  suppliers     suppliers              @relation(fields: [supplier_id], references: [id])
-  po_items      purchase_order_items[]
-
-  @@unique([restaurant_id, po_number])
-}
-
-model purchase_order_items {
-  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  purchase_order_id String          @db.Uuid
-  inventory_item_id String          @db.Uuid
-  quantity_ordered  Decimal         @db.Decimal(10, 4)
-  quantity_received Decimal         @default(0) @db.Decimal(10, 4)
-  unit_price        Decimal         @db.Decimal(10, 4)
-  total_price       Decimal         @db.Decimal(10, 2)
-  purchase_orders   purchase_orders @relation(fields: [purchase_order_id], references: [id], onDelete: Cascade)
-  inventory_items   inventory_items @relation(fields: [inventory_item_id], references: [id])
-}
-
-enum CustomerLedgerEntryType {
-  CHARGE
-  PAYMENT
-  TOP_UP
-  REFUND
-  ADJUSTMENT
+enum SkipReason {
+  CUSTOMER_CANCELLED
+  WRONG_ITEM
+  OUT_OF_STOCK
+  COMP
 }
 
 enum SupplierLedgerEntryType {
@@ -980,72 +1097,16 @@ enum SupplierLedgerEntryType {
   REFUND
 }
 
-model customer_ledgers {
-  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String                  @db.Uuid
-  customer_id   String                  @db.Uuid
-  order_id      String?                 @db.Uuid
-  entry_type    CustomerLedgerEntryType
-  amount        Decimal                 @db.Decimal(10, 2)
-  balance_after Decimal                 @db.Decimal(10, 2)
-  description   String?
-  processed_by  String?
-  created_at    DateTime                @default(now()) @db.Timestamp(6)
-  entry_status  String                  @default("provisional") // provisional | approved | adjusted
-  reviewed_by   String?
-  reviewed_at   DateTime?
-
-  customer   customers   @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  restaurant restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  order      orders?     @relation(fields: [order_id], references: [id], onDelete: SetNull)
-
-  @@index([customer_id])
-  @@index([restaurant_id])
-}
-
-model supplier_ledgers {
-  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String                  @db.Uuid
-  supplier_id   String                  @db.Uuid
-  payout_id     String?                 @db.Uuid
-  entry_type    SupplierLedgerEntryType
-  amount        Decimal                 @db.Decimal(10, 2)
-  balance_after Decimal                 @db.Decimal(10, 2)
-  description   String?
-  processed_by  String?
-  created_at    DateTime                @default(now()) @db.Timestamp(6)
-  entry_status  String                  @default("provisional") // provisional | approved | adjusted
-  reviewed_by   String?
-  reviewed_at   DateTime?
-
-  supplier    suppliers    @relation(fields: [supplier_id], references: [id], onDelete: Cascade)
-  restaurant  restaurants  @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  payout      payouts?     @relation(fields: [payout_id], references: [id], onDelete: SetNull)
-
-  @@index([supplier_id])
-  @@index([restaurant_id])
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  DIRTY
+  CLEANING
+  RESERVED
+  OUT_OF_SERVICE
 }
 
 enum TaxType {
   INCLUSIVE
   EXCLUSIVE
-}
-
-model order_type_defaults {
-  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String      @db.Uuid
-  order_type    OrderType
-  tax_enabled   Boolean     @default(true)
-  tax_rate      Decimal     @default(16) @db.Decimal(5, 2)
-  tax_type      TaxType     @default(INCLUSIVE)
-  svc_enabled   Boolean     @default(false)
-  svc_rate      Decimal     @default(6) @db.Decimal(5, 2)
-  delivery_fee  Decimal     @default(0) @db.Decimal(10, 2)
-  discount_max  Decimal     @default(0) @db.Decimal(5, 2)
-  created_at    DateTime    @default(now()) @db.Timestamp(6)
-  updated_at    DateTime    @default(now()) @db.Timestamp(6)
-
-  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-
-  @@unique([restaurant_id, order_type])
 }

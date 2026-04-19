@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
     Users, 
     Search, 
@@ -22,7 +22,11 @@ export const SupplierLedgerPanel: React.FC = () => {
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [form, setForm] = useState({ amount: '', description: '', paymentMethod: 'CASH', referenceId: '' });
 
+    const hasFetched = useRef(false);
+
     useEffect(() => {
+        if (hasFetched.current) return;
+        hasFetched.current = true;
         fetchSuppliers();
     }, []);
 

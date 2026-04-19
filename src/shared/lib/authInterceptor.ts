@@ -98,6 +98,18 @@ export async function fetchWithAuth(
   if (targetRestaurantId) {
     headers['x-target-restaurant'] = targetRestaurantId;
   }
+
+  // Cashier Session Audit Headers
+  const sessionId = localStorage.getItem('x-session-id');
+  const terminalId = localStorage.getItem('x-terminal-id') || sessionStorage.getItem('x-terminal-id');
+  
+  if (sessionId) {
+    headers['x-session-id'] = sessionId;
+  }
+  if (terminalId) {
+    headers['x-terminal-id'] = terminalId;
+  }
+
   let response = await fetch(url, { ...options, headers });
 
   // If we get 401, try to refresh token and retry once

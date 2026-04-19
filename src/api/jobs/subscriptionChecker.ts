@@ -18,18 +18,35 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY || ''
 );
 
+// Guard to prevent duplicate execution (handles ESM module loading edge cases)
+let isSubscriptionCheckerRunning = false;
+
 /**
  * Starts the subscription checker job
  * Runs immediately and then every 24 hours
  * Silently returns if Supabase credentials not configured
  */
 export function startSubscriptionChecker(): void {
+  // Prevent duplicate execution
+  if (isSubscriptionCheckerRunning) {
+    console.warn(
+      '[SUBSCRIPTION CHECKER] ⚠️ Already running, skipping duplicate initialization.'
+    );
+    // Log the call stack to understand where the duplicate is coming from
+    const stack = new Error().stack?.split('\n').slice(0, 5).join('\n');
+    console.warn('[SUBSCRIPTION CHECKER] Call stack:', stack);
+    return;
+  }
+
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
     console.warn(
       '[SUBSCRIPTION CHECKER] ⚠️ Supabase credentials not configured. Job not started.'
     );
     return;
   }
+
+  isSubscriptionCheckerRunning = true;
+  console.log('[SUBSCRIPTION CHECKER] ℹ️ Initializing subscription checker...');
 
   async function runCheck(): Promise<void> {
     try {

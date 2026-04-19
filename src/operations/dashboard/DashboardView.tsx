@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useAppContext } from '../../client/contexts/AppContext';
 import { useRestaurant } from '../../client/RestaurantContext';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
@@ -32,7 +32,9 @@ export const DashboardView: React.FC = () => {
   const [velocity, setVelocity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchAnalytics = async () => {
+  // Stable fetch function — deps pinned to primitive IDs, not the full user/restaurant object.
+  // Using useCallback so the interval always calls the latest version without recreating it.
+  const fetchAnalytics = useCallback(async () => {
     if (!currentUser?.restaurant_id) return;
 
     // Guard: Only allow Managers/Admins/SuperAdmins to fetch detailed analytics
@@ -40,7 +42,7 @@ export const DashboardView: React.FC = () => {
 
     try {
       // Summary analytics might be okay for everyone if we want, but following existing RBAC
-      const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/analytics/summary?restaurant_id=${currentUser.restaurant_id}`);
+      const res = await fetchWithAuth('/api/analytics/summary');
       if (!res.ok) {
         console.error("Analytics API error:", res.status);
         return;
@@ -50,19 +52,25 @@ export const DashboardView: React.FC = () => {
         setStats((prev: any) => ({ ...prev, ...data }));
       }
 
-      // Fetch Finance Analytics
-      const todayStr = new Date().toISOString().split('T')[0];
-      const resFinance = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/analytics/finance/summary?restaurant_id=${currentUser.restaurant_id}&startDate=${todayStr}&endDate=${todayStr}`);
-      if (resFinance.ok) {
-          const financeData = await resFinance.json();
-          setStats((prev: any) => ({ ...prev, finance: financeData }));
+      // Fetch Finance Analytics (Restricted to Management)
+      if (hasAdminRights) {
+        try {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const resFinance = await fetchWithAuth(`/api/analytics/finance/summary?startDate=${todayStr}&endDate=${todayStr}`);
+          if (resFinance.ok) {
+              const financeData = await resFinance.json();
+              setStats((prev: any) => ({ ...prev, finance: financeData }));
+          }
+        } catch (e) {
+          console.warn("Finance analytics not available for current role");
+        }
       }
 
       // Detailed reports definitely need rights
       if (hasAdminRights) {
         const todayStr = new Date().toISOString().split('T')[0];
-        const resMix = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/product-mix?format=json&start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
-        const resVel = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/velocity?format=json&start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
+        const resMix = await fetchWithAuth(`/api/reports/product-mix?format=json&start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
+        const resVel = await fetchWithAuth(`/api/reports/velocity?format=json&start=${todayStr}T00:00:00Z&end=${todayStr}T23:59:59Z`);
 
         if (resMix.ok) {
           const pmixData = await resMix.json();
@@ -79,13 +87,44 @@ export const DashboardView: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  // Depend on stable primitives only — prevents re-creating the fn on every context render
+  }, [currentUser?.restaurant_id, currentUser?.role]);
+
+  // Ref to track the active interval so we can safely clear it in all code paths.
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    // Guard: no-op until the user is fully loaded
+    if (!currentUser?.restaurant_id) return;
+
+    // Immediate fetch on mount (or when the authenticated user changes)
     fetchAnalytics();
-    const interval = setInterval(fetchAnalytics, 15000); // Faster refresh for command center
-    return () => clearInterval(interval);
-  }, [currentUser]);
+
+    // Defensive clear: ensure no stale interval survives before starting a new one
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current);
+    }
+
+    // 45 s is appropriate for analytics dashboards (spec: 30–60 s).
+    // Pause polling when the tab is hidden to avoid unnecessary backend load.
+    intervalRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchAnalytics();
+      }
+    }, 45000);
+
+    // Cleanup: ALWAYS return a cleanup so React can clear the interval on
+    // unmount OR when restaurant_id/role changes — no early-return that skips this.
+    return () => {
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  // Use stable primitives, NOT the whole `currentUser` object.
+  // Object references change on every context render even when data is identical,
+  // which would create a new interval on every re-render.
+  }, [currentUser?.restaurant_id, fetchAnalytics]);
 
   const StatCard = ({ title, value, icon, subValue, color, trend }: any) => (
     <Card className="p-5 border-slate-800 bg-[#0f172a]/40 backdrop-blur-xl relative overflow-hidden group">

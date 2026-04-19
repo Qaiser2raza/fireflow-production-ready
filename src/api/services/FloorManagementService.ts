@@ -155,7 +155,7 @@ export async function seatPartyWithCapacityCheck(
     });
 
     if (io) {
-        io.to(`restaurant:${restaurantId}`).emit('party:seated', {
+        io.emit('party:seated', {
             orderId: result.order.id,
             tableId: result.table.id,
             tableName: result.table.name,
@@ -270,7 +270,7 @@ export async function updateGuestCount(
     });
 
     if (io) {
-        io.to(`restaurant:${order.restaurant_id}`).emit('order:guest-count-updated', {
+        io.emit('order:guest-count-updated', {
             orderId,
             tableId: order.table_id,
             oldGuestCount: order.guest_count,
@@ -299,7 +299,7 @@ export async function createSection(restaurantId: string, data: any, io?: Server
     const section = await prisma.sections.create({ 
         data: { ...data, restaurant_id: restaurantId } 
     }) as unknown as Section;
-    if (io) io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'sections', eventType: 'INSERT', data: section });
+    if (io) io.emit('db_change', { table: 'sections', eventType: 'INSERT', data: section });
     return section;
 }
 
@@ -308,13 +308,13 @@ export async function updateSection(id: string, restaurantId: string, data: any,
         where: { id, restaurant_id: restaurantId },
         data
     }) as unknown as Section;
-    if (io) io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'sections', eventType: 'UPDATE', data: section });
+    if (io) io.emit('db_change', { table: 'sections', eventType: 'UPDATE', data: section });
     return section;
 }
 
 export async function deleteSection(id: string, restaurantId: string, io?: Server) {
     await prisma.sections.delete({ where: { id, restaurant_id: restaurantId } });
-    if (io) io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'sections', eventType: 'DELETE', id });
+    if (io) io.emit('db_change', { table: 'sections', eventType: 'DELETE', id });
     return { success: true };
 }
 
@@ -326,7 +326,7 @@ export async function reorderSections(restaurantId: string, reorderedIds: string
         })
     );
     await prisma.$transaction(updates);
-    if (io) io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'sections', eventType: 'UPDATE', data: { reordered: true } });
+    if (io) io.emit('db_change', { table: 'sections', eventType: 'UPDATE', data: { reordered: true } });
     return { success: true };
 }
 
@@ -336,7 +336,7 @@ export async function createTable(restaurantId: string, data: any, io?: Server):
     const table = await prisma.tables.create({ 
         data: { ...data, restaurant_id: restaurantId } 
     }) as unknown as Table;
-    if (io) io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'tables', eventType: 'INSERT', data: table });
+    if (io) io.emit('db_change', { table: 'tables', eventType: 'INSERT', data: table });
     return table;
 }
 
@@ -345,13 +345,13 @@ export async function updateTable(id: string, restaurantId: string, data: any, i
         where: { id, restaurant_id: restaurantId },
         data
     }) as unknown as Table;
-    if (io) io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', data: table });
+    if (io) io.emit('db_change', { table: 'tables', eventType: 'UPDATE', data: table });
     return table;
 }
 
 export async function deleteTable(id: string, restaurantId: string, io?: Server) {
     await prisma.tables.delete({ where: { id, restaurant_id: restaurantId } });
-    if (io) io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'tables', eventType: 'DELETE', id });
+    if (io) io.emit('db_change', { table: 'tables', eventType: 'DELETE', id });
     return { success: true };
 }
 
@@ -380,7 +380,7 @@ export async function releaseTable(id: string, restaurantId: string, io?: Server
     });
 
     if (io) {
-        io.to(`restaurant:${restaurantId}`).emit('db_change', {
+        io.emit('db_change', {
             table: 'tables',
             eventType: 'UPDATE',
             data: table

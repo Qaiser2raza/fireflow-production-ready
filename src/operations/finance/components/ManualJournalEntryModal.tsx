@@ -7,6 +7,8 @@ interface Account {
     code: string;
     name: string;
     type: string;
+    parent_id?: string | null;
+    depth?: number;
 }
 
 interface JournalLine {
@@ -58,14 +60,21 @@ export const ManualJournalEntryModal: React.FC<ManualJournalEntryModalProps> = (
         try {
             const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/accounting/coa`);
             const data = await res.json();
-            if (data.success) {
-                const flatAccounts: Account[] = [];
-                const addNode = (node: any) => {
-                    flatAccounts.push(node);
-                    if (node.children) node.children.forEach(addNode);
-                };
-                data.accounts.forEach(addNode);
-                setAccounts(flatAccounts.filter(a => a.type));
+            if (data.success && Array.isArray(data.accounts)) {
+                // Calculate depth for visual hierarchy
+                const accs = [...data.accounts];
+                const enriched = accs.map(acc => {
+                    let depth = 0;
+                    let current = acc;
+                    while (current.parent_id) {
+                        depth++;
+                        const parent = accs.find(a => a.id === current.parent_id);
+                        if (!parent || depth > 10) break; // Safety
+                        current = parent;
+                    }
+                    return { ...acc, depth };
+                });
+                setAccounts(enriched);
             }
         } catch (e) {
             console.error('Failed to load accounts for journal entry', e);
@@ -210,7 +219,10 @@ export const ManualJournalEntryModal: React.FC<ManualJournalEntryModalProps> = (
                                         >
                                             <option value="">Select Account...</option>
                                             {accounts.map(a => (
-                                                <option key={a.id} value={a.id}>{a.code} – {a.name}</option>
+                                                <option key={a.id} value={a.id}>
+                                                    {'\u00A0'.repeat((a.depth || 0) * 4)}
+                                                    {a.code} – {a.name}
+                                                </option>
                                             ))}
                                         </select>
                                     </div>

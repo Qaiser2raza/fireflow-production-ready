@@ -43,7 +43,7 @@ export class AccountingService {
      * Records a sale in the ledger (Double-Entry).
      * Impacts: Credit Revenue, Debit Asset (Cash Drawer or Rider).
      */
-    async recordOrderSale(orderId: string, tx?: any) {
+    async recordOrderSale(orderId: string, tx?: any, paymentOverride?: { amount: number, paymentMethod: string }) {
         const db = tx || prisma;
 
         // 0. Check if revenue already recorded for this order (Idempotency)
@@ -126,18 +126,29 @@ export class AccountingService {
                         processedBy: order.last_action_by
                     }, db);
                 } else if (order.type === 'DELIVERY' && order.assigned_driver_id && method !== 'CREDIT') {
-                    // For deliveries paid via Cash/Card at door, the rider is responsible for the payout
-                    // until they settle their shift.
-                    await this.createLedgerEntry({
-                        restaurantId: order.restaurant_id,
-                        accountId: order.assigned_driver_id,
-                        transactionType: 'DEBIT',
-                        amount: amount,
-                        referenceType: 'ORDER',
-                        referenceId: order.id,
-                        description: `${method} payment collected by rider for delivery #${order.order_number}`,
-                        processedBy: order.last_action_by
-                    }, db);
+                    // For deliveries paid via Cash/Card at door, the rider is responsible for the payout.
+                    // Idempotency Guard: A provisional DEBIT may already exist from dispatch.
+                    // If so, skip — the rider's ledger is already correctly debited.
+                    const existingRiderDebit = await db.ledger_entries.findFirst({
+                        where: {
+                            reference_id: order.id,
+                            reference_type: 'ORDER',
+                            account_id: order.assigned_driver_id,
+                            transaction_type: 'DEBIT'
+                        }
+                    });
+                    if (!existingRiderDebit) {
+                        await this.createLedgerEntry({
+                            restaurantId: order.restaurant_id,
+                            accountId: order.assigned_driver_id,
+                            transactionType: 'DEBIT',
+                            amount: amount,
+                            referenceType: 'ORDER',
+                            referenceId: order.id,
+                            description: `${method} payment collected by rider for delivery #${order.order_number}`,
+                            processedBy: order.last_action_by
+                        }, db);
+                    }
                 } else {
                     // Standard Sale (Direct Cash/Card to business Asset account)
                     await this.createLedgerEntry({
@@ -152,17 +163,28 @@ export class AccountingService {
                 }
             }
         } else if (order.type === 'DELIVERY' && order.assigned_driver_id) {
-            // Unpaid Delivery: Debit the Rider (Full amount)
-            await this.createLedgerEntry({
-                restaurantId: order.restaurant_id,
-                accountId: order.assigned_driver_id,
-                transactionType: 'DEBIT',
-                amount: totalAmount,
-                referenceType: 'ORDER',
-                referenceId: order.id,
-                description: `Unpaid delivery debt assigned to rider #${order.order_number}`,
-                processedBy: order.last_action_by
-            }, db);
+            // Unpaid Delivery: Debit the Rider (Full amount).
+            // Idempotency Guard: A provisional DEBIT may already exist from dispatch.
+            const existingRiderDebit = await db.ledger_entries.findFirst({
+                where: {
+                    reference_id: order.id,
+                    reference_type: 'ORDER',
+                    account_id: order.assigned_driver_id,
+                    transaction_type: 'DEBIT'
+                }
+            });
+            if (!existingRiderDebit) {
+                await this.createLedgerEntry({
+                    restaurantId: order.restaurant_id,
+                    accountId: order.assigned_driver_id,
+                    transactionType: 'DEBIT',
+                    amount: totalAmount,
+                    referenceType: 'ORDER',
+                    referenceId: order.id,
+                    description: `Unpaid delivery debt assigned to rider #${order.order_number}`,
+                    processedBy: order.last_action_by
+                }, db);
+            }
         } else {
             // Default Fallback: Debit Cash Drawer (Full amount)
             await this.createLedgerEntry({
@@ -177,7 +199,48 @@ export class AccountingService {
         }
 
         // ── Double-Entry: Post to Chart of Accounts journal ──────────────
-        await journalEntryService.recordOrderSaleJournal(orderId, db);
+        await journalEntryService.recordOrderSaleJournal(orderId, db, paymentOverride);
+    }
+
+    /**
+     * Records a provisional rider liability at dispatch.
+     * Called atomically inside assign-driver transaction.
+     * Creates: DEBIT [Rider Account] — representing cash value the rider now holds responsibility for.
+     * This is a provisional entry. When the order is DELIVERED, recordOrderSale will
+     * detect this entry and skip creating a duplicate debit.
+     */
+    async recordProvisionRiderDebt(data: {
+        restaurantId: string;
+        riderId: string;
+        orderId: string;
+        amount: number | Decimal;
+        orderNumber: string;
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const amount = new Decimal(data.amount.toString());
+
+        // Idempotency: do not create if one already exists for this order+rider
+        const existing = await db.ledger_entries.findFirst({
+            where: {
+                reference_id: data.orderId,
+                reference_type: 'ORDER',
+                account_id: data.riderId,
+                transaction_type: 'DEBIT'
+            }
+        });
+        if (existing) return existing;
+
+        return await this.createLedgerEntry({
+            restaurantId: data.restaurantId,
+            accountId: data.riderId,
+            transactionType: 'DEBIT',
+            amount: amount,
+            referenceType: 'ORDER',
+            referenceId: data.orderId,
+            description: `[PROVISIONAL] Rider liability at dispatch — Order #${data.orderNumber}`,
+            processedBy: data.processedBy
+        }, db);
     }
 
     /**
@@ -191,9 +254,11 @@ export class AccountingService {
         orderIds: string[];
         processedBy: string;
         settlementId?: string;
+        sessionId?: string;
     }, tx?: any) {
         const db = tx || prisma;
         const amount = new Decimal(data.amountReceived.toString());
+        const sessionNote = data.sessionId ? ` [Session: ${data.sessionId.slice(-6)}]` : '';
 
         // 1. DEBIT: Cash Drawer (Increase Physical Cash)
         await this.createLedgerEntry({
@@ -202,7 +267,7 @@ export class AccountingService {
             amount: amount,
             referenceType: 'SETTLEMENT',
             referenceId: data.settlementId,
-            description: `Cash received from rider for ${data.orderIds.length} orders`,
+            description: `Cash received from rider for ${data.orderIds.length} orders${sessionNote}`,
             processedBy: data.processedBy
         }, db);
 
@@ -214,11 +279,12 @@ export class AccountingService {
             amount: amount,
             referenceType: 'SETTLEMENT',
             referenceId: data.settlementId,
-            description: `Rider debt reduced for ${data.orderIds.length} orders`,
+            description: `Rider debt reduced for ${data.orderIds.length} orders${sessionNote}`,
             processedBy: data.processedBy
         }, db);
 
         // ── Double-Entry Journal ─────────────────────────────────────────
+        // Note: sessionId is captured in ledger_entries description — no separate journal field needed.
         await journalEntryService.recordRiderSettlementJournal({
             restaurantId: data.restaurantId,
             riderId: data.riderId,
@@ -895,8 +961,8 @@ export class AccountingService {
                 opened_at: { gte: startOfDay, lte: endOfDay }
             },
             include: {
-                opened_by_staff: { select: { name: true } },
-                closed_by_staff: { select: { name: true } }
+                staff_cashier_sessions_opened_byTostaff: { select: { name: true } },
+                staff_cashier_sessions_closed_byTostaff: { select: { name: true } }
             },
             orderBy: { opened_at: 'asc' }
         });
@@ -1373,7 +1439,7 @@ export class AccountingService {
             if (type === 'CUSTOMER') {
                 const entry = await tx.customer_ledgers.findUnique({
                     where: { id: entryId },
-                    include: { customer: true }
+                    include: { customers: true }
                 });
 
                 if (!entry || entry.entry_status !== 'provisional') {

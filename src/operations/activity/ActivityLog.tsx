@@ -24,7 +24,7 @@ export const ActivityLog: React.FC = () => {
    const [showPrintModal, setShowPrintModal] = useState(false);
 
    // Grouped Statuses for Filter Logic (v3.0)
-   const activeStatuses = ['ACTIVE', 'READY'];
+   const activeStatuses = ['ACTIVE', 'PENDING', 'PREPARING', 'READY', 'SERVED', 'BILL_REQUESTED'];
    const completedStatuses = ['CLOSED', 'DELIVERED'];   // DELIVERED = cash in rider's hand (settled at logistics)
    const cancelledStatuses = ['CANCELLED', 'VOIDED'];
 

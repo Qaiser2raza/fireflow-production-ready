@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, CreditCard, Banknote, QrCode, Smartphone, ArrowRight, Loader2, CheckCircle2 } from 'lucide-react';
+import { X, CreditCard, Banknote, QrCode, Smartphone, ArrowRight, Loader2, CheckCircle2, LogIn } from 'lucide-react';
 import { Order, PaymentBreakdown } from '../../../shared/types';
 
 interface SettlementModalProps {
@@ -12,17 +12,22 @@ interface SettlementModalProps {
 
 import { useAppContext } from '../../../client/contexts/AppContext';
 import { calculateBill, getDefaultBillConfig } from '../../../lib/billEngine';
+import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 
 export const SettlementModal: React.FC<SettlementModalProps> = ({
     isOpen, onClose, order, breakdown: initialBreakdown, onConfirm
 }) => {
-    const { currentUser, operationsConfig } = useAppContext();
+    const { currentUser, operationsConfig, activeSession, setActiveSession, addNotification } = useAppContext();
     const [tax_exempt, setTaxExempt] = useState(false);
     const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'CARD' | 'RAAST' | 'JAZZCASH' | 'EASYPAISA'>('CASH');
     const [tenderedAmount, setTenderedAmount] = useState<string>(Math.round(initialBreakdown.total).toString());
     const [reference, setReference] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
+
+    // Shift inline state
+    const [openingFloat, setOpeningFloat] = useState<string>('0');
+    const [isOpeningShift, setIsOpeningShift] = useState(false);
 
     useEffect(() => {
         setTenderedAmount(Math.round(initialBreakdown.total).toString());
@@ -44,6 +49,34 @@ export const SettlementModal: React.FC<SettlementModalProps> = ({
     const change = Math.max(0, tendered - total);
 
     const isManager = currentUser?.role === 'MANAGER' || currentUser?.role === 'ADMIN';
+    const isCashierWithoutSession = currentUser?.role === 'CASHIER' && !activeSession;
+
+    const handleOpenShift = async () => {
+        setIsOpeningShift(true);
+        try {
+            const res = await fetchWithAuth('/api/cashier/open', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    restaurantId: currentUser?.restaurant_id,
+                    staffId: currentUser?.id,
+                    openingFloat: Number(openingFloat)
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.session) {
+                setActiveSession(data.session);
+                addNotification('success', 'Shift started successfully.');
+            } else {
+                addNotification('error', data.error || 'Failed to start shift.');
+            }
+        } catch (e: any) {
+            console.error('Open shift error:', e);
+            addNotification('error', e.message || 'Cannot reach server to open shift.');
+        } finally {
+            setIsOpeningShift(false);
+        }
+    };
 
     const handleConfirm = async () => {
         if (tendered < total && paymentMethod === 'CASH') {
@@ -83,7 +116,7 @@ export const SettlementModal: React.FC<SettlementModalProps> = ({
                     </div>
                 )}
 
-                <div className="flex justify-between items-center mb-8">
+                <div className="flex justify-between items-center mb-8 relative z-10">
                     <div>
                         <h2 className="text-white font-black text-3xl uppercase tracking-tighter">Settle Bill</h2>
                         <p className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em] mt-1">Order #{order.id.slice(-4)} • {order.type}</p>
@@ -93,7 +126,37 @@ export const SettlementModal: React.FC<SettlementModalProps> = ({
                     </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-8">
+                {isCashierWithoutSession ? (
+                    <div className="flex flex-col items-center justify-center py-8 text-center relative z-10">
+                        <div className="w-20 h-20 bg-indigo-500/20 rounded-full flex items-center justify-center mb-6 border border-indigo-500/30">
+                            <Banknote size={40} className="text-indigo-400" />
+                        </div>
+                        <h3 className="text-2xl font-black text-white mb-2">Shift Not Started</h3>
+                        <p className="text-slate-400 mb-8 max-w-sm">You must open a drawer session before accepting payments.</p>
+                        
+                        <div className="w-full max-w-xs space-y-4">
+                            <div className="relative">
+                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">Rs.</span>
+                                <input
+                                    type="number"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-2xl py-4 pl-12 pr-4 text-xl font-bold text-white focus:outline-none focus:border-indigo-500 transition-all text-center"
+                                    value={openingFloat}
+                                    onChange={e => setOpeningFloat(e.target.value)}
+                                    placeholder="Starting Float"
+                                />
+                            </div>
+                            <button
+                                onClick={handleOpenShift}
+                                disabled={isOpeningShift}
+                                className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-3 shadow-lg shadow-indigo-900/20"
+                            >
+                                {isOpeningShift ? <Loader2 size={18} className="animate-spin" /> : <LogIn size={18} />}
+                                START SHIFT
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                <div className="grid grid-cols-2 gap-8 relative z-10">
                     {/* Left: Summary */}
                     <div className="space-y-6">
                         <div className="bg-black/30 p-6 rounded-3xl border border-slate-800">
@@ -244,7 +307,9 @@ export const SettlementModal: React.FC<SettlementModalProps> = ({
                         </button>
                     </div>
                 </div>
+                )}
             </div>
         </div>
     );
 };
+

@@ -1,4 +1,3 @@
-import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
@@ -6,10 +5,8 @@ import './index.css';
 import { HashRouter } from 'react-router-dom'; 
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    {/* CHANGE 2: Use HashRouter here */}
-    <HashRouter>
-      <App />
-    </HashRouter>
-  </React.StrictMode>,
+  // CHANGE 2: Use HashRouter here
+  <HashRouter>
+    <App />
+  </HashRouter>,
 );

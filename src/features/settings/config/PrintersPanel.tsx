@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { Card } from '../../../shared/ui/Card';
 import { Printer, Plus, Edit2, Trash2, CheckCircle2, XCircle } from 'lucide-react';
@@ -36,7 +36,11 @@ export const PrintersPanel: React.FC = () => {
         }
     };
 
+    const hasFetched = useRef(false);
+
     useEffect(() => {
+        if (hasFetched.current) return;
+        hasFetched.current = true;
         loadData();
     }, []);
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     Wallet,
     ArrowUpRight,
@@ -32,7 +32,7 @@ import { DaybookReviewModal } from './components/DaybookReviewModal';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const FinancialCommandCenter: React.FC = () => {
-    const { currentUser, currentRestaurant, activeSession, setActiveSession, drivers, suppliers } = useApp();
+    const { currentUser, currentRestaurant, activeSession, drivers, suppliers } = useApp();
     const restaurantId = currentUser?.restaurant_id;
     const staffId = currentUser?.id;
     const timezone = currentRestaurant?.timezone || 'Asia/Karachi';
@@ -92,6 +92,23 @@ const FinancialCommandCenter: React.FC = () => {
     const [showManualJournalModal, setShowManualJournalModal] = useState(false);
     const [showDaybookReviewModal, setShowDaybookReviewModal] = useState(false);
 
+    // Debounce timers for fetch operations
+    const fetchAllDataDebounce = useRef<NodeJS.Timeout | null>(null);
+    const hasInitiallyFetched = useRef(false);
+
+    const debouncedFetchAll = () => {
+        if (fetchAllDataDebounce.current) {
+            clearTimeout(fetchAllDataDebounce.current);
+        }
+        
+        fetchAllDataDebounce.current = setTimeout(() => {
+            setLoading(true);
+            Promise.all([fetchSession(), fetchLedger(), fetchIntelligence(), fetchCOA(), fetchGLStats()])
+                .finally(() => setLoading(false));
+            fetchAllDataDebounce.current = null;
+        }, 300);
+    };
+
     const fetchSession = async () => {
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
@@ -100,10 +117,6 @@ const FinancialCommandCenter: React.FC = () => {
             
             if (data.success && data.sessions && data.sessions.length > 0) {
                 // If there are multiple sessions, aggregate the metrics for the whole day view.
-                // We'll keep activeSession as the FIRST open one (or the latest) so Z-Report button targets that one.
-                const openSession = data.sessions.find((s: any) => s.status === 'OPEN') || data.sessions[data.sessions.length - 1];
-                setActiveSession(openSession);
-
                 const aggregatedMetrics = data.sessions.reduce((acc: any, s: any) => {
                     const m = s.metrics || {};
                     return {
@@ -123,7 +136,6 @@ const FinancialCommandCenter: React.FC = () => {
                     totalPayouts: aggregatedMetrics.payouts
                 });
             } else if (data.success && data.session) {
-                setActiveSession(data.session);
                 setMetrics(data.session.metrics || {});
                 setStats({
                     expectedCash: Number(data.session.metrics?.expectedCash || 0),
@@ -131,13 +143,11 @@ const FinancialCommandCenter: React.FC = () => {
                     totalPayouts: Number(data.session.metrics?.payouts || 0)
                 });
             } else {
-                setActiveSession(null);
                 setMetrics({});
                 setStats({ expectedCash: 0, todaySales: 0, totalPayouts: 0 });
             }
         } catch (err) {
             console.error('Failed to fetch session', err);
-            setActiveSession(null);
             setMetrics({});
             setStats({ expectedCash: 0, todaySales: 0, totalPayouts: 0 });
         }
@@ -177,7 +187,7 @@ const FinancialCommandCenter: React.FC = () => {
         try {
             const apiBase = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
             const res = await fetchWithAuth(`${apiBase}/accounting/coa`);
-            if (res.ok) setCoaAccounts(await res.json());
+            if (res.ok) { const d = await res.json(); setCoaAccounts(d.accounts || []); }
         } catch { /* silent */ }
     };
 
@@ -254,10 +264,28 @@ const FinancialCommandCenter: React.FC = () => {
     };
 
     useEffect(() => {
-        setLoading(true);
-        Promise.all([fetchSession(), fetchLedger(), fetchIntelligence(), fetchCOA(), fetchGLStats()])
-            .finally(() => setLoading(false));
-    }, [selectedDate, startDate, endDate, useRange, restaurantId]);
+        // Skip until we have a valid restaurantId
+        if (!restaurantId) return;
+        
+        // Skip if we already did initial fetch
+        if (hasInitiallyFetched.current) return;
+        
+        hasInitiallyFetched.current = true;
+        debouncedFetchAll();
+        
+        return () => {
+            if (fetchAllDataDebounce.current) {
+                clearTimeout(fetchAllDataDebounce.current);
+            }
+        };
+    }, [restaurantId]);
+
+    // Re-fetch when user intentionally changes dates (after initial load)
+    useEffect(() => {
+        if (!restaurantId || !hasInitiallyFetched.current) return;
+        
+        debouncedFetchAll();
+    }, [selectedDate, startDate, endDate, useRange]);
 
     // Re-fetch ledger whenever filters changes
     useEffect(() => {

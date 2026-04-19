@@ -19,10 +19,12 @@ export const RecallModal: React.FC<RecallModalProps> = ({ orders, isOpen, onClos
             .filter(o =>
                 o.status === OrderStatus.ACTIVE ||
                 o.status === OrderStatus.READY ||
+                o.status === OrderStatus.SERVED ||
+                o.status === OrderStatus.BILL_REQUESTED ||
                 o.status === ('PENDING' as any) ||
                 o.status === ('PREPARING' as any)
             )
-            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            .sort((a, b) => new Date((b.created_at || b.timestamp || 0)).getTime() - new Date((a.created_at || a.timestamp || 0)).getTime());
     }, [orders]);
 
     const filteredOrders = useMemo(() => {

@@ -81,7 +81,7 @@ async function main() {
             const order1 = await tx.orders.create({ data: { restaurant_id: RID, type: OrderType.DINE_IN, total: 1000, tax: 137.93, tax_type: TaxType.INCLUSIVE, payment_status: PaymentStatus.PAID, status: OrderStatus.CLOSED } });
             await tx.journal_entries.create({
                 data: { restaurant_id: RID, reference_type: 'ORDER_SALE', reference_id: 'T01', date: new Date(), description: 'Cash Sale T01',
-                    lines: { create: [
+                    journal_entry_lines: { create: [
                         { account_id: accountMap['1000'], debit: 1000.00, credit: 0, reference_type: 'ORDER', reference_id: order1.id },
                         { account_id: accountMap['2100'], debit: 0, credit: 137.93, reference_type: 'ORDER', reference_id: order1.id },
                         { account_id: accountMap['4000'], debit: 0, credit: 862.07, reference_type: 'ORDER', reference_id: order1.id }
@@ -94,7 +94,7 @@ async function main() {
             const order2 = await tx.orders.create({ data: { restaurant_id: RID, type: OrderType.DINE_IN, total: 2200, service_charge: 200, tax: 275.86, tax_type: TaxType.INCLUSIVE, payment_status: PaymentStatus.PAID, status: OrderStatus.CLOSED } });
             await tx.journal_entries.create({
                 data: { restaurant_id: RID, reference_type: 'ORDER_SALE', reference_id: 'T02', date: new Date(), description: 'Card Sale T02',
-                    lines: { create: [
+                    journal_entry_lines: { create: [
                         { account_id: accountMap['1010'], debit: 2200.00, credit: 0, reference_type: 'ORDER', reference_id: order2.id },
                         { account_id: accountMap['2100'], debit: 0, credit: 275.86, reference_type: 'ORDER', reference_id: order2.id },
                         { account_id: accountMap['2030'], debit: 0, credit: 200.00, reference_type: 'ORDER', reference_id: order2.id },
@@ -108,7 +108,7 @@ async function main() {
             const order3 = await tx.orders.create({ data: { restaurant_id: RID, type: OrderType.DINE_IN, total: 3000, tax: 413.79, tax_type: TaxType.INCLUSIVE, payment_status: PaymentStatus.PAID, status: OrderStatus.CLOSED } });
             await tx.journal_entries.create({
                 data: { restaurant_id: RID, reference_type: 'ORDER_SALE', reference_id: 'T03', date: new Date(), description: 'Split Payment T03',
-                    lines: { create: [
+                    journal_entry_lines: { create: [
                         { account_id: accountMap['1000'], debit: 1500.00, credit: 0, reference_type: 'ORDER', reference_id: order3.id },
                         { account_id: accountMap['1010'], debit: 1500.00, credit: 0, reference_type: 'ORDER', reference_id: order3.id },
                         { account_id: accountMap['2100'], debit: 0, credit: 413.79, reference_type: 'ORDER', reference_id: order3.id },
@@ -122,7 +122,7 @@ async function main() {
             const order4 = await tx.orders.create({ data: { restaurant_id: RID, customer_id: customer.id, type: OrderType.DINE_IN, total: 1500, tax: 206.90, tax_type: TaxType.INCLUSIVE, payment_status: PaymentStatus.PAID, status: OrderStatus.CLOSED } });
             await tx.journal_entries.create({
                 data: { restaurant_id: RID, reference_type: 'ORDER_SALE', reference_id: 'T04', date: new Date(), description: 'Credit Sale T04',
-                    lines: { create: [
+                    journal_entry_lines: { create: [
                         { account_id: accountMap['1040'], debit: 1500.00, credit: 0, reference_type: 'ORDER', reference_id: order4.id },
                         { account_id: accountMap['2100'], debit: 0, credit: 206.90, reference_type: 'ORDER', reference_id: order4.id },
                         { account_id: accountMap['4000'], debit: 0, credit: 1293.10, reference_type: 'ORDER', reference_id: order4.id }
@@ -135,7 +135,7 @@ async function main() {
             // --- T05: Void Reversal ---
             await tx.journal_entries.create({
                 data: { restaurant_id: RID, reference_type: 'ORDER_VOID', reference_id: 'T05', date: new Date(), description: 'Void Reversal of T01',
-                    lines: { create: [
+                    journal_entry_lines: { create: [
                         { account_id: accountMap['1000'], debit: 0, credit: 1000.00, reference_type: 'ORDER', reference_id: order1.id },
                         { account_id: accountMap['2100'], debit: 137.93, credit: 0, reference_type: 'ORDER', reference_id: order1.id },
                         { account_id: accountMap['4000'], debit: 862.07, credit: 0, reference_type: 'ORDER', reference_id: order1.id }
@@ -165,7 +165,7 @@ async function main() {
                     reference_id: 'T06',
                     date: new Date(),
                     description: 'Delivery Sale T06',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1000'], debit: 1100.00, credit: 0, reference_type: 'ORDER', reference_id: order6.id },
                             { account_id: accountMap['2100'], debit: 0, credit: 137.93, reference_type: 'ORDER', reference_id: order6.id },
@@ -195,7 +195,7 @@ async function main() {
                     reference_id: 'T07',
                     date: new Date(),
                     description: 'Inventory Purchase T07',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1060'], debit: 2000.00, credit: 0, reference_type: 'PO', reference_id: po7.id },
                             { account_id: accountMap['2020'], debit: 0, credit: 2000.00, reference_type: 'PO', reference_id: po7.id }
@@ -235,7 +235,7 @@ async function main() {
                     reference_id: 'T08',
                     date: new Date(),
                     description: 'Rounding Sale T08',
-                    lines: {
+                    journal_entry_lines: {
                         create: [
                             { account_id: accountMap['1000'], debit: 1001.00, credit: 0, reference_type: 'ORDER', reference_id: order8.id },
                             { account_id: accountMap['2100'], debit: 0, credit: 138.01, reference_type: 'ORDER', reference_id: order8.id },

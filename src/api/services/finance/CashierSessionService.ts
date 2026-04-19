@@ -2,7 +2,7 @@ import { prisma } from '../../../shared/lib/prisma';
 import { Decimal } from '@prisma/client/runtime/library';
 
 export class CashierSessionService {
-    static async openSession(restaurantId: string, staffId: string, openingFloat: number) {
+    static async openSession(restaurantId: string, staffId: string, openingFloat: number, terminalId?: string) {
         // Check for existing open session for this restaurant
         // Note: For multi-terminal enterprise, we might allow multiple open sessions, 
         // but for now we enforce one open session per restaurant/staff or just per restaurant.
@@ -25,7 +25,8 @@ export class CashierSessionService {
                 restaurant_id: restaurantId,
                 opened_by: staffId,
                 opening_float: new Decimal(openingFloat),
-                status: 'OPEN'
+                status: 'OPEN',
+                ...(terminalId ? { terminal_id: terminalId } : {})
             }
         });
     }
@@ -40,7 +41,17 @@ export class CashierSessionService {
         });
     }
 
-    static async closeSession(sessionId: string, actualCash: number, closedBy: string, notes?: string) {
+    static async getAnyActiveSession(restaurantId: string) {
+        return await prisma.cashier_sessions.findFirst({
+            where: {
+                restaurant_id: restaurantId,
+                status: 'OPEN'
+            }
+        });
+    }
+
+    static async closeSession(sessionId: string, actualCash: number, withdrawnAmount: number, closedBy: string, notes?: string) {
+        const { journalEntryService } = await import('../JournalEntryService.js');
         const session = await prisma.cashier_sessions.findUnique({
             where: { id: sessionId },
             include: { orders: { where: { is_deleted: false }, include: { transactions: true } } }
@@ -65,7 +76,7 @@ export class CashierSessionService {
         const actual = new Decimal(actualCash);
         const difference = actual.minus(expectedCash);
 
-        return await prisma.cashier_sessions.update({
+        const updated = await prisma.cashier_sessions.update({
             where: { id: sessionId },
             data: {
                 closed_at: new Date(),
@@ -77,6 +88,23 @@ export class CashierSessionService {
                 notes: notes
             }
         });
+
+        // Trigger Double-Entry Journaling (non-blocking)
+        try {
+            await journalEntryService.recordSessionCloseJournal({
+                restaurantId: session.restaurant_id,
+                sessionId: sessionId,
+                withdrawnAmount: withdrawnAmount,
+                actualHandover: withdrawnAmount,
+                variance: difference,
+                description: notes || `Session closed by ${closedBy}`,
+                processedBy: closedBy
+            });
+        } catch (e) {
+            console.error('[Session Close Journal Error]:', e);
+        }
+
+        return updated;
     }
 
     static async getSessionSummary(sessionId: string) {
@@ -89,8 +117,8 @@ export class CashierSessionService {
                         transactions: true 
                     } 
                 },
-                opened_by_staff: true,
-                closed_by_staff: true
+                staff_cashier_sessions_opened_byTostaff: true,
+                staff_cashier_sessions_closed_byTostaff: true
             }
         });
 

@@ -39,6 +39,9 @@ const GL = {
     DISCOUNT: '4900',   // Discount Expense (contra-revenue)
     COGS: '5020',       // Cost of Goods Sold
     CUSTOMER_ACCOUNT: '1040',
+    MISC_INCOME: '4030', // NEW
+    MANAGER_DRAWING: '1090', // NEW
+    SHORTAGE_EXPENSE: '5030', // NEW
 } as const;
 
 
@@ -119,7 +122,7 @@ async function postJournal(params: {
       date: params.date,
       description: params.description,
       processed_by: params.processedBy,
-      lines: {
+      journal_entry_lines: {
         create: params.lines.map((l: any) => ({
           account_id: l.accountId,
           description: l.description,
@@ -160,7 +163,11 @@ export class JournalEntryService {
      *   CR  …     (same revenue / liability lines)
      *   DR  4010  Delivery Fee Revenue included in net (already part of total)
      */
-    async recordOrderSaleJournal(orderId: string, tx: any) {
+    async recordOrderSaleJournal(
+        orderId: string,
+        tx: any,
+        paymentOverride?: { amount: number | Decimal, paymentMethod: string }
+    ) {
         const db = tx;
 
         // Idempotency: skip if already journalised
@@ -258,7 +265,21 @@ export class JournalEntryService {
                 }
             }
 
-            if (lines.length === 0 && cashAcc) {
+            if (lines.length === 0 && paymentOverride && cashAcc) {
+                const assetAcc = paymentOverride.paymentMethod === 'CARD' || paymentOverride.paymentMethod === 'RAAST' 
+                    ? cardAcc 
+                    : cashAcc;
+                if (assetAcc) {
+                    lines.push({
+                        accountId: assetAcc.id,
+                        description: `Payment [${paymentOverride.paymentMethod}] – Order #${order.order_number}`,
+                        debit: new Decimal(paymentOverride.amount.toString()),
+                        referenceType: 'ORDER',
+                        referenceId: orderId,
+                        meta: { paymentMethod: paymentOverride.paymentMethod }
+                    });
+                }
+            } else if (lines.length === 0 && cashAcc) {
                 // Fallback for legacy orders with no transactions yet
                 lines.push({
                     accountId: cashAcc.id,
@@ -591,7 +612,9 @@ export class JournalEntryService {
      * Call once per restaurant on first setup. Idempotent (upsert on code).
      */
     async seedDefaultCOA(restaurantId: string) {
-        const accounts = [
+        // Used to seed accounts, but now deferred to external scripts/seed-coa.ts
+        const accounts: any[] = [
+            /*
             { code: '1000', name: 'Cash & Cash Equivalents', type: 'ASSET', description: 'Physical cash in POS drawer' },
             { code: '1010', name: 'Card / Digital Receivables', type: 'ASSET', description: 'Card payments pending bank settlement' },
             { code: '1020', name: 'Rider Receivables', type: 'ASSET', description: 'Cash held by active delivery riders' },
@@ -606,6 +629,7 @@ export class JournalEntryService {
             { code: '2020', name: 'Accounts Payable (Suppliers)', type: 'LIABILITY', description: 'Outstanding balances owed to vendors' },
             { code: '1060', name: 'Inventory Asset (Periodic)', type: 'ASSET', description: 'Value of stock currently in hand' },
             { code: '5030', name: 'Cost of Goods Sold (COGS)', type: 'EXPENSE', description: 'Cost of stock used in production' },
+            */
         ];
 
         const results = [];
@@ -798,7 +822,7 @@ export class JournalEntryService {
                 reference_type: referenceType,
                 reference_id: referenceId,
             },
-            include: { lines: true }
+            include: { journal_entry_lines: true }
         });
 
         if (!journals.length) return [];
@@ -811,7 +835,7 @@ export class JournalEntryService {
                 continue;
             }
 
-            const reversalLines = journal.lines.map((line: any) => ({
+            const reversalLines = journal.journal_entry_lines.map((line: any) => ({
                 accountId: line.account_id,
                 description: `Reversal: ${line.description}`,
                 debit: new Decimal(line.credit.toString()),
@@ -873,7 +897,7 @@ export class JournalEntryService {
                 reference_type: { in: ['CREDIT_SALE', 'CUSTOMER_PAYMENT'] },
             },
             include: {
-                lines: {
+                journal_entry_lines: {
                     where: { account_id: customerAcc.id },
                 },
             },
@@ -894,7 +918,7 @@ export class JournalEntryService {
                 continue;
             }
 
-            for (const line of je.lines) {
+            for (const line of je.journal_entry_lines) {
                 balance = balance
                     .plus(new Decimal(line.debit.toString()))
                     .minus(new Decimal(line.credit.toString()));
@@ -1105,6 +1129,100 @@ export class JournalEntryService {
                 { accountId: payableAcc.id, description: 'Supplier payable created', credit: amount, referenceType: 'SUPPLIER', referenceId: params.supplierId },
             ],
         }, db);
+    }
+
+    async recordSessionCloseJournal(params: {
+        restaurantId: string;
+        sessionId: string;
+        withdrawnAmount: number | Decimal;
+        variance: number | Decimal;
+        description: string;
+        actualHandover: number | Decimal;
+        processedBy?: string;
+    }, tx?: any) {
+        const db = tx || prisma;
+        const withdrawn = new Decimal(params.withdrawnAmount.toString());
+        const variance = new Decimal(params.variance.toString());
+
+        const [cashAcc, drawingAcc, miscIncAcc, shortageAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.CASH, db),
+            resolveAccount(params.restaurantId, GL.MANAGER_DRAWING, db),
+            resolveAccount(params.restaurantId, GL.MISC_INCOME, db),
+            resolveAccount(params.restaurantId, GL.SHORTAGE_EXPENSE, db),
+        ]);
+
+        if (!cashAcc || !drawingAcc) {
+            console.warn('[JE] recordSessionCloseJournal: Required accounts missing (1000 or 1090). Skipping journal.');
+            return;
+        }
+
+        const lines: JELine[] = [];
+
+        // 1. Record the Withdrawal to Manager
+        if (withdrawn.greaterThan(0)) {
+            lines.push({ 
+                accountId: drawingAcc.id, 
+                description: `Shift withdrawal to manager`, 
+                debit: withdrawn, 
+                referenceType: 'CASHIER_SESSION', 
+                referenceId: params.sessionId 
+            });
+            lines.push({ 
+                accountId: cashAcc.id, 
+                description: `Cash removed from drawer`, 
+                credit: withdrawn, 
+                referenceType: 'CASHIER_SESSION', 
+                referenceId: params.sessionId 
+            });
+        }
+
+        // 2. Record Variance (Shortage or Overage)
+        if (variance.lessThan(0) && shortageAcc) {
+            // Shortage is an expense (Debit Expense, Credit Cash)
+            const absVar = variance.abs();
+            lines.push({ 
+                accountId: shortageAcc.id, 
+                description: `Cash shortage on close`, 
+                debit: absVar, 
+                referenceType: 'CASHIER_SESSION', 
+                referenceId: params.sessionId 
+            });
+            lines.push({ 
+                accountId: cashAcc.id, 
+                description: `Shortage adjustment`, 
+                credit: absVar, 
+                referenceType: 'CASHIER_SESSION', 
+                referenceId: params.sessionId 
+            });
+        } else if (variance.greaterThan(0) && miscIncAcc) {
+            // Overage is income (Debit Cash, Credit Income)
+            lines.push({ 
+                accountId: cashAcc.id, 
+                description: `Cash overage on close`, 
+                debit: variance, 
+                referenceType: 'CASHIER_SESSION', 
+                referenceId: params.sessionId 
+            });
+            lines.push({ 
+                accountId: miscIncAcc.id, 
+                description: `Overage recorded as income`, 
+                credit: variance, 
+                referenceType: 'CASHIER_SESSION', 
+                referenceId: params.sessionId 
+            });
+        }
+
+        if (lines.length >= 2) {
+            await postJournal({
+                restaurantId: params.restaurantId,
+                referenceType: 'CASHIER_SESSION',
+                referenceId: params.sessionId,
+                date: new Date(),
+                description: params.description,
+                processedBy: params.processedBy,
+                lines
+            }, db);
+        }
     }
 }
 

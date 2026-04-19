@@ -55,6 +55,8 @@ const METHOD_COLORS: Record<string, string> = {
 };
 
 // ─── Component ────────────────────────────────────────────────────────────────
+import { useAppContext } from '../../../client/contexts/AppContext';
+import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({
     order,
@@ -65,6 +67,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     onPaymentCompleteClose,
     customer,
 }) => {
+    const { currentUser, activeSession, setActiveSession, addNotification } = useAppContext();
+    const isCashierWithoutSession = ["CASHIER", "MANAGER"].includes(currentUser?.role || '') && !activeSession;
+    
+    // Shift inline state
+    const [openingFloat, setOpeningFloat] = useState<string>('0');
+    const [isOpeningShift, setIsOpeningShift] = useState(false);
     // ── Core state ──────────────────────────────────────────────────────────
     const [paymentLines, setPaymentLines] = useState<PaymentLine[]>([]);
     const [inputMethod,  setInputMethod]  = useState<string>('CASH');
@@ -296,6 +304,13 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         if (completed && onPrintReceipt && willPrint) {
             const t = setTimeout(() => {
                 onPrintReceipt(true, previewOrder).catch(e => console.error('[AutoPrint]', e));
+                
+                // 🔥 SPEED FIX: If we are auto-printing, the clerk is likely done with this order.
+                // Automatically close the modal after a short delay so they are back at the menu/floor.
+                // This prevents the "Success Screen" from being a hurdle.
+                setTimeout(() => {
+                    if (onPaymentCompleteClose) onPaymentCompleteClose();
+                }, 1000);
             }, 600);
             return () => clearTimeout(t);
         }
@@ -350,6 +365,33 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         );
     }
 
+    const handleOpenShift = async () => {
+        setIsOpeningShift(true);
+        try {
+            const res = await fetchWithAuth('/api/cashier/open', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    restaurantId: currentUser?.restaurant_id,
+                    staffId: currentUser?.id,
+                    openingFloat: Number(openingFloat)
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.session) {
+                setActiveSession(data.session);
+                addNotification('success', 'Shift started successfully.');
+            } else {
+                addNotification('error', data.error || 'Failed to start shift.');
+            }
+        } catch (e: any) {
+            console.error('Open shift error:', e);
+            addNotification('error', e.message || 'Cannot reach server to open shift.');
+        } finally {
+            setIsOpeningShift(false);
+        }
+    };
+
     // ── Main Modal ──────────────────────────────────────────────────────────
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4 animate-in fade-in duration-300 overflow-hidden">
@@ -403,6 +445,36 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 </div>
 
                 {/* ── BODY ── */}
+                {isCashierWithoutSession ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center relative z-10 m-auto">
+                        <div className="w-20 h-20 bg-indigo-500/20 rounded-full flex items-center justify-center mb-6 border border-indigo-500/30">
+                            <Banknote size={40} className="text-indigo-400" />
+                        </div>
+                        <h3 className="text-2xl font-black text-white mb-2">Shift Not Started</h3>
+                        <p className="text-slate-400 mb-8 max-w-sm">You must open a drawer session before accepting payments.</p>
+                        
+                        <div className="w-full max-w-xs space-y-4">
+                            <div className="relative">
+                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">Rs.</span>
+                                <input
+                                    type="number"
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-2xl py-4 pl-12 pr-4 text-xl font-bold text-white focus:outline-none focus:border-indigo-500 transition-all text-center"
+                                    value={openingFloat}
+                                    onChange={e => setOpeningFloat(e.target.value)}
+                                    placeholder="Starting Float"
+                                />
+                            </div>
+                            <button
+                                onClick={handleOpenShift}
+                                disabled={isOpeningShift}
+                                className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-3 shadow-lg shadow-indigo-900/20"
+                            >
+                                {isOpeningShift ? <Loader2 size={18} className="animate-spin" /> : <Zap size={18} />}
+                                START SHIFT
+                            </button>
+                        </div>
+                    </div>
+                ) : (
                 <div className="flex-1 flex overflow-hidden">
 
                     {/* ── LEFT: INPUT ENGINE ── */}
@@ -635,6 +707,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                         </div>
                     </div>
                 </div>
+                )}
             </div>
 
             {/* ── Customer Lookup Overlay ── */}

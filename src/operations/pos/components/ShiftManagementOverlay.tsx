@@ -17,7 +17,7 @@ export const ShiftManagementOverlay: React.FC<Props> = ({ currentUser, onSession
   const [sessionSummary, setSessionSummary] = useState<any>(null);
   const [activeSession, setActiveSession] = useState<any>(null);
 
-  const API = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
+  const API = '/api';
 
   useEffect(() => {
     checkActiveSession();

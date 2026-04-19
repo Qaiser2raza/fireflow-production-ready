@@ -39,7 +39,7 @@ router.get('/:id/statement', authMiddleware, async (req, res) => {
                 supplier_id: id
             },
             orderBy: { created_at: 'desc' },
-            include: { payout: true }
+            include: { payouts: true }
         });
 
         res.json(ledger);

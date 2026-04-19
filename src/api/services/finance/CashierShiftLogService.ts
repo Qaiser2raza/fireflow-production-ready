@@ -44,7 +44,7 @@ export class CashierShiftLogService {
             where: { session_id: sessionId },
             orderBy: { created_at: 'desc' },
             include: {
-                processor: {
+                staff: {
                     select: { name: true, role: true }
                 }
             }
@@ -66,7 +66,7 @@ export class CashierShiftLogService {
     }) {
         const log = await prisma.cashier_shift_logs.findUnique({
             where: { id: data.logId },
-            include: { session: true }
+            include: { cashier_sessions: true }
         });
 
         if (!log) throw new Error("Log not found");
@@ -89,11 +89,11 @@ export class CashierShiftLogService {
 
             // 2. If APPROVED, adjust the session's expected_cash 
             // INFLOW increases expected cash in drawer, OUTFLOW decreases it.
-            if (data.status === 'APPROVED' && log.session) {
+            if (data.status === 'APPROVED' && log.cashier_sessions) {
                 const amountNum = Number(log.amount);
                 const adjustment = log.type === 'INFLOW' ? amountNum : -amountNum;
 
-                const currentExpected = log.session.expected_cash ? Number(log.session.expected_cash) : 0;
+                const currentExpected = log.cashier_sessions.expected_cash ? Number(log.cashier_sessions.expected_cash) : 0;
                 
                 await tx.cashier_sessions.update({
                     where: { id: log.session_id },

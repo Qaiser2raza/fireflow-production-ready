@@ -29,7 +29,13 @@ export const OrderCommandHub: React.FC = () => {
 
   // Get dine-in orders
   const dineInOrders = useMemo(() => {
-    return orders.filter(o => o.type === 'DINE_IN' && o.status !== OrderStatus.CLOSED && o.status !== OrderStatus.CANCELLED);
+    // v4.5: Keep orders visible in the hub until fully cleared (CANCELLED/VOIDED)
+    // PAID orders stay visible so the table can be cleared manually or stay as 'Settled'
+    return orders.filter(o => 
+      o.type === 'DINE_IN' && 
+      o.status !== OrderStatus.CANCELLED && 
+      o.status !== OrderStatus.VOIDED
+    );
   }, [orders]);
 
   // Get takeaway/delivery orders for pulse feed
@@ -170,10 +176,10 @@ export const OrderCommandHub: React.FC = () => {
                         setActiveView('POS');
                       }}
                       onMarkServed={async (orderId) => {
-                        await updateOrderStatus(orderId, OrderStatus.READY);
+                        await updateOrderStatus(orderId, OrderStatus.SERVED);
                       }}
                       onRequestBill={async (orderId) => {
-                        await updateOrderStatus(orderId, OrderStatus.READY); // Use READY or keep ACTIVE
+                        await updateOrderStatus(orderId, OrderStatus.BILL_REQUESTED);
                       }}
                     />
                   );

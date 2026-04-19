@@ -235,7 +235,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                             <div className="flex justify-between text-xs">
                                                 <span className="text-slate-400">Subtotal</span>
                                                 <span className="text-white font-bold">
-                                                    Rs. {(order.breakdown?.subtotal || 0).toLocaleString()}
+                                                    Rs. {(order.breakdown?.subtotal || (order.total - (order.tax || 0) - (order.service_charge || 0) - (order.delivery_fee || 0) + (order.discount || 0))).toLocaleString()}
                                                 </span>
                                             </div>
                                             {order.service_charge && order.service_charge > 0 && (

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { AccountingService } from '../services/AccountingService';
+import { journalEntryService } from '../services/JournalEntryService';
 import { RiderShiftService } from '../services/logistics/RiderShiftService';
 import { authMiddleware } from '../middleware/authMiddleware';
 
@@ -29,7 +30,8 @@ const closeShiftSchema = z.object({
 // Schema validation - Assignment
 const assignDriverSchema = z.object({
     driverId: z.string().uuid(),
-    processedBy: z.string().uuid().optional()
+    processedBy: z.string().uuid().optional(),
+    floatAmount: z.number().min(0).optional() // ADDED: Issue float cash with run
 });
 
 // --- SHIFT ROUTES ---
@@ -116,7 +118,7 @@ router.post('/orders/:orderId/assign-driver', async (req, res) => {
     try {
         const { orderId } = req.params;
         const validated = assignDriverSchema.parse(req.body);
-        const { driverId, processedBy } = validated;
+        const { driverId, processedBy, floatAmount } = validated;
         const restaurantId = req.restaurantId!; // SaaS Security
 
         // Use transaction for atomicity
@@ -160,8 +162,8 @@ router.post('/orders/:orderId/assign-driver', async (req, res) => {
                 } as any
             });
 
-            // 4. Update delivery_orders
-            if (order.delivery_orders) {
+            // 4. Update delivery_orders (only if a record exists — an empty array is truthy)
+            if (order.delivery_orders && order.delivery_orders.length > 0) {
                 await tx.delivery_orders.update({
                     where: { order_id: orderId },
                     data: {
@@ -193,6 +195,48 @@ router.post('/orders/:orderId/assign-driver', async (req, res) => {
                     }
                 }
             });
+
+            // 7. PROVISIONAL LEDGER ENTRY: Debit rider for the order amount at dispatch.
+            await accounting.recordProvisionRiderDebt({
+                restaurantId,
+                riderId: driverId,
+                orderId,
+                amount: Number(order.total),
+                orderNumber: String((order as any).order_number || orderId.slice(-6)),
+                processedBy
+            }, tx);
+
+            // 8. OPTIONAL: Issue float attached to this run
+            if (floatAmount && floatAmount > 0) {
+                // Increment shift's total float pool to ensure cashout math stays accurate
+                await tx.rider_shifts.update({
+                    where: { id: activeShift.id },
+                    data: {
+                        opening_float: { increment: floatAmount }
+                    }
+                });
+                
+                // Fire ledger entry (Credit 1000 Cash, Debit 1020 Rider Receivable)
+                await journalEntryService.recordFloatIssueJournal({
+                    restaurantId,
+                    riderId: driverId,
+                    amount: floatAmount,
+                    settlementId: activeShift.id, // Group float under the shift ID
+                    processedBy
+                }, tx);
+
+                // Add audit
+                await tx.audit_logs.create({
+                    data: {
+                        action_type: 'RIDER_FLOAT_ISSUED',
+                        entity_type: 'RIDER_SHIFT',
+                        entity_id: activeShift.id,
+                        staff_id: processedBy,
+                        details: { amount: floatAmount, reason: `Dispatched with Order #${order.id}` }
+                    }
+                });
+            }
+
             return updatedOrder;
         });
 
@@ -242,7 +286,8 @@ router.post('/orders/:orderId/mark-delivered', async (req, res) => {
             }
 
             // Calculate delivery duration
-            const deliveryOrder = order.delivery_orders;
+            const deliveryOrderList = (order.delivery_orders as unknown) as any[];
+            const deliveryOrder = deliveryOrderList && deliveryOrderList.length > 0 ? deliveryOrderList[0] : null;
             const dispatchedAt = deliveryOrder?.dispatched_at;
             const deliveredAt = new Date();
             const durationMinutes = dispatchedAt
@@ -262,7 +307,7 @@ router.post('/orders/:orderId/mark-delivered', async (req, res) => {
 
             // Update delivery_orders
             if (deliveryOrder) {
-                await (tx.delivery_orders as any).update({
+                await tx.delivery_orders.updateMany({
                     where: { order_id: orderId },
                     data: {
                         delivered_at: deliveredAt,
@@ -346,8 +391,8 @@ router.post('/orders/:orderId/mark-failed', async (req, res) => {
                 } as any
             });
 
-            // Update delivery_orders: Set failed reason and clear dispatch time
-            if (order.delivery_orders) {
+            // Update delivery_orders: Set failed reason and clear dispatch time (only if record exists)
+            if (order.delivery_orders && order.delivery_orders.length > 0) {
                 await tx.delivery_orders.update({
                     where: { order_id: orderId },
                     data: {
@@ -430,7 +475,8 @@ router.post('/orders/:orderId/settle', async (req, res) => {
                 amountReceived: order.total,
                 orderIds: [orderId],
                 processedBy,
-                settlementId: orderId  // orderId is already a UUID — safe for ledger reference_id
+                settlementId: orderId,  // orderId is already a UUID — safe for ledger reference_id
+                sessionId: req.body.session_id  // ← Cross-session bridge: link settlement to the active cashier session
             }, tx);
 
             return updatedOrder;

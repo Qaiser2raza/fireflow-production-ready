@@ -2,7 +2,7 @@
 
 // --- 1. CORE ENUMS & TYPES ---
 
-export type UserRole = 'ADMIN' | 'SUPER_ADMIN' | 'MANAGER' | 'CASHIER' | 'SERVER' | 'CHEF' | 'RIDER';
+export type UserRole = 'ADMIN' | 'SUPER_ADMIN' | 'MANAGER' | 'CASHIER' | 'SERVER' | 'WAITER' | 'CHEF' | 'RIDER';
 
 export type SectionType = 'DINING' | 'DELIVERY' | 'TAKEAWAY' | 'HIDDEN';
 
@@ -403,19 +403,8 @@ export interface Order {
     discountReason?: string;
 }
 
-export interface Customer {
-    id: string;
-    restaurant_id: string;
-    name?: string;
-    phone: string;
-    address?: string;
-    notes?: string;
-    created_at?: string | Date;
-    updated_at?: string | Date;
-    addresses?: CustomerAddress[];
-    total_orders?: number;
-    last_order_at?: string | Date;
-}
+export type Vendor = Supplier;
+
 
 export interface CustomerAddress {
     id: string;
@@ -552,6 +541,8 @@ export interface Reservation {
 export interface AppContextType {
     activeSession: any | null;
     setActiveSession: (session: any) => void;
+    openSession: (openingFloat: number) => Promise<boolean>;
+    closeSession: (actualCash: number, notes: string) => Promise<boolean>;
     currentUser: Staff | null;
     currentRestaurant: any | null;
     orders: Order[];
@@ -579,6 +570,7 @@ export interface AppContextType {
     updateOrder: (order: Partial<Order>) => Promise<any>;
     fireOrder: (id: string, type: string) => Promise<any>;
     cancelOrder: (id: string, reason: string, notes?: string) => Promise<boolean>;
+    recallOrder: (id: string) => Promise<any>;
     voidOrder: (id: string, reason: string, notes: string, refundMethod: string, managerPin: string) => Promise<boolean>;
     updateOrderStatus: (id: string, status: OrderStatus) => Promise<void>;
     updateOrderItemStatus: (orderId: string, itemIndex: number, status: OrderStatus) => Promise<boolean>;
@@ -591,7 +583,7 @@ export interface AppContextType {
     updateTableStatus: (id: string, status: TableStatus, serverId?: string, orderId?: string) => Promise<boolean>;
     updateTableCapacity: (id: string, capacity: number) => Promise<boolean>;
     seatGuests: (tableId: string, count: number) => Promise<void>;
-    processPayment: (orderId: string, transaction: Transaction) => Promise<boolean>;
+    processPayment: (orderId: string, transaction: Transaction, financialState?: any) => Promise<boolean>;
     assignDriverToOrder: (orderId: string, driverId: string, floatAmount?: number) => Promise<void>;
     completeDelivery: (orderId: string) => Promise<void>;
     failDelivery: (orderId: string, reason: string) => Promise<void>;
@@ -645,4 +637,6 @@ export interface AppContextType {
     closeRiderShift: (data: { shiftId: string, closedBy: string, closingCash: number, notes?: string }) => Promise<boolean>;
     depositRiderCash: (data: { shiftId: string, depositedBy: string, amount: number, notes?: string }) => Promise<boolean>;
     operationsConfig: any;
+    optimisticItemStatus: Record<string, string>;
+    setOptimisticItemStatus: (val: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => void;
 }

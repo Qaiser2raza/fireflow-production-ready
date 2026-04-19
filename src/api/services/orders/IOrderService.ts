@@ -18,6 +18,7 @@ export interface IOrderService {
     updateOrder(id: string, data: UpdateOrderDTO): Promise<orders>;
     getOrderDetails(id: string): Promise<orders | null>;
     validateOrder(data: CreateOrderDTO, context?: 'DRAFT' | 'FIRE'): { valid: boolean; errors: string[] };
-    fireOrderToKitchen(orderId: string, io: any): Promise<orders>;
+    fireOrderToKitchen(orderId: string, io: any, metadata?: { staffId: string; sessionId?: string }): Promise<orders>;
+    recallOrderBatch(orderId: string, io: any, metadata: { staffId: string; sessionId?: string }): Promise<orders>;
     deleteOrder(id: string): Promise<boolean>;
 }

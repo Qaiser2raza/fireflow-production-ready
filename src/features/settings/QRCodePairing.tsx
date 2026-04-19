@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { QrCode, Copy, RefreshCw, CheckCircle2, Clock, Smartphone, AlertCircle, X } from 'lucide-react';
 import { useAppContext } from '../../client/App';
 import { useRestaurant } from '../../client/RestaurantContext';
@@ -42,8 +42,19 @@ export const QRCodePairing: React.FC = () => {
     const { servers } = useAppContext();
 
     // Fetch paired devices on mount and every 10s
+    const hasInitiallyFetched = useRef(false);
+
     useEffect(() => {
-        fetchDevices();
+        // Skip if no restaurant ID yet
+        if (!currentRestaurant?.id) return;
+        
+        // Only fetch immediately on first valid ID
+        if (!hasInitiallyFetched.current) {
+            hasInitiallyFetched.current = true;
+            fetchDevices();
+        }
+        
+        // Keep polling interval
         const interval = setInterval(fetchDevices, 10000);
         return () => clearInterval(interval);
     }, [currentRestaurant?.id]);

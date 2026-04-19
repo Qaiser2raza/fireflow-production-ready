@@ -22,10 +22,10 @@ router.get('/current', async (req, res) => {
 // Open a new session
 router.post('/open', requireRole('CASHIER', 'MANAGER', 'ADMIN'), async (req, res) => {
     try {
-        const { restaurantId, staffId, openingFloat } = req.body;
+        const { restaurantId, staffId, openingFloat, terminalId } = req.body;
         if (!restaurantId || !staffId) return res.status(400).json({ success: false, error: 'Missing params' });
         
-        const session = await CashierSessionService.openSession(restaurantId, staffId, Number(openingFloat || 0));
+        const session = await CashierSessionService.openSession(restaurantId, staffId, Number(openingFloat || 0), terminalId);
         res.json({ success: true, session });
     } catch (e: any) {
         res.status(500).json({ success: false, error: e.message });
@@ -35,10 +35,10 @@ router.post('/open', requireRole('CASHIER', 'MANAGER', 'ADMIN'), async (req, res
 // Close an existing session
 router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN'), async (req, res) => {
     try {
-        const { sessionId, actualCash, closedBy, notes } = req.body;
+        const { sessionId, actualCash, withdrawnAmount, closedBy, notes } = req.body;
         if (!sessionId || !closedBy) return res.status(400).json({ success: false, error: 'Missing params' });
         
-        const session = await CashierSessionService.closeSession(sessionId, Number(actualCash || 0), closedBy, notes);
+        const session = await CashierSessionService.closeSession(sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
         res.json({ success: true, session });
     } catch (e: any) {
         res.status(500).json({ success: false, error: e.message });

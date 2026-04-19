@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../client/App';
+import { OrderStatus } from '../../shared/types';
 import { ActionRibbon } from './components/ActionRibbon';
 import { TableCard } from './components/TableCard';
 import { RecallModal } from './components/RecallModal';
@@ -26,7 +27,14 @@ export const FloorManagementView: React.FC = () => {
 
     // Get dine-in orders
     const dineInOrders = useMemo(() => {
-        return orders.filter(o => o.type === 'DINE_IN' && o.payment_status !== 'PAID' && o.status !== 'CANCELLED');
+        // v4.5: Keep orders visible in the hub through their entire lifecycle
+        // until explicitly cleared (VOIDED/CANCELLED). 
+        // PAID orders are included so they stay visible until vacated.
+        return orders.filter(o => 
+            o.type === 'DINE_IN' && 
+            o.status !== OrderStatus.CANCELLED && 
+            o.status !== OrderStatus.VOIDED
+        );
     }, [orders]);
 
     // Hall Capacity Stats

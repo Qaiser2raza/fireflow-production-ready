@@ -56,9 +56,9 @@ router.get('/', async (req, res) => {
             };
         });
 
-        res.json(enriched);
+        res.json({ success: true, accounts: enriched });
     } catch (e: any) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 

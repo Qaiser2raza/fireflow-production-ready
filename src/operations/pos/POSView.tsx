@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { MenuItem, OrderItem, OrderType } from '../../shared/types';
 import { useAppContext } from '../../client/contexts/AppContext';
-import { Search, X, Edit2, Plus, Minus, Loader2, Utensils, Flame, ShoppingBag, Bike, Users, Banknote, Printer, History, FileText } from 'lucide-react';
+import { Search, X, Edit2, Plus, Minus, Loader2, Utensils, Flame, ShoppingBag, Bike, Users, Banknote, Printer, History } from 'lucide-react';
 import { useDebounce } from '../../hooks/useDebounce';
 import { CustomerQuickAdd } from './components/CustomerQuickAdd';
 import { TokenDisplayBanner } from './components/TokenDisplayBanner';
@@ -11,16 +11,18 @@ import { PaymentModal } from './components/PaymentModal';
 import { ReceiptPreviewModal } from '../../shared/components/ReceiptPreviewModal';
 import { calculateBill, getDefaultBillConfig } from '../../lib/billEngine';
 import { RecentOrdersModal } from './components/RecentOrdersModal';
-import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 import { VariantSelectionModal } from './components/VariantSelectionModal';
-import { MenuItemVariant } from '../../shared/types';
+import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 export const POSView: React.FC = () => {
   const {
     addOrder, updateOrder, fireOrder, orders,
     orderToEdit, setOrderToEdit, setActiveView, currentUser, menuItems, menuCategories,
-    tables, addNotification, customers, processPayment, operationsConfig, updateOrderStatus
+    tables, addNotification, customers, processPayment, operationsConfig, activeSession, setActiveSession
   } = useAppContext();
+
+
+  const isWaitstaff = ['WAITER', 'SERVER', 'CHEF'].includes(currentUser?.role || '');
 
   // UI & Order State
   const [activeCategory, setActiveCategory] = useState<string>('trending');
@@ -31,8 +33,8 @@ export const POSView: React.FC = () => {
   const [estimatedPickupTime, setEstimatedPickupTime] = useState<Date | undefined>(undefined);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
-  const [receiptAutoPrint, setReceiptAutoPrint] = useState(false);
-  const [receiptOverrideOrder, setReceiptOverrideOrder] = useState<any>(null);
+  const [autoPrintReceipt, setAutoPrintReceipt] = useState(false);
+  const [receiptPreviewOrder, setReceiptPreviewOrder] = useState<any>(null);
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
@@ -56,7 +58,6 @@ export const POSView: React.FC = () => {
   const [deliveryAddress, setDeliveryAddress] = useState<string>('');
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [isCustomerLoading, setIsCustomerLoading] = useState(false);
-  const [activeSession, setActiveSession] = useState<any>(null);
   const defaultsAppliedRef = useRef(false);
 
   const debouncedPhone = useDebounce(customerPhone, 400);
@@ -71,7 +72,16 @@ export const POSView: React.FC = () => {
 
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showRecentOrders, setShowRecentOrders] = useState(false);
-  const [itemToSelectVariants, setItemToSelectVariants] = useState<MenuItem | null>(null);
+
+  // Variant selection state
+  const [showVariantModal, setShowVariantModal] = useState(false);
+  const [variantTargetItem, setVariantTargetItem] = useState<MenuItem | null>(null);
+
+  // Session modal state
+  const [showOpenSessionModal, setShowOpenSessionModal] = useState(false);
+  const [openingFloat, setOpeningFloat] = useState('0');
+  const [pendingSettleOrderData, setPendingSettleOrderData] = useState<{orderId: string, payload: any} | null>(null);
+  const [isOpeningSession, setIsOpeningSession] = useState(false);
 
   // Track mobile breakpoint
   useEffect(() => {
@@ -93,8 +103,7 @@ export const POSView: React.FC = () => {
         return; 
       }
 
-      console.log('[POS] Loading order to edit:', orderToEdit.id);
-      // Load order items
+      // Load order items — include all routing/variant fields so cart deduplication and KDS routing work
       const mappedItems: OrderItem[] = (orderToEdit.order_items || []).map(item => ({
         id: item.id,
         menu_item_id: item.menu_item_id,
@@ -104,8 +113,11 @@ export const POSView: React.FC = () => {
         item_name: item.item_name,
         category: item.category,
         station: item.station,
+        station_id: (item as any).station_id,
+        variant_id: (item as any).variant_id,
         item_status: item.item_status,
-        modifications: item.modifications
+        modifications: item.modifications,
+        menu_item: (item as any).menu_item || (item as any).menu_items
       }));
 
       setCurrentOrderItems(mappedItems);
@@ -113,17 +125,12 @@ export const POSView: React.FC = () => {
       setOrderType(orderToEdit.type as OrderType);
 
       // Load type-specific data
-      console.log('[POS] Order Type:', orderToEdit.type);
       if (orderToEdit.type === 'DINE_IN') {
-        console.log('[POS] Dine In Data:', orderToEdit.dine_in_orders);
-
-        // Try to get data from relation first, then fallback to root fields
         const dineIn = orderToEdit.dine_in_orders?.[0];
         const tableId = dineIn?.table_id || orderToEdit.table_id;
         const guests = dineIn?.guest_count || orderToEdit.guest_count;
 
         if (tableId) {
-          console.log('[POS] Setting Table ID:', tableId);
           setSelectedTableId(tableId);
           setGuestCount(guests || 2);
         }
@@ -138,29 +145,23 @@ export const POSView: React.FC = () => {
         setDeliveryAddress(deliveryData?.delivery_address || deliveryData?.deliveryAddress || orderToEdit.delivery_address || orderToEdit.deliveryAddress || '');
         setCustomerId(orderToEdit.customer_id || null);
       }
+      // Restore saved breakdown toggle states so totals match what was stored
+      const savedBreakdown = (orderToEdit as any).breakdown;
+      if (savedBreakdown) {
+        setTaxEnabled(savedBreakdown.tax_enabled ?? true);
+        setServiceChargeEnabled(savedBreakdown.service_charge_enabled ?? false);
+        setDiscountValue(savedBreakdown.discount_value ?? 0);
+        setDiscountType(savedBreakdown.discount_type ?? 'flat');
+        setDiscountReason(savedBreakdown.discountReason ?? '');
+        if (orderToEdit.type === 'DELIVERY') {
+          setDeliveryFeeEnabled(savedBreakdown.delivery_fee_enabled ?? true);
+          setDeliveryFeeValue(Number(savedBreakdown.delivery_fee ?? 0));
+        }
+      }
 
       addNotification('info', `Editing Order #${orderToEdit.id.slice(-6)}`);
     }
   }, [orderToEdit]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync item statuses when server data updates (Fix: Prevent POS from resetting KDS states)
-  useEffect(() => {
-    if (activeOrderId && activeOrderData?.order_items) {
-        setCurrentOrderItems(prev => {
-            return prev.map(localItem => {
-                // Find matching server item by id
-                const serverItem = activeOrderData.order_items?.find(
-                    si => si.id === localItem.id
-                );
-                if (serverItem && localItem.item_status !== 'DRAFT') {
-                    // Sync server status but keep DRAFT items as DRAFT
-                    return { ...localItem, item_status: serverItem.item_status };
-                }
-                return localItem;
-            });
-        });
-    }
-  }, [activeOrderData?.order_items]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Customer Lookup logic
   useEffect(() => {
@@ -227,7 +228,7 @@ export const POSView: React.FC = () => {
       setDiscountType(savedBreakdown.discount_type ?? (editOrder.discount_type || defaultDiscType));
       setDiscountReason(editOrder.discount_reason || editOrder.discountReason || '');
       
-      setDeliveryFeeValue(Number(orderToEdit.delivery_fee || savedBreakdown.deliveryFee || typeDefaults?.delivery_fee || cfg.default_delivery_fee || 0));
+      setDeliveryFeeValue(Number(orderToEdit.delivery_fee || savedBreakdown.deliveryFee || typeDefaults?.delivery_fee || cfg.default_delivery_fee || cfg.defaultDeliveryFee || 0));
     } else {
       // New Order - strictly follow defaults
       // Reset defaults when orderType changes even if defaultsAppliedRef is true,
@@ -256,7 +257,7 @@ export const POSView: React.FC = () => {
   }, [currentUser]);
 
   const checkActiveSession = async () => {
-    if (!currentUser) return;
+    if (!currentUser || activeSession) return;
     try {
       const res = await fetchWithAuth(`${(window.location.origin + '/api')}/cashier/current?restaurantId=${currentUser.restaurant_id}&staffId=${currentUser.id}`);
       const data = await res.json();
@@ -302,19 +303,7 @@ export const POSView: React.FC = () => {
       }
     });
 
-    const derivedStatus = orderToEdit?.status || activeOrderData?.status;
-
-    // Check if there are any items that haven't been processed yet
-    const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'PENDING');
-
-    // DEBUG: Trace Status for Button
-    console.log('[POS Debug] Order Status Check:', {
-      activeOrderId,
-      activeOrderDataStatus: activeOrderData?.status,
-      orderToEditStatus: orderToEdit?.status,
-      derivedStatus,
-      hasUnfiredItems
-    });
+    // Calculate dynamic values for rendering
 
     // 2. Add categories found in items that aren't already in the list
     menuItems?.forEach(i => {
@@ -389,71 +378,60 @@ export const POSView: React.FC = () => {
   const isReadOnly = useMemo(() => {
     if (!activeOrderData) return false;
 
-    // Check Status
+    // 1. Status-based lock
     const isStatusLocked = [
       'CLOSED',
       'CANCELLED',
       'VOIDED'
     ].includes(activeOrderData.status);
 
-    // Check Driver Assignment (In Transit)
+    // 3. Logistics-based lock (In Transit)
     const isDriverAssigned = !!(activeOrderData.assigned_driver_id || activeOrderData.delivery_orders?.[0]?.driver_id);
 
     return isStatusLocked || isDriverAssigned;
-  }, [activeOrderData]);
+  }, [activeOrderData, currentUser?.role]);
 
-  const addToOrder = (item: MenuItem, variant?: MenuItemVariant) => {
-    if (!item.is_available || isAlreadyPaid || isReadOnly) return;
-    
-    const unitPrice = variant ? Number(variant.price) : Number(item.price);
-    const itemName = variant ? `${item.name} (${variant.name})` : item.name;
-    const variantId = variant?.id;
+  const addToOrder = (item: MenuItem, selectedVariant?: { id: string; name: string; price: number }) => {
+    const isItemAvailable = item.is_available ?? item.available ?? true;
+    if (!isItemAvailable || isAlreadyPaid || isReadOnly) return;
+
+    const effectivePrice = selectedVariant ? selectedVariant.price : item.price;
+    const effectiveName = selectedVariant ? `${item.name} (${selectedVariant.name})` : item.name;
+    const variantId = selectedVariant?.id || undefined;
 
     setCurrentOrderItems(prev => {
-      // Find matching item (same ID AND same Variant ID)
-      const existingIndex = prev.findIndex(i => 
-        i.menu_item_id === item.id && 
-        i.variant_id === variantId && 
-        i.item_status === 'DRAFT'
+      // When adding with a variant, match on both menu_item_id AND variant_id
+      const existingIndex = prev.findIndex(i =>
+        i.menu_item_id === item.id &&
+        i.item_status === 'DRAFT' &&
+        (i.variant_id || undefined) === variantId
       );
-      
       if (existingIndex >= 0) {
         const newItems = [...prev];
-        newItems[existingIndex] = { 
-          ...newItems[existingIndex], 
-          quantity: newItems[existingIndex].quantity + 1,
-          total_price: (newItems[existingIndex].quantity + 1) * unitPrice
-        };
+        newItems[existingIndex] = { ...newItems[existingIndex], quantity: newItems[existingIndex].quantity + 1 };
         return newItems;
       }
-
       return [{
         id: crypto.randomUUID(),
         menu_item_id: item.id,
-        variant_id: variantId,
         menu_item: item,
-        item_name: itemName,
+        item_name: effectiveName,
         quantity: 1,
         item_status: 'DRAFT',
-        unit_price: unitPrice,
-        total_price: unitPrice,
+        unit_price: effectivePrice,
+        total_price: effectivePrice,
         category: item.category,
         station: item.station,
-        station_id: item.station_id
+        station_id: item.station_id,
+        variant_id: variantId,
       } as any, ...prev];
     });
-
-    if (itemToSelectVariants) setItemToSelectVariants(null);
   };
 
-  const updateQuantity = (menuItemId: string, delta: number, variantId?: string) => {
+  const updateQuantity = (itemId: string, delta: number) => {
     if (isAlreadyPaid || isReadOnly) return;
     setCurrentOrderItems(prev => {
-      const index = prev.findIndex(i => 
-        i.menu_item_id === menuItemId && 
-        i.item_status === 'DRAFT' && 
-        i.variant_id === variantId
-      );
+      const index = prev.findIndex(i => i.id === itemId && i.item_status === 'DRAFT');
       if (index === -1) return prev;
       const newItems = [...prev];
       const newQty = newItems[index].quantity + delta;
@@ -479,19 +457,14 @@ export const POSView: React.FC = () => {
     }
 
     try {
+      setIsSubmitting(true);
       // v3.0 Mapping: All flow is through ACTIVE status
       const nextStatus = 'ACTIVE';
       const updatedItems = currentOrderItems.map(item => {
-        if (shouldFire && item.item_status === 'DRAFT') {
-          // Explicitly Fire: Transition DRAFT items to PENDING or DONE
-          const shouldSkipPrep = item.menu_item?.requires_prep === false || item.station === 'NO_PRINT';
-          return { ...item, item_status: shouldSkipPrep ? 'DONE' : 'PENDING' };
-        }
-        // For non-DRAFT items, use the server's latest status if available
-        const serverItem = activeOrderData?.order_items?.find(si => si.id === item.id);
-        if (serverItem && item.item_status !== 'DRAFT') {
-          return { ...item, item_status: serverItem.item_status };
-        }
+        // We no longer mutate item_status here.
+        // It remains 'DRAFT' and the backend's fireOrderToKitchen endpoint 
+        // handles the transition to 'PENDING/DONE', generation of a fire_batch,
+        // and accurate broadcasting to kitchen/printers.
         return item;
       });
 
@@ -507,20 +480,7 @@ export const POSView: React.FC = () => {
         customer_id: customerId,
         delivery_address: deliveryAddress,
         total: breakdown.total,
-        discount_reason: discountReason,
-        breakdown: {
-          tax_enabled: taxEnabled,
-          service_charge_enabled: serviceChargeEnabled,
-          delivery_fee_enabled: deliveryFeeEnabled,
-          tax: breakdown.tax,
-          serviceCharge: breakdown.serviceCharge,
-          deliveryFee: breakdown.deliveryFee,
-          discount: breakdown.discount,
-          tax_type: breakdown.tax_type,
-          discount_type: discountType,
-          discount_value: discountValue,
-          discountReason: discountReason
-        }
+        discount_reason: discountReason
       };
 
       const result = activeOrderId
@@ -531,6 +491,35 @@ export const POSView: React.FC = () => {
         // Capture the server-side order ID if this was a new order
         if (!activeOrderId && result.id) {
           setActiveOrderId(result.id);
+        }
+
+        // Sync local cart items with server-returned items
+        // This ensures client UUIDs are replaced with real DB IDs
+        if (result.order_items && result.order_items.length > 0) {
+          setCurrentOrderItems(result.order_items.map((si: any) => ({
+            id: si.id,
+            menu_item_id: si.menu_item_id,
+            quantity: si.quantity,
+            unit_price: Number(si.unit_price),
+            total_price: Number(si.total_price),
+            item_name: si.item_name,
+            category: si.category,
+            station: si.station,
+            station_id: si.station_id,
+            item_status: si.item_status,
+            variant_id: si.variant_id,
+            modifications: si.modifications,
+            menu_item: si.menu_items || si.menu_item
+          })));
+        }
+
+        // Keep the global context in sync so returning to POS doesn't load a stale snapshot
+        if (setOrderToEdit) {
+            setOrderToEdit(result);
+        }
+
+        if (shouldFire && (result.id || activeOrderId)) {
+            await fireOrder(result.id || activeOrderId!, orderType);
         }
 
         addNotification('success', shouldFire ? 'Order Saved & Fired' : 'Order Saved');
@@ -621,11 +610,14 @@ export const POSView: React.FC = () => {
               <MenuItemCard
                 key={item.id}
                 item={item}
-                onSelect={() => {
-                  if (item.variant && item.variant.length > 0) {
-                    setItemToSelectVariants(item);
+                onSelect={(selectedItem) => {
+                  if (selectedItem.variant && selectedItem.variant.length > 0) {
+                    // Item has variants → open selection modal
+                    setVariantTargetItem(selectedItem);
+                    setShowVariantModal(true);
                   } else {
-                    addToOrder(item);
+                    // No variants → add directly
+                    addToOrder(selectedItem);
                     if (isMobile) setShowMobileCart(true);
                   }
                 }}
@@ -633,18 +625,6 @@ export const POSView: React.FC = () => {
             ))}
           </div>
         </div>
-
-        {/* Portions / Variant Selection Modal */}
-        {itemToSelectVariants && (
-          <VariantSelectionModal
-            item={itemToSelectVariants}
-            onSelect={(variant) => {
-              addToOrder(itemToSelectVariants, variant);
-              if (isMobile) setShowMobileCart(true);
-            }}
-            onClose={() => setItemToSelectVariants(null)}
-          />
-        )}
       </div>
 
       {/* RIGHT: CART & CHECKOUT */}
@@ -728,10 +708,10 @@ export const POSView: React.FC = () => {
                   </div>
                 </div>
 
-                {!isReadOnly && (
+                {!isReadOnly && item.item_status === 'DRAFT' && (
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => updateQuantity(item.menu_item_id, -1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
-                    <button onClick={() => updateQuantity(item.menu_item_id, 1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                    <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
+                    <button onClick={() => updateQuantity(item.id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
                   </div>
                 )}
                 <div className="font-bold text-white text-sm font-mono tracking-tight">
@@ -903,72 +883,25 @@ export const POSView: React.FC = () => {
               </button>
 
               <button
-                disabled={currentOrderItems.length === 0 || isSubmitting || (!currentOrderItems.some(i => i.item_status === 'DRAFT') && currentUser?.role === 'SERVER')}
+                disabled={currentOrderItems.length === 0 || isSubmitting}
                 onClick={async () => {
                   const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
 
                   if (hasUnfiredItems) {
-                    // Quick fire logic
-                    const payload: any = {
-                      type: orderType,
-                      items: currentOrderItems,
-                      discount_reason: 'Fire Order',
-                      guest_count: guestCount,
-                      customer_phone: customerPhone,
-                      customer_name: customerName,
-                      delivery_address: deliveryAddress,
-                      table_id: selectedTableId,
-                      session_id: activeSession?.id,
-                      breakdown: {
-                        total: breakdown.total,
-                        tax: breakdown.tax,
-                        serviceCharge: breakdown.serviceCharge,
-                        discount: breakdown.discount,
-                        deliveryFee: breakdown.deliveryFee,
-                        tax_enabled: taxEnabled,
-                        service_charge_enabled: serviceChargeEnabled,
-                        delivery_fee_enabled: deliveryFeeEnabled,
-                        discount_type: discountType,
-                        discount_value: discountValue
-                      }
-                    };
-                    
-                    setIsSubmitting(true);
                     try {
-                      if (activeOrderId) {
-                        await updateOrder({ ...payload, id: activeOrderId, status: 'ACTIVE' });
-                        await fireOrder(activeOrderId, orderType);
-                      } else {
-                        const result = await addOrder({ ...payload, status: 'ACTIVE' });
-                        if (result?.id) {
-                          setActiveOrderId(result.id);
-                          await fireOrder(result.id, orderType);
-                        }
-                      }
-                      addNotification('success', 'Order fired to kitchen!');
+                      await handleOrderAction(true);
                     } catch (e: any) {
                       addNotification('error', e.message);
-                    } finally {
-                      setIsSubmitting(false);
-                    }
-                  } else if (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') {
-                    const status = (activeOrderData || orderToEdit)?.status;
-                    if (status === 'READY' || status === 'SERVED') {
-                      try {
-                        setIsSubmitting(true);
-                        await updateOrderStatus((activeOrderData || orderToEdit)!.id, 'BILL_REQUESTED' as any);
-                        addNotification('success', 'Bill requested successfully!');
-                      } catch (e: any) {
-                        addNotification('error', e.message);
-                      } finally {
-                        setIsSubmitting(false);
-                      }
                     }
                   } else {
-                    setShowPaymentModal(true);
+                    if (isWaitstaff) {
+                        setShowReceiptPreview(true);
+                    } else {
+                        setShowPaymentModal(true);
+                    }
                   }
                 }}
-                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/40' : 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (isWaitstaff ? 'bg-slate-700 hover:bg-slate-600 shadow-slate-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40')}`}
               >
                 {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
                   <>
@@ -977,22 +910,10 @@ export const POSView: React.FC = () => {
                         <Flame size={14} className="animate-pulse" />
                         <span>Fire Order</span>
                       </>
-                    ) : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? (
-                      ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? (
-                        <>
-                          <FileText size={14} />
-                          <span>Request Bill</span>
-                        </>
-                      ) : (
-                        <>
-                          <Utensils size={14} />
-                          <span>Order Fired</span>
-                        </>
-                      )
                     ) : (
                       <>
-                        <Banknote size={14} />
-                        <span>Process Payment</span>
+                        {isWaitstaff ? <Printer size={14} /> : <Banknote size={14} />}
+                        <span>{isWaitstaff ? 'Request Bill' : 'Process Payment'}</span>
                       </>
                     )}
                   </>
@@ -1052,10 +973,10 @@ export const POSView: React.FC = () => {
                       </div>
                     </div>
 
-                    {!isReadOnly && (
+                    {!isReadOnly && item.item_status === 'DRAFT' && (
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => updateQuantity(item.menu_item_id, -1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
-                        <button onClick={() => updateQuantity(item.menu_item_id, 1, item.variant_id)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
+                        <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
+                        <button onClick={() => updateQuantity(item.id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
                       </div>
                     )}
                     <div className="font-bold text-white text-sm font-mono tracking-tight">
@@ -1097,54 +1018,19 @@ export const POSView: React.FC = () => {
 
                 <button
                   disabled={currentOrderItems.length === 0 || isSubmitting}
-                  onClick={async () => {
+                  onClick={() => {
                     const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
                     if (hasUnfiredItems) {
-                      handleOrderAction(true);
-                    } else if (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') {
-                      const status = (activeOrderData || orderToEdit)?.status;
-                      if (status === 'READY' || status === 'SERVED') {
-                        try {
-                          setIsSubmitting(true);
-                          await updateOrderStatus((activeOrderData || orderToEdit)!.id, 'BILL_REQUESTED' as any);
-                          addNotification('success', 'Bill requested successfully!');
-                        } catch (e: any) {
-                          addNotification('error', e.message);
-                        } finally {
-                          setIsSubmitting(false);
-                        }
-                      }
+                        handleOrderAction(true);
+                    } else if (isWaitstaff) {
+                        setShowReceiptPreview(true);
                     } else {
-                      setShowPaymentModal(true);
+                        setShowPaymentModal(true);
                     }
                   }}
-                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/40' : 'bg-slate-700' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'}`}
+                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (isWaitstaff ? 'bg-slate-700 hover:bg-slate-600 shadow-slate-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40')}`}
                 >
-                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
-                    currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
-                      <>
-                        <Flame size={14} className="animate-pulse" />
-                        <span>Fire</span>
-                      </>
-                    ) : (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') ? (
-                      ((activeOrderData || orderToEdit)?.status === 'READY' || (activeOrderData || orderToEdit)?.status === 'SERVED') ? (
-                        <>
-                          <FileText size={14} />
-                          <span>Bill</span>
-                        </>
-                      ) : (
-                        <>
-                          <Utensils size={14} />
-                          <span>Fired</span>
-                        </>
-                      )
-                    ) : (
-                      <>
-                        <Banknote size={14} />
-                        <span>Pay</span>
-                      </>
-                    )
-                  )}
+                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (currentOrderItems.some(i => i.item_status === 'DRAFT') ? <><Flame size={14} className="animate-pulse" /><span>Fire</span></> : (isWaitstaff ? <><Printer size={14}/><span>Bill</span></> : <><Banknote size={14} /><span>Pay</span></>))}
                 </button>
               </div>
             </div>
@@ -1162,19 +1048,131 @@ export const POSView: React.FC = () => {
         />
       )}
 
+      {/* Open Session Modal */}
+      {showOpenSessionModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#0B1120] w-full max-w-md rounded-3xl border border-white/10 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-gradient-to-r from-blue-500/10 to-transparent">
+              <div>
+                <h2 className="text-xl font-bold text-white tracking-tight">Open Cashier Session</h2>
+                <p className="text-slate-400 text-sm font-medium mt-1">A session is required to settle payments</p>
+              </div>
+              <button 
+                onClick={() => setShowOpenSessionModal(false)}
+                className="p-2 hover:bg-white/10 rounded-full text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 flex flex-col gap-4">
+              <div>
+                <label className="block text-[10px] font-black tracking-widest text-slate-500 uppercase mb-2">
+                  Opening Float Amount (Rs.)
+                </label>
+                <input
+                  type="number"
+                  value={openingFloat}
+                  onChange={(e) => setOpeningFloat(e.target.value)}
+                  disabled={isOpeningSession}
+                  className="w-full bg-black/40 border border-white/10 text-white rounded-xl px-4 py-3 font-mono text-lg focus:outline-none focus:border-blue-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-white/5 bg-slate-900/50 flex justify-end gap-3">
+              <button
+                onClick={() => setShowOpenSessionModal(false)}
+                className="px-6 py-2.5 rounded-xl font-bold text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!currentUser?.restaurant_id) return;
+                  setIsOpeningSession(true);
+                  try {
+                    const res = await fetchWithAuth('/api/cashier/open', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        restaurant_id: currentUser.restaurant_id,
+                        opened_by: currentUser.id,
+                        opening_float: Number(openingFloat) || 0
+                      })
+                    });
+                    if (!res.ok) {
+                       const errData = await res.json().catch(() => ({}));
+                       throw new Error(errData.error || 'Failed to open session');
+                    }
+                    
+                    setShowOpenSessionModal(false);
+                    
+                    // Resume pending settlement
+                    if (pendingSettleOrderData) {
+                         const ok = await processPayment(
+                             pendingSettleOrderData.orderId, 
+                             pendingSettleOrderData.payload
+                         );
+                         if (ok) {
+                             resetPad();
+                             setPendingSettleOrderData(null);
+                         } else {
+                             // Let user retry payment manually if it failed after session open
+                             setShowPaymentModal(true);
+                         }
+                    }
+                  } catch(e: any) {
+                     addNotification('error', e.message);
+                  } finally {
+                    setIsOpeningSession(false);
+                  }
+                }}
+                disabled={isOpeningSession}
+                className="px-6 py-2.5 rounded-xl font-bold bg-blue-600 text-white hover:bg-blue-500 active:scale-95 transition-all flex items-center justify-center min-w-[140px]"
+              >
+                {isOpeningSession ? <Loader2 className="animate-spin" size={18} /> : 'Open & Continue'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Variant Selection Modal */}
+      {showVariantModal && variantTargetItem && (
+        <VariantSelectionModal
+          item={variantTargetItem}
+          onSelect={(variant) => {
+            addToOrder(variantTargetItem, {
+              id: variant.id,
+              name: variant.name,
+              price: Number(variant.price),
+            });
+            setShowVariantModal(false);
+            setVariantTargetItem(null);
+            if (isMobile) setShowMobileCart(true);
+          }}
+          onClose={() => {
+            setShowVariantModal(false);
+            setVariantTargetItem(null);
+          }}
+        />
+      )}
+
       {/* Payment Modal */}
       {showPaymentModal && (activeOrderData || orderToEdit) && (        <PaymentModal
           order={(activeOrderData || orderToEdit)!}
           breakdown={breakdown}
           customer={customers.find(c => c.id === customerId) || { name: customerName, phone: customerPhone, id: customerId }}
           onClose={() => setShowPaymentModal(false)}
-          onPrintReceipt={async (autoPrint, finalOrder) => {
-              const orderId = (activeOrderData || orderToEdit)?.id;
+          onPrintReceipt={async (autoPrint, order) => {
+              const orderId = order?.id || (activeOrderData || orderToEdit)?.id;
               if (orderId) {
+                  // If autoPrint is true, we set the receipt preview state but it will be hidden/immediate
                   setActiveOrderId(orderId);
-                  setReceiptAutoPrint(!!autoPrint);
-                  if (finalOrder) setReceiptOverrideOrder(finalOrder);
+                  setReceiptPreviewOrder(order || null);
                   setShowReceiptPreview(true);
+                  setAutoPrintReceipt(autoPrint || false);
               }
           }}
           onPaymentCompleteClose={() => {
@@ -1183,12 +1181,12 @@ export const POSView: React.FC = () => {
           }}
           onProcessPayment={async (total, method, tendered, _discountReason, payments, pCustomerId) => {
             const orderId = (activeOrderData || orderToEdit)?.id;
-            if (!orderId) return false;
+            if (!orderId) return;
 
             try {
               const finalCustomerId = pCustomerId || customerId;
 
-              const success = await processPayment(orderId, {
+              await processPayment(orderId, {
                 id: `txn_${Date.now()}`,
                 orderId,
                 amount: total,
@@ -1210,32 +1208,52 @@ export const POSView: React.FC = () => {
                 delivery_fee_enabled: deliveryFeeEnabled,
                 tax_type: breakdown.tax_type
               } as any);
-
-              // If success is false, processPayment failed or was intercepted.
-              // We return false to PaymentModal so it DOES NOT show the success screen.
-              if (success === false) return false;
-              
-              // Only return true if payment fully went through
-              return true;
-            } catch (error) {
+            } catch (error: any) {
+              if (error?.code === 'SESSION_REQUIRED') {
+                setShowPaymentModal(false);
+                setPendingSettleOrderData({
+                  orderId,
+                  payload: {
+                    id: `txn_${Date.now()}`,
+                    orderId,
+                    amount: total,
+                    payment_method: method,
+                    status: 'PAID',
+                    timestamp: new Date(),
+                    processedBy: 'POS',
+                    tenderedAmount: tendered,
+                    changeGiven: (tendered || 0) > total ? (tendered || 0) - total : 0,
+                    payments: payments || [{ method, amount: total }],
+                    customer_id: pCustomerId || customerId,
+                    total: total,
+                    tax: breakdown.tax,
+                    service_charge: breakdown.serviceCharge,
+                    discount: breakdown.discount,
+                    delivery_fee: breakdown.deliveryFee,
+                    tax_enabled: taxEnabled,
+                    service_charge_enabled: serviceChargeEnabled,
+                    delivery_fee_enabled: deliveryFeeEnabled,
+                    tax_type: breakdown.tax_type
+                  }
+                });
+                setShowOpenSessionModal(true);
+                return;
+              }
               console.error("Payment Error:", error);
-              return false;
             }
           }}
         />
       )}
-      {showReceiptPreview && (currentOrderItems.length > 0 || !!receiptOverrideOrder) && (
+      {showReceiptPreview && (
         <ReceiptPreviewModal
           isOpen={showReceiptPreview}
-          autoPrint={receiptAutoPrint}
-          // Pass orderId so the modal fetches fresh data from the server on open
-          orderId={receiptOverrideOrder?.id || activeOrderId || undefined}
           onClose={() => {
-              setShowReceiptPreview(false);
-              setReceiptAutoPrint(false);
-              setReceiptOverrideOrder(null);
+            setShowReceiptPreview(false);
+            setAutoPrintReceipt(false);
+            setReceiptPreviewOrder(null);
           }}
-          order={receiptOverrideOrder || {
+          autoPrint={autoPrintReceipt}
+          order={receiptPreviewOrder || {
             id: activeOrderId || 'PREVIEW',
             order_number: activeOrderData?.order_number || 'PREVIEW',
             status: activeOrderData?.status || 'DRAFT',
@@ -1252,9 +1270,9 @@ export const POSView: React.FC = () => {
             service_charge: breakdown.serviceCharge,
             delivery_fee: breakdown.deliveryFee,
             discount: breakdown.discount,
-            tax_type: breakdown.tax_type,
-            transactions: activeOrderData?.transactions || [],
-            breakdown: breakdown,
+            tax_type: breakdown.tax_type, 
+            transactions: activeOrderData?.transactions || [], 
+            breakdown: breakdown, 
             restaurant_id: currentUser?.restaurant_id || ''
           } as any}
         />
@@ -1265,15 +1283,14 @@ export const POSView: React.FC = () => {
           isOpen={showRecentOrders}
           onClose={() => setShowRecentOrders(false)}
           orders={orders}
+          tables={tables}
           activeSession={activeSession}
           onEditOrder={(order) => {
             setOrderToEdit(order);
             setShowRecentOrders(false);
           }}
           onPrintReceipt={(order) => {
-             // Pass the full live order so ReceiptPreviewModal renders real data
-             setReceiptOverrideOrder(order);
-             setReceiptAutoPrint(false);
+             setActiveOrderId(order.id);
              setShowReceiptPreview(true);
              setShowRecentOrders(false);
           }}
@@ -1300,6 +1317,7 @@ export const POSView: React.FC = () => {
           isCustomerLoading={isCustomerLoading}
           matchedCustomers={matchedCustomers}
           setShowDetailsModal={setShowDetailsModal}
+          isWaitstaff={isWaitstaff}
         />
       )}
     </div>
@@ -1325,13 +1343,14 @@ interface DetailsModalProps {
   isCustomerLoading: boolean;
   matchedCustomers: any[];
   setShowDetailsModal: (s: boolean) => void;
+  isWaitstaff: boolean;
 }
 
 const DetailsModal: React.FC<DetailsModalProps> = ({
   orderType, setOrderType, customerPhone, setCustomerPhone,
   customerName, setCustomerName, deliveryAddress, setDeliveryAddress,
   selectedTableId, setSelectedTableId, guestCount, setGuestCount,
-  tables, isCustomerLoading, matchedCustomers, setShowDetailsModal
+  tables, isCustomerLoading, matchedCustomers, setShowDetailsModal, isWaitstaff
 }) => {
   return (
     <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
@@ -1343,61 +1362,56 @@ const DetailsModal: React.FC<DetailsModalProps> = ({
 
         <div className="space-y-6">
           <div className="flex gap-2">
-            {['DINE_IN', 'TAKEAWAY', 'DELIVERY'].map(t => (
-              <button
-                key={t}
-                onClick={() => setOrderType(t as any)}
-                className={`flex-1 py-3 rounded-xl border font-bold text-xs transition-all ${orderType === t ? 'bg-gold-500 border-gold-500 text-black' : 'border-slate-800 text-slate-500 hover:border-slate-700'}`}
-              >
-                {t}
-              </button>
-            ))}
+            {(['DINE_IN', 'TAKEAWAY', 'DELIVERY'] as const).map(t => {
+              // Waiters/Servers are NOT permitted to book Delivery orders.
+              // Delivery order booking requires a Cashier with an active session.
+              const isDisabled = t === 'DELIVERY' && isWaitstaff;
+              return (
+                <button
+                  key={t}
+                  onClick={() => !isDisabled && setOrderType(t as any)}
+                  disabled={isDisabled}
+                  title={isDisabled ? 'Delivery orders must be booked by a Cashier' : undefined}
+                  className={`flex-1 py-3 rounded-xl border font-bold text-xs transition-all
+                    ${isDisabled ? 'opacity-30 cursor-not-allowed border-slate-800 text-slate-600' : ''}
+                    ${!isDisabled && orderType === t ? 'bg-gold-500 border-gold-500 text-black' : ''}
+                    ${!isDisabled && orderType !== t ? 'border-slate-800 text-slate-500 hover:border-slate-700' : ''}
+                  `}
+                >
+                  {t}
+                </button>
+              );
+            })}
           </div>
 
           {orderType === 'DINE_IN' ? (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] text-slate-500 uppercase font-bold">Table</label>
-                  <select
-                    className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1"
-                    value={selectedTableId}
-                    onChange={e => setSelectedTableId(e.target.value)}
-                  >
-                    <option value="">Select Table</option>
-                    {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] text-slate-500 uppercase font-bold">Guests</label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700 shrink-0"><Minus size={14} /></button>
-                    <input 
-                      type="number"
-                      value={guestCount === 0 ? '' : guestCount}
-                      onChange={(e) => setGuestCount(e.target.value === '' ? 0 : Number(e.target.value))}
-                      onFocus={(e) => e.target.select()}
-                      className="flex-1 min-w-0 bg-black border border-slate-700 rounded-lg p-2 text-center font-bold text-white text-lg focus:border-gold-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      placeholder="0"
-                    />
-                    <button onClick={() => setGuestCount(guestCount + 1)} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700 shrink-0"><Plus size={14} /></button>
-                  </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] text-slate-500 uppercase font-bold">Table</label>
+                <select
+                  className="w-full bg-black border border-slate-700 rounded-lg p-3 text-white mt-1"
+                  value={selectedTableId}
+                  onChange={e => setSelectedTableId(e.target.value)}
+                >
+                  <option value="">Select Table</option>
+                  {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-500 uppercase font-bold">Guests</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700"><Minus size={14} /></button>
+                  <input 
+                    type="number"
+                    value={guestCount === 0 ? '' : guestCount}
+                    onChange={(e) => setGuestCount(e.target.value === '' ? 0 : Number(e.target.value))}
+                    onFocus={(e) => e.target.select()}
+                    className="flex-1 bg-black border border-slate-700 rounded-lg p-2 text-center font-bold text-white text-lg focus:border-gold-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    placeholder="0"
+                  />
+                  <button onClick={() => setGuestCount(guestCount + 1)} className="p-2 bg-slate-800 rounded-lg text-white hover:bg-slate-700"><Plus size={14} /></button>
                 </div>
               </div>
-              {/* Optional customer for dine-in (for Khata/credit bills) */}
-              <CustomerQuickAdd
-                customerPhone={customerPhone}
-                customerName={customerName}
-                onPhoneChange={setCustomerPhone}
-                onNameChange={setCustomerName}
-                isLoading={isCustomerLoading}
-                matchedCustomers={matchedCustomers}
-                defaultExpanded={false}
-                onSelectCustomer={(customer: { phone: string; name?: string; address?: string }) => {
-                  setCustomerPhone(customer.phone);
-                  setCustomerName(customer.name || '');
-                }}
-              />
             </div>
           ) : (
             <div className="space-y-4">

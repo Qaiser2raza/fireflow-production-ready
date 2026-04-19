@@ -5,7 +5,7 @@ import { useRestaurant } from '../../client/RestaurantContext';
 import { 
   Search, X, Plus, Minus, Loader2, 
   ChevronDown, History, ShoppingBag, Bike, Utensils,
-  CheckCircle2, Flame, ShoppingCart, Map as MapIcon, ArrowLeft
+  CheckCircle2, Flame, ShoppingCart, Map as MapIcon, ArrowLeft, FileText
 } from 'lucide-react';
 import { RecallModal } from '../dashboard/components/RecallModal';
 import { TokenDisplayBanner } from './components/TokenDisplayBanner';
@@ -16,7 +16,7 @@ export const POSViewMobile: React.FC = () => {
     addOrder, updateOrder, fireOrder, calculateOrderTotal, orders,
     currentUser, menuItems, menuCategories,
     tables, addNotification, orderToEdit, setOrderToEdit,
-    customers, addCustomer, setActiveView
+    customers, addCustomer, setActiveView, updateOrderStatus
   } = useAppContext();
 
   const { currentRestaurant } = useRestaurant();
@@ -147,7 +147,7 @@ export const POSViewMobile: React.FC = () => {
       await updateOrder({
         id: activeOrderId,
         items: updatedItems,
-        status: allServed ? 'READY' : 'ACTIVE',
+        status: allServed ? OrderStatus.READY : (activeOrderData.status as any), 
         last_action_desc: 'Item served via mobile'
       } as any);
       
@@ -282,6 +282,9 @@ export const POSViewMobile: React.FC = () => {
       
       if (result) {
         if (!activeOrderId && result.id) setActiveOrderId(result.id);
+        
+        // Items are now managed by the backend (v4.6 Smart Sync)
+
         if (shouldFire) await fireOrder(result.id, orderType);
       }
       
@@ -541,7 +544,33 @@ export const POSViewMobile: React.FC = () => {
              ) : (
                 <div className="flex gap-2">
                    <button className="flex-1 py-4 bg-slate-900 border border-white/5 rounded-[2rem] font-black uppercase text-[10px] tracking-widest active:scale-95 transition-transform text-white">Print Bill</button>
-                   <button className="flex-[2] py-4 bg-green-600 rounded-[2rem] font-black uppercase text-[10px] tracking-widest active:scale-95 shadow-lg shadow-green-600/20 transition-transform text-white">Pay Now</button>
+                   {currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER' ? (
+                     ((orderToEdit)?.status === 'READY' || (orderToEdit)?.status === 'SERVED') && (
+                       <button 
+                         onClick={async () => {
+                           if (!orderToEdit?.id) return;
+                           try {
+                             setIsSubmitting(true);
+                             await updateOrderStatus(orderToEdit.id, 'BILL_REQUESTED' as any);
+                             addNotification('success', 'Bill requested successfully!');
+                           } catch (e: any) {
+                             addNotification('error', e.message);
+                           } finally {
+                             setIsSubmitting(false);
+                           }
+                         }}
+                         className="flex-[2] py-4 bg-indigo-600 rounded-[2rem] font-black uppercase text-[10px] tracking-widest active:scale-95 shadow-lg shadow-indigo-600/20 transition-transform text-white flex items-center justify-center gap-2"
+                       >
+                         {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <><FileText size={14} /><span>Bill</span></>}
+                       </button>
+                     )
+                   ) : (
+                     <button 
+                       className="flex-[2] py-4 bg-green-600 rounded-[2rem] font-black uppercase text-[10px] tracking-widest active:scale-95 shadow-lg shadow-green-600/20 transition-transform text-white"
+                     >
+                       Pay Now
+                     </button>
+                   )}
                 </div>
              )}
            </div>

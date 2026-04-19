@@ -35,7 +35,7 @@ export const TableCard: React.FC<TableCardProps> = ({
 
         // Priority: Ready > Bill Requested > Active
         if (order.status === 'BILL_REQUESTED') {
-            return { color: 'border-white bg-white/20 shadow-[0_0_15px_rgba(255,255,255,0.2)]', label: 'BILL REQUESTED', pulse: true };
+            return { color: 'border-white bg-white/20 shadow-[0_0_20px_rgba(255,255,255,0.4)]', label: 'BILL REQUESTED', pulse: true };
         }
 
         if (order.status === 'READY') {
@@ -91,7 +91,7 @@ export const TableCard: React.FC<TableCardProps> = ({
             >
                 {/* Background Micro-animation for Gold Pulse */}
                 {status.pulse && (
-                    <div className="absolute inset-0 rounded-lg bg-[#D4AF37]/5 animate-pulse" />
+                    <div className={`absolute inset-0 rounded-lg ${order?.status === 'BILL_REQUESTED' ? 'bg-white/10' : 'bg-[#D4AF37]/5'} animate-pulse`} />
                 )}
 
                 {/* Urgent Badges - Top Right */}
@@ -153,14 +153,14 @@ export const TableCard: React.FC<TableCardProps> = ({
                             <div className="flex items-center justify-center p-6 bg-orange-500/10 border border-orange-500/20 rounded-xl">
                                 <span className="text-orange-500 font-black text-[10px] tracking-[0.2em] uppercase italic">Needs Cleaning</span>
                             </div>
-                            {/* One-tap clean overlay */}
-                            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all duration-200 rounded-lg flex items-center justify-center p-4 z-20">
+                            {/* One-tap clean overlay — now always visible for clarity */}
+                            <div className="absolute inset-x-0 bottom-0 bg-black/40 backdrop-blur-md transition-all duration-200 rounded-b-lg flex items-center justify-center p-3 z-20 border-t border-white/5">
                                 <button
                                     onClick={(e) => { e.stopPropagation(); onUpdateStatus?.('AVAILABLE'); }}
-                                    className="w-full bg-orange-500 hover:bg-orange-400 active:scale-95 text-white font-black py-4 rounded-xl uppercase tracking-widest text-[10px] transition-all shadow-2xl flex items-center justify-center gap-2"
+                                    className="w-full bg-orange-500 hover:bg-orange-400 active:scale-95 text-white font-black py-3 rounded-xl uppercase tracking-widest text-[10px] transition-all shadow-2xl flex items-center justify-center gap-2"
                                 >
                                     <CheckCircle2 size={16} />
-                                    Table Cleaned → Available
+                                    Mark Cleaned
                                 </button>
                             </div>
                         </div>
@@ -264,7 +264,7 @@ export const TableCard: React.FC<TableCardProps> = ({
                                             </button>
                                         );
                                     }
-                                    if (currentUser?.role === 'SERVER') {
+                                    if (currentUser?.role === 'SERVER' || currentUser?.role === 'WAITER') {
                                         if (servedItems.length === totalItems && totalItems > 0) {
                                             return (
                                                 <button
