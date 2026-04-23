@@ -337,6 +337,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleSocketConnected = () => {
       if (currentUser?.restaurant_id) {
         socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
+        // Robust Sync: Re-fetch initial data on every connection/reconnection 
+        // to catch any changes that happened while the client was offline.
+        debouncedFetchInitialData();
       }
     };
     socketIO.on('connect', handleSocketConnected);
