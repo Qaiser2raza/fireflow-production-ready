@@ -229,7 +229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLoading(false);
       setIsRestaurantLoading(false);
     }
-  }, []);
+  }, [currentUser]); // Added currentUser dependency to fix stale closure bug
 
   // Debounced version of fetchInitialData to prevent duplicate concurrent requests
   // Groups rapid calls into a single request with 300ms delay
@@ -464,7 +464,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (table === 'staff' || table === 'rider_shifts') {
         // Staff changes or Shift changes both affect the 'drivers' state
-        // The most reliable way is to re-sync initial data to get full nested objects
+        // We use the debounced version to group the INSERT (shift) and UPDATE (staff) events 
+        // that happen simultaneously on the backend.
         debouncedFetchInitialData();
       }
 

@@ -911,9 +911,8 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             });
             if (!order) throw new Error('Order not found or unauthorized');
 
-            // DELIVERY orders must be settled via the Logistics Hub settle route.
-            // Block any attempt to settle them through the POS payment flow.
-            if (order.type === 'DELIVERY') {
+            const isLogisticsSettle = req.body.source === 'LOGISTICS';
+            if (order.type === 'DELIVERY' && !isLogisticsSettle) {
                 throw Object.assign(new Error('Delivery orders must be settled via the Logistics Hub, not through POS.'), { code: 'DELIVERY_LOGISTICS_ONLY', status: 422 });
             }
 
@@ -959,24 +958,11 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             }
 
             // 4. Accounting entry
-            if (order.type === 'DELIVERY' && order.status === 'DELIVERED') {
-                // Revenue was already journalled at dispatch/delivery.
-                // Only need to clear rider liability and confirm receipt.
-                await accounting.recordRiderSettlement({
-                    restaurantId: order.restaurant_id,
-                    riderId: order.assigned_driver_id!,
-                    amountReceived: totalReceived,
-                    orderIds: [order.id],
-                    processedBy: staffId || order.last_action_by || 'SYSTEM',
-                    settlementId: `POS-${order.id}`
-                }, tx);
-            } else {
-                // Normal sale — Dine-In, Takeaway, or direct-delivery settlement
+            // Normal sale — Dine-In, Takeaway, or direct-delivery settlement
                 await accounting.recordOrderSale(order.id, tx, {
                     amount: totalReceived,
                     paymentMethod: paymentLines[0].method
                 });
-            }
 
             return updatedOrder;
         });

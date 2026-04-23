@@ -113,7 +113,6 @@ export const LogisticsHub: React.FC = () => {
       // Capture into local consts BEFORE clearing state — state clears are async
       const idsToDispatch = [...selectedOrderIds];
       const riderId = dispatchRiderId;
-      const riderName = drivers.find(d => d.id === riderId)?.name || 'rider';
       const floatAmt = Number(dispatchFloat) || 0;
 
       // ── OPTIMISTIC UPDATE: remove orders from queue instantly ──
@@ -296,7 +295,8 @@ export const LogisticsHub: React.FC = () => {
                   paymentMethod: 'CASH',                 // backend reads 'paymentMethod'
                   payment_method: 'CASH',                // fallback alias
                   processedBy: currentUser?.id,
-                  session_id: activeSession?.id
+                  session_id: activeSession?.id,
+                  source: 'LOGISTICS'        // ← add this line
                }),
             });
             const d = await res.json();

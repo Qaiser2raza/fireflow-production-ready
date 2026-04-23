@@ -607,7 +607,6 @@ export class OrderWorkflowService {
     // Normalize to guard against DB whitespace/case artifacts
     const currentStatus = (order.status || '').trim().toUpperCase();
     const isEligibleForReady = ['ACTIVE', 'DRAFT'].includes(currentStatus);
-    const isBlockedStatus = ['READY', 'DELIVERED', 'CLOSED', 'CANCELLED'].includes(currentStatus);
 
     if (isAllFinished && isEligibleForReady) {
       await tx.orders.update({

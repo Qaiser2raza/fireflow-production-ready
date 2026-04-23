@@ -163,7 +163,7 @@ router.post('/orders/:orderId/assign-driver', async (req, res) => {
             });
 
             // 4. Update delivery_orders (only if a record exists — an empty array is truthy)
-            if (order.delivery_orders && order.delivery_orders.length > 0) {
+            if (order.delivery_orders) {
                 await tx.delivery_orders.update({
                     where: { order_id: orderId },
                     data: {
@@ -392,7 +392,7 @@ router.post('/orders/:orderId/mark-failed', async (req, res) => {
             });
 
             // Update delivery_orders: Set failed reason and clear dispatch time (only if record exists)
-            if (order.delivery_orders && order.delivery_orders.length > 0) {
+            if (order.delivery_orders) {
                 await tx.delivery_orders.update({
                     where: { order_id: orderId },
                     data: {
