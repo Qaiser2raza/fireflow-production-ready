@@ -445,6 +445,12 @@ router.post('/orders/:orderId/settle', async (req, res) => {
         const { processedBy } = req.body;
         const restaurantId = req.restaurantId!;
 
+        // Resolve session_id: prefer the validated header, fall back to body
+        const sessionId = (req as any).cashierSession?.id
+            || (req.headers['x-session-id'] as string)
+            || req.body.session_id
+            || undefined;
+
         const result = await prisma.$transaction(async (tx) => {
             const order = await tx.orders.findFirst({
                 where: { id: orderId, restaurant_id: restaurantId },
@@ -460,8 +466,9 @@ router.post('/orders/:orderId/settle', async (req, res) => {
                     status: 'CLOSED',
                     payment_status: 'PAID',
                     last_action_by: processedBy,
-                    last_action_desc: 'Order settled (partial)',
-                    last_action_at: new Date()
+                    last_action_desc: 'Order settled via logistics',
+                    last_action_at: new Date(),
+                    session_id: sessionId
                 },
                 include: {
                     delivery_orders: true,
@@ -472,11 +479,11 @@ router.post('/orders/:orderId/settle', async (req, res) => {
             await accounting.recordRiderSettlement({
                 restaurantId,
                 riderId: order.assigned_driver_id!,
-                amountReceived: order.total,
+                amountReceived: Number(order.total),
                 orderIds: [orderId],
                 processedBy,
-                settlementId: orderId,  // orderId is already a UUID — safe for ledger reference_id
-                sessionId: req.body.session_id  // ← Cross-session bridge: link settlement to the active cashier session
+                settlementId: orderId,
+                sessionId
             }, tx);
 
             return updatedOrder;
@@ -485,7 +492,6 @@ router.post('/orders/:orderId/settle', async (req, res) => {
         const io = req.app.get('io');
         if (io) {
             io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
-            // Fetch fresh staff with shift to ensure socket update is complete
             const freshStaff = await prisma.staff.findUnique({
                 where: { id: result.assigned_driver_id! },
                 include: { rider_shifts: { where: { status: 'OPEN' }, take: 1 } }

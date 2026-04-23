@@ -153,6 +153,10 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
 
     const startCamera = async () => {
         try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error("Camera API is not available (this typically requires HTTPS or localhost). Please use 'Enter Code' manually.");
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: 'environment' },
                 audio: false
@@ -166,8 +170,12 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
                 startQRScanning();
             }
         } catch (error: any) {
-            console.error('Camera access denied:', error);
-            setError('Unable to access camera. Please ensure permissions are granted.');
+            console.error('Camera access error:', error);
+            if (error.message.includes("HTTPS")) {
+                setError(error.message);
+            } else {
+                setError('Unable to access camera. Please ensure permissions are granted or use the "Enter Code" method instead.');
+            }
             setMode('method-select');
         }
     };
@@ -191,6 +199,10 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
                 const ctx = canvasRef.current.getContext('2d');
                 if (!ctx) return;
 
+                if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+                    return;
+                }
+
                 // Draw video frame to canvas
                 canvasRef.current.width = videoRef.current.videoWidth;
                 canvasRef.current.height = videoRef.current.videoHeight;
@@ -202,16 +214,39 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
 
                 if (code) {
                     try {
-                        const data = JSON.parse(code.data) as QRCodeData;
-                        if (data.type === 'device_pairing' && data.code && data.code_id) {
-                            // Valid QR code detected
-                            setQrCodeData(data);
-                            setManualCode(data.code);
+                        let parsedCode = '';
+
+                        // 1. Try to parse as JSON (old format)
+                        try {
+                            const data = JSON.parse(code.data) as QRCodeData;
+                            if (data.type === 'device_pairing' && data.code) {
+                                parsedCode = data.code;
+                            }
+                        } catch (jsonErr) {
+                            // 2. Try to parse as URL (new format: http://ip/pair?token=ABCD)
+                            try {
+                                const url = new URL(code.data);
+                                const token = url.searchParams.get('token');
+                                if (token) {
+                                    parsedCode = token;
+                                }
+                            } catch (urlErr) {
+                                // 3. If it's just the plain 6 character code directly
+                                if (code.data.length === 6 && /^[A-Z0-9]{6}$/.test(code.data)) {
+                                    parsedCode = code.data;
+                                }
+                            }
+                        }
+
+                        if (parsedCode) {
+                            setManualCode(parsedCode);
                             stopCamera();
+                            // Switch to manual entry mode and automatically show prompt
+                            setMode('manual-entry');
                             setShowDeviceNamePrompt(true);
                         }
                     } catch (e) {
-                        // Invalid QR format, keep scanning
+                        // Keep scanning
                     }
                 }
             }
@@ -287,24 +322,14 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
             return;
         }
 
-        if (!qrCodeData) {
-            setError('Missing pairing code ID. Please scan QR code first.');
-            return;
-        }
-
         setShowDeviceNamePrompt(true);
     };
 
     const handleVerifyFromPrompt = async () => {
-        if (!qrCodeData) {
-            setError('Missing pairing data');
-            return;
-        }
-
         await verifyPairingCode(
             manualCode,
-            qrCodeData.code_id,
-            qrCodeData.restaurantId
+            qrCodeData?.code_id || '',
+            qrCodeData?.restaurantId || ''
         );
     };
 
@@ -453,7 +478,7 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
                 )}
 
                 {/* === MANUAL ENTRY MODE === */}
-                {mode === 'manual-entry' && (
+                {mode === 'manual-entry' && !showDeviceNamePrompt && (
                     <Card className="bg-slate-900 border-slate-700 shadow-2xl">
                         <div className="p-8">
                             <div className="mb-6">
@@ -511,8 +536,7 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
                     </Card>
                 )}
 
-                {/* === DEVICE NAME PROMPT === */}
-                {showDeviceNamePrompt && qrCodeData && (
+                {showDeviceNamePrompt && (
                     <Card className="bg-slate-900 border-slate-700 shadow-2xl">
                         <div className="p-8">
                             <div className="mb-6">
@@ -534,9 +558,11 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
                             </div>
 
                             <div className="p-4 bg-slate-800/50 border border-slate-700 rounded-lg mb-6">
-                                <p className="text-slate-400 text-sm">
-                                    <span className="font-semibold text-white">Restaurant:</span> {qrCodeData.restaurantName}
-                                </p>
+                                {qrCodeData && (
+                                    <p className="text-slate-400 text-sm">
+                                        <span className="font-semibold text-white">Restaurant:</span> {qrCodeData.restaurantName}
+                                    </p>
+                                )}
                                 <p className="text-slate-400 text-sm mt-2">
                                     <span className="font-semibold text-white">Code:</span> {manualCode}
                                 </p>

@@ -277,6 +277,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCurrentUser(user);
       if (user.role === 'SUPER_ADMIN') {
         setActiveView('SUPER_ADMIN');
+      } else if (user.role === 'CASHIER' || user.role === 'SERVER' || user.role === 'WAITER') {
+        setActiveView('ORDER_HUB');
+      } else if (user.role === 'CHEF') {
+        setActiveView('KITCHEN');
+      } else if (user.role === 'RIDER') {
+        setActiveView('LOGISTICS');
       } else {
         setActiveView('DASHBOARD');
       }
@@ -881,8 +887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (!res.ok) {
             const err = await res.json();
             if (res.status === 402) {
-              const err402 = { code: 'SESSION_REQUIRED', status: 402 };
-              throw err402;
+              throw new Error('No active shift. Please open a cashier session before processing payment.');
             }
             throw new Error(err.message || err.error || 'Payment processing failed');
           }
@@ -950,23 +955,53 @@ const AppContent = () => {
 
   if (!currentUser) return <LoginView onLogin={login} onStartRegistration={() => setShowDevicePairing(true)} />;
 
-  const menuItems = currentUser.role === 'SUPER_ADMIN' ? [
-    { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
-  ] : [
-    { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
-    { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
-    { id: 'POS', icon: Grid, label: 'POS Control' },
-    { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
-    { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
-    { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
-    { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
-    { id: 'REGISTER', icon: CreditCard, label: 'Register' },
-    { id: 'BILLING', icon: CreditCard, label: 'Billing' },
-    { id: 'STAFF', icon: Users, label: 'Personnel' },
-    { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
-    { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
-    { id: 'SETTINGS', icon: Settings, label: 'System' },
-  ];
+  let menuItems: any[] = [];
+
+  if (currentUser.role === 'SUPER_ADMIN') {
+    menuItems = [
+      { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
+    ];
+  } else if (currentUser.role === 'CASHIER') {
+    menuItems = [
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+      { id: 'POS', icon: Grid, label: 'POS Control' },
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+      { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+      { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+      { id: 'SETTINGS', icon: Settings, label: 'System' },
+    ];
+  } else if (currentUser.role === 'SERVER' || currentUser.role === 'WAITER') {
+    menuItems = [
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+      { id: 'POS', icon: Grid, label: 'POS Control' },
+    ];
+  } else if (currentUser.role === 'CHEF') {
+    menuItems = [
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+    ];
+  } else if (currentUser.role === 'RIDER') {
+    menuItems = [
+      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+    ];
+  } else {
+    menuItems = [
+      { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+      { id: 'POS', icon: Grid, label: 'POS Control' },
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+      { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
+      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+      { id: 'REGISTER', icon: CreditCard, label: 'Register' },
+      { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+      { id: 'STAFF', icon: Users, label: 'Personnel' },
+      { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+      { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
+      { id: 'SETTINGS', icon: Settings, label: 'System' },
+    ];
+  }
 
   // Command palette commands
   const commands = [

@@ -91,8 +91,6 @@ export const KDSView: React.FC = () => {
 
 
   useEffect(() => {
-    console.log('[KDS_MOUNT] optimisticItemStatus on mount:', optimisticItemStatus);
-    
     // Set up periodic sync as a safety net for sockets
     const timer = setInterval(() => {
       if (inFlightItems.current.size > 0) return;

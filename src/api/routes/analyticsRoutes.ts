@@ -28,7 +28,7 @@ router.get('/finance/summary', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), a
         const orders = await prisma.orders.findMany({
             where: {
                 restaurant_id: restaurantId,
-                status: 'CLOSED',
+                status: { in: ['CLOSED', 'DELIVERED'] },
                 created_at: { gte: start, lte: rangeEnd }
             },
             select: { total: true, delivery_fee: true, discount: true, tax: true, service_charge: true }

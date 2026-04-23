@@ -60,11 +60,11 @@ const ManagementReports: React.FC = () => {
                 tax_liability: 'tax-liability',
                 loss_prevention: 'loss-prevention',
                 staff_performance: 'staff-performance',
-                enhanced_product_mix: 'enhanced-product-mix',
+                enhanced_product_mix: 'product-mix',
                 payout_expense: 'payout-expense',
             };
             const qs = `start=${dateRange.start.toISOString()}&end=${dateRange.end.toISOString()}`;
-            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/reports/${endpointMap[activeReport]}?${qs}`);
+            const res = await fetchWithAuth(`/api/reports/${endpointMap[activeReport]}?${qs}&format=json`);
             const json = await res.json();
             if (json.success) {
                 setData(json.data);

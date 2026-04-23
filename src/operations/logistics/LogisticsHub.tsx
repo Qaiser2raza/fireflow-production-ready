@@ -52,7 +52,7 @@ export const LogisticsHub: React.FC = () => {
       orders
          .filter(o =>
             o.type === 'DELIVERY' &&
-            o.status?.trim().toUpperCase() === 'READY' &&
+            ['ACTIVE', 'READY'].includes(o.status?.trim().toUpperCase() || '') &&
             !o.assigned_driver_id &&
             !dispatchingIds.includes(o.id)  // ← Optimistic: hide in-flight orders immediately
          )
@@ -60,7 +60,7 @@ export const LogisticsHub: React.FC = () => {
       [orders, dispatchingIds]);
 
    const activeRuns = useMemo(() =>
-      orders.filter(o => o.type === 'DELIVERY' && (o.status?.trim().toUpperCase() === 'READY') && !!o.assigned_driver_id),
+      orders.filter(o => o.type === 'DELIVERY' && ['ACTIVE', 'READY'].includes(o.status?.trim().toUpperCase() || '') && !!o.assigned_driver_id),
       [orders]);
 
    const delivered = useMemo(() =>

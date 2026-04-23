@@ -1224,6 +1224,205 @@ export class JournalEntryService {
             }, db);
         }
     }
+
+    /**
+     * POST SESSION OPEN JOURNAL
+     * ─────────────────────────────────────────────────────────────────────
+     * Confirms the opening float is in the drawer.
+     * Money comes from the Manager Safe / prior session float.
+     *
+     *   DR  1000  Cash & Cash Equivalents   float  (cash is now in drawer)
+     *   CR  1090  Manager Safe / Drawing    float  (float came from safe)
+     *
+     * Note: If this is the very first session ever (no prior 1090 balance),
+     * the debit will build the 1000 balance from the initial capital injection.
+     */
+    async recordSessionOpenJournal(params: {
+        restaurantId: string;
+        sessionId: string;
+        expectedFloat: number; // The leftover cash from last session
+        openingFloat: number;  // The actual counted float by the new cashier
+        processedBy?: string;
+    }) {
+        const variance = params.openingFloat - params.expectedFloat;
+        
+        if (variance === 0) {
+            // Perfect match with last session's leftover. 
+            // The money is already sitting in 1000 Cash. No journal entry required.
+            return;
+        }
+
+        const [cashAcc, safeAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.CASH, prisma),
+            resolveAccount(params.restaurantId, GL.MANAGER_DRAWING, prisma),
+        ]);
+
+        if (!cashAcc || !safeAcc) {
+            console.warn('[JE] recordSessionOpenJournal: Cash (1000) or Manager Safe (1090) account missing. Skipping.');
+            return;
+        }
+
+        // Idempotency: skip if already journalled for this session
+        const existing = await prisma.journal_entries.findFirst({
+            where: { reference_type: 'SESSION_OPEN', reference_id: params.sessionId }
+        });
+        if (existing) return;
+
+        const amount = new Decimal(Math.abs(variance).toString());
+        const isTopUp = variance > 0;
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'SESSION_OPEN',
+            referenceId: params.sessionId,
+            date: new Date(),
+            description: isTopUp 
+                ? `Session Opened — Float Topped Up: Rs. ${Math.abs(variance).toLocaleString()}`
+                : `Session Opened — Float Reduced: Rs. ${Math.abs(variance).toLocaleString()}`,
+            processedBy: params.processedBy,
+            lines: [
+                {
+                    accountId: isTopUp ? cashAcc.id : safeAcc.id,
+                    description: isTopUp ? 'Float topped up to drawer' : 'Float removed to Manager Safe',
+                    debit: amount,
+                    referenceType: 'SESSION_OPEN',
+                    referenceId: params.sessionId,
+                    meta: { sessionId: params.sessionId, type: 'float_adjustment' }
+                },
+                {
+                    accountId: isTopUp ? safeAcc.id : cashAcc.id,
+                    description: isTopUp ? 'Extra float issued from Manager Safe' : 'Cash removed from drawer',
+                    credit: amount,
+                    referenceType: 'SESSION_OPEN',
+                    referenceId: params.sessionId,
+                    meta: { sessionId: params.sessionId, type: 'float_adjustment' }
+                },
+            ],
+        }, prisma as any);
+    }
+
+    /**
+     * POST SVC DISTRIBUTION JOURNAL
+     * ─────────────────────────────────────────────────────────────────────
+     * Distributes service charge liability to staff in cash.
+     *
+     *   DR  2010  Service Charge Payable    total  (liability cleared)
+     *   CR  1000  Cash & Cash Equivalents   total  (cash paid to staff)
+     *
+     * One journal covers the full distribution.
+     * Individual staff amounts are recorded in the description/meta.
+     */
+    async recordSVCDistributionJournal(params: {
+        restaurantId: string;
+        sessionId: string;
+        totalAmount: number;
+        distributions: Array<{ staffId?: string; staffName: string; amount: number }>;
+        processedBy: string;
+        referenceId: string;
+    }) {
+        const [svcAcc, cashAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.SC_PAYABLE, prisma),
+            resolveAccount(params.restaurantId, GL.CASH, prisma),
+        ]);
+
+        if (!svcAcc || !cashAcc) {
+            console.warn('[JE] recordSVCDistributionJournal: SVC (2010) or Cash (1000) account missing. Skipping.');
+            return;
+        }
+
+        const amount = new Decimal(params.totalAmount.toString());
+        const distSummary = params.distributions
+            .map(d => `${d.staffName}: Rs. ${d.amount}`)
+            .join(' | ');
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'SVC_DISTRIBUTION',
+            referenceId: params.referenceId,
+            date: new Date(),
+            description: `SVC Distribution — ${distSummary}`,
+            processedBy: params.processedBy,
+            lines: [
+                {
+                    accountId: svcAcc.id,
+                    description: 'Service Charge Payable cleared',
+                    debit: amount,
+                    referenceType: 'SVC_DISTRIBUTION',
+                    referenceId: params.referenceId,
+                    meta: { sessionId: params.sessionId, distributions: params.distributions }
+                },
+                {
+                    accountId: cashAcc.id,
+                    description: `Cash paid to staff: ${distSummary}`,
+                    credit: amount,
+                    referenceType: 'SVC_DISTRIBUTION',
+                    referenceId: params.referenceId,
+                    meta: { sessionId: params.sessionId, distributions: params.distributions }
+                },
+            ],
+        }, prisma as any);
+    }
+
+    /**
+     * POST MANAGER DRAWING JOURNAL
+     * ─────────────────────────────────────────────────────────────────────
+     * Cash is physically moved from drawer to safe by manager.
+     * Can be called multiple times per session (mid-shift or at EOD).
+     *
+     *   DR  1090  Manager Safe / Drawing    amount  (safe increases)
+     *   CR  1000  Cash & Cash Equivalents   amount  (drawer decreases)
+     */
+    async recordManagerDrawingJournal(params: {
+        restaurantId: string;
+        sessionId: string;
+        amount: number;
+        notes?: string;
+        processedBy: string;
+        referenceId: string;
+    }) {
+        const [safeAcc, cashAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.MANAGER_DRAWING, prisma),
+            resolveAccount(params.restaurantId, GL.CASH, prisma),
+        ]);
+
+        if (!safeAcc || !cashAcc) {
+            console.warn('[JE] recordManagerDrawingJournal: Manager Safe (1090) or Cash (1000) account missing. Skipping.');
+            return;
+        }
+
+        if (params.amount <= 0) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'MANAGER_DRAWING',
+            referenceId: params.referenceId,
+            date: new Date(),
+            description: params.notes
+                ? `Manager Drawing — ${params.notes}`
+                : `Manager Drawing — Session ${params.sessionId.slice(-8)}`,
+            processedBy: params.processedBy,
+            lines: [
+                {
+                    accountId: safeAcc.id,
+                    description: 'Cash transferred to safe',
+                    debit: amount,
+                    referenceType: 'MANAGER_DRAWING',
+                    referenceId: params.referenceId,
+                    meta: { sessionId: params.sessionId }
+                },
+                {
+                    accountId: cashAcc.id,
+                    description: 'Cash removed from till',
+                    credit: amount,
+                    referenceType: 'MANAGER_DRAWING',
+                    referenceId: params.referenceId,
+                    meta: { sessionId: params.sessionId }
+                },
+            ],
+        }, prisma as any);
+    }
 }
 
 export const journalEntryService = new JournalEntryService();

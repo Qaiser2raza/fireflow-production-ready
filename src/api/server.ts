@@ -19,6 +19,7 @@ import orderWorkflowRoutes from './routes/orderWorkflowRoutes';
 import cashierRoutes from './routes/cashierRoutes';
 import analyticsRoutes from './routes/analyticsRoutes';
 import coaRoutes from './routes/coaRoutes';
+import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { authMiddleware } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
@@ -884,31 +885,48 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
 app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, paymentMethod, payment_method, tax, service_charge, discount, delivery_fee, total } = req.body;
-        const method = paymentMethod || payment_method || 'CASH';
-        const receivedAmount = Number(amount);
-        const staffId = req.staffId; // Use authenticated staffId
+        const {
+            paymentMethod, payment_method,
+            tax, service_charge, discount, delivery_fee, total,
+            payments // array of { method, amount } for split payments
+        } = req.body;
+        const staffId = req.staffId;
 
-        if (!receivedAmount || receivedAmount <= 0) {
-            return res.status(400).json({ error: 'Valid amount required' });
+        // sessionGateMiddleware guarantees cashierSession is valid and OPEN
+        const sessionId = (req as any).cashierSession?.id || (req.headers['x-session-id'] as string);
+
+        // Build normalised payment lines — support both single and split-payment submissions
+        const paymentLines: Array<{ method: string; amount: number }> = Array.isArray(payments) && payments.length > 0
+            ? payments.map((p: any) => ({ method: p.method || p.payment_method || 'CASH', amount: Number(p.amount) }))
+            : [{ method: paymentMethod || payment_method || 'CASH', amount: Number(total || req.body.amount) }];
+
+        const totalReceived = paymentLines.reduce((s, l) => s + l.amount, 0);
+        if (!totalReceived || totalReceived <= 0) {
+            return res.status(400).json({ error: 'Valid payment amount required' });
         }
 
         const result = await prisma.$transaction(async (tx) => {
             const order = await tx.orders.findFirst({
-                where: {
-                    id,
-                    restaurant_id: req.restaurantId // SaaS Security
-                }
+                where: { id, restaurant_id: req.restaurantId } // SaaS Security
             });
             if (!order) throw new Error('Order not found or unauthorized');
 
-            // 1. Update Order
+            // DELIVERY orders must be settled via the Logistics Hub settle route.
+            // Block any attempt to settle them through the POS payment flow.
+            if (order.type === 'DELIVERY') {
+                throw Object.assign(new Error('Delivery orders must be settled via the Logistics Hub, not through POS.'), { code: 'DELIVERY_LOGISTICS_ONLY', status: 422 });
+            }
+
+            // 1. Update Order — persist final bill figures and link to cashier session
             const updatedOrder = await tx.orders.update({
                 where: { id },
                 data: {
                     status: 'CLOSED',
                     payment_status: 'PAID',
                     closed_at: new Date(),
+                    session_id: sessionId || undefined,
+                    last_action_by: staffId || order.last_action_by || undefined,
+                    last_action_at: new Date(),
                     ...(total !== undefined && { total: Number(total) }),
                     ...(tax !== undefined && { tax: Number(tax) }),
                     ...(service_charge !== undefined && { service_charge: Number(service_charge) }),
@@ -917,46 +935,46 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                 }
             });
 
-            // 2. Create Transaction
-            await tx.transactions.create({
-                data: {
-                    restaurant_id: order.restaurant_id,
-                    order_id: order.id,
-                    amount: receivedAmount,
-                    payment_method: method,
-                    status: 'PAID',
-                    transaction_ref: `POS-${Date.now()}`
-                }
-            });
+            // 2. Create one Transaction record per payment line (supports split payments)
+            const txRef = `POS-${Date.now()}`;
+            for (const line of paymentLines) {
+                await tx.transactions.create({
+                    data: {
+                        restaurant_id: order.restaurant_id,
+                        order_id: order.id,
+                        amount: line.amount,
+                        payment_method: line.method,
+                        status: 'PAID',
+                        transaction_ref: `${txRef}-${line.method}`
+                    }
+                });
+            }
 
             // 3. Clear Table (if Dine-In)
             if (order.type === 'DINE_IN' && order.table_id) {
                 await tx.tables.update({
                     where: { id: order.table_id },
-                    data: {
-                        status: 'DIRTY',
-                        active_order_id: null
-                    }
+                    data: { status: 'DIRTY', active_order_id: null }
                 });
             }
 
-            // 4. Accounting Entry
+            // 4. Accounting entry
             if (order.type === 'DELIVERY' && order.status === 'DELIVERED') {
-                // For already delivered orders, revenue was already recorded.
-                // We only need to clear the rider's liability and record cash receipt.
+                // Revenue was already journalled at dispatch/delivery.
+                // Only need to clear rider liability and confirm receipt.
                 await accounting.recordRiderSettlement({
                     restaurantId: order.restaurant_id,
                     riderId: order.assigned_driver_id!,
-                    amountReceived: receivedAmount,
+                    amountReceived: totalReceived,
                     orderIds: [order.id],
                     processedBy: staffId || order.last_action_by || 'SYSTEM',
                     settlementId: `POS-${order.id}`
                 }, tx);
             } else {
-                // For normal sales (Dine-In/Takeaway/Direct Delivery Settle)
+                // Normal sale — Dine-In, Takeaway, or direct-delivery settlement
                 await accounting.recordOrderSale(order.id, tx, {
-                    amount: receivedAmount,
-                    paymentMethod: method
+                    amount: totalReceived,
+                    paymentMethod: paymentLines[0].method
                 });
             }
 
@@ -1100,26 +1118,38 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
     }
     const restaurant_id = req.restaurantId; // SaaS Security
     try {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
+        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }); // YYYY-MM-DD in PKT
+        const { start: todayStart, end: todayEnd } = await toUTCRange(restaurant_id, todayStr);
 
         // Revenue
         const todayOrders = await prisma.orders.findMany({
             where: {
                 restaurant_id, // SaaS Security
-                created_at: { gte: todayStart },
-                status: 'CLOSED'
+                created_at: { gte: todayStart, lte: todayEnd },
+                status: { in: ['CLOSED', 'DELIVERED'] }
             }
         });
         const revenue = todayOrders.reduce((sum: number, o: any) => sum + Number(o.total), 0);
+
+        const breakdown = {
+             dineIn: 0, takeaway: 0, delivery: 0, tax: 0, serviceCharge: 0, discount: 0
+        };
+        todayOrders.forEach((o: any) => {
+            if (o.type === 'DINE_IN') breakdown.dineIn += Number(o.total || 0);
+            if (o.type === 'TAKEAWAY') breakdown.takeaway += Number(o.total || 0);
+            if (o.type === 'DELIVERY') breakdown.delivery += Number(o.total || 0);
+            breakdown.tax += Number(o.tax || 0);
+            breakdown.serviceCharge += Number(o.service_charge || 0);
+            breakdown.discount += Number(o.discount || 0);
+        });
 
         // Top Items
         const items = await prisma.order_items.findMany({
             where: {
                 orders: {
                     restaurant_id, // SaaS Security
-                    created_at: { gte: todayStart },
-                    status: 'CLOSED'
+                    created_at: { gte: todayStart, lte: todayEnd },
+                    status: { in: ['CLOSED', 'DELIVERED'] }
                 }
             },
             include: { menu_items: true }
@@ -1137,12 +1167,48 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
             .sort((a, b) => b.qty - a.qty)
             .slice(0, 5);
 
+        // Additional live stats for the robust V3 Dashboard
+        const activeOrdersList = await prisma.orders.findMany({
+            where: {
+                restaurant_id,
+                status: { notIn: ['CLOSED', 'CANCELLED', 'VOIDED'] }
+            },
+            include: { order_items: true }
+        });
+
+        const activeOrders = activeOrdersList.length;
+        let kitchenQueue = 0;
+        let totalGuests = 0;
+        const statusBreakdown: Record<string, number> = {};
+
+        activeOrdersList.forEach((o: any) => {
+            statusBreakdown[o.status] = (statusBreakdown[o.status] || 0) + 1;
+            if (o.party_size) {
+                totalGuests += o.party_size;
+            }
+            if (o.order_items) {
+                o.order_items.forEach((i: any) => {
+                    if (['PENDING', 'PREPARING'].includes(i.item_status)) {
+                        kitchenQueue += i.quantity || 1;
+                    }
+                });
+            }
+        });
+
+        const unitAverage = todayOrders.length > 0 ? Math.round(revenue / todayOrders.length) : 0;
+
         // v3.0 analytics logic
         try {
             const result = {
-                revenue,
-                orders: todayOrders.length,
-                topItems
+                totalSales: revenue,
+                totalTransactions: todayOrders.length,
+                unitAverage,
+                activeOrders,
+                kitchenQueue,
+                totalGuests,
+                statusBreakdown,
+                topItems,
+                breakdown
             };
             res.json(result);
         } catch (e: any) {
@@ -1432,16 +1498,28 @@ app.delete('/api/menu_categories', async (req, res) => {
 app.get('/api/orders', async (req, res) => {
     const { restaurant_id } = req.query;
     try {
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
         const orders = await prisma.orders.findMany({
             where: {
                 ...(restaurant_id ? { restaurant_id: String(restaurant_id) } : {}),
-                status: { notIn: ['CLOSED', 'CANCELLED', 'VOIDED'] as any[] }
+                OR: [
+                    // Always show active / non-terminal statuses
+                    { status: { notIn: ['CLOSED', 'CANCELLED', 'VOIDED', 'DELIVERED'] as any[] } },
+                    // DELIVERED stays visible for 7 days (logistics settlement can span shifts)
+                    { status: 'DELIVERED', created_at: { gte: sevenDaysAgo } },
+                    // CLOSED/CANCELLED/VOIDED visible 24h (register & activity log)
+                    { status: { in: ['CLOSED', 'CANCELLED', 'VOIDED'] as any[] }, created_at: { gte: twentyFourHoursAgo } }
+                ]
             },
             include: {
-                order_items: true
+                order_items: true,
+                delivery_orders: true,
+                takeaway_orders: true,
+                dine_in_orders: true
             },
             orderBy: { created_at: 'desc' },
-            take: 200
+            take: 500
         });
         res.json(orders);
     } catch (e: any) {
@@ -2010,96 +2088,8 @@ app.get('/api/orders/:id', async (req, res, next) => {
     }
 });
 
-app.post('/api/orders/:id/settle', async (req, res) => {
-    const { id } = req.params;
-    const { amount, payment_method, transaction_ref, restaurant_id, staff_id } = req.body;
-
-    try {
-        const order = await prisma.orders.findUnique({
-            where: { id },
-            include: { dine_in_orders: true }
-        });
-
-        if (!order) return res.status(404).json({ error: 'Order not found' });
-
-        const result = await prisma.$transaction(async (tx) => {
-            // 1. Create Transaction
-            const transaction = await tx.transactions.create({
-                data: {
-                    restaurant_id,
-                    order_id: id,
-                    amount,
-                    payment_method,
-                    status: 'PAID',
-                    transaction_ref,
-                    created_at: new Date()
-                }
-            });
-
-            // 2. Update Order Status, Total, and Audit Trail (v3.0: CLOSED + PAID)
-            const updatedOrder = await (tx.orders as any).update({
-                where: { id },
-                data: {
-                    status: 'CLOSED', // v3.0: PAID is no longer a status, use CLOSED
-                    payment_status: 'PAID', // v3.0: Explicit payment status
-                    total: amount,
-                    last_action_by: staff_id,
-                    last_action_desc: `Settle: ${payment_method} - Rs. ${amount}`,
-                    updated_at: new Date()
-                }
-            });
-
-            // 3. If Dine-In, Release Table (Mark as DIRTY for cleanup)
-            const dineIn = order.dine_in_orders; // v3.0: Corrected from array to object access
-            if (order.type === 'DINE_IN' && dineIn) {
-                const tableId = (dineIn as any).table_id;
-                await tx.tables.update({
-                    where: { id: tableId },
-                    data: {
-                        status: 'DIRTY',
-                        active_order_id: null
-                    }
-                });
-            }
-
-            // 4. Record in Financial Ledger
-            await accounting.recordOrderSale(id, tx, {
-                amount: amount,
-                paymentMethod: payment_method
-            });
-
-            return { transaction, updatedOrder };
-        });
-
-        // 4. Notify via Socket
-        io.to(`restaurant:${restaurant_id}`).emit('db_change', {
-            table: 'orders',
-            eventType: 'UPDATE',
-            data: result.updatedOrder
-        });
-
-        io.to(`restaurant:${restaurant_id}`).emit('db_change', {
-            table: 'transactions',
-            eventType: 'INSERT',
-            data: result.transaction
-        });
-
-        if (order.type === 'DINE_IN' && order.dine_in_orders) {
-            const tableId = order.dine_in_orders.table_id;
-            const updatedTable = await prisma.tables.findUnique({ where: { id: tableId } });
-            io.to(`restaurant:${restaurant_id}`).emit('db_change', {
-                table: 'tables',
-                eventType: 'UPDATE',
-                data: updatedTable
-            });
-        }
-
-        res.json({ success: true, ...result });
-    } catch (e: any) {
-        console.error(`POST /api/orders/${id}/settle ERROR:`, e);
-        res.status(500).json({ error: e.message });
-    }
-});
+// NOTE: The canonical POST /api/orders/:id/settle route is defined above (with authMiddleware + sessionGateMiddleware).
+// The stale duplicate that existed here has been removed to prevent security regressions.
 
 // ==========================================
 // 🔐 DEVICE PAIRING ENDPOINTS (SECURE)
@@ -2129,9 +2119,10 @@ const pairingVerifyLimiter = rateLimit({
  * Auth: Required (must be logged-in staff)
  * Rate limit: 5/min per IP
  */
-app.post('/api/pairing/generate', pairingGenerateLimiter, async (req, res) => {
-    const { restaurantId } = req.body;
-    const staffId = req.headers['x-staff-id'] as string; // TODO: Replace with JWT after Phase 2b
+app.post('/api/pairing/generate', authMiddleware, pairingGenerateLimiter, async (req, res) => {
+    // Note: req.staffId and req.restaurantId are populated by authMiddleware
+    const staffId = req.staffId;
+    const restaurantId = req.restaurantId;
 
     // Input validation
     if (!restaurantId || !staffId) {
@@ -2198,8 +2189,8 @@ app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
         platform
     } = req.body;
 
-    // Input validation
-    if (!restaurantId || !codeId || !code || !deviceFingerprint || !deviceName || !platform) {
+    // Input validation (restaurantId and codeId are optional now since we can look them up via the 6-character code)
+    if (!code || !deviceFingerprint || !deviceName || !platform) {
         return res.status(400).json({ error: 'Missing required pairing fields' });
     }
 
@@ -2209,11 +2200,32 @@ app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
     }
 
     try {
-        // Verify code exists and belongs to this restaurant
+        let finalRestaurantId = restaurantId;
+        let finalCodeId = codeId;
+
+        // If client didn't provide restaurantId and codeId (e.g. manual entry or URL scan)
+        if (!finalCodeId || !finalRestaurantId) {
+            const activeCode = await prisma.pairing_codes.findFirst({
+                where: {
+                    pairing_code: code,
+                    is_used: false,
+                    expires_at: { gt: new Date() }
+                }
+            });
+
+            if (!activeCode) {
+                return res.status(404).json({ error: 'Pairing code not found, expired, or already used' });
+            }
+
+            finalCodeId = activeCode.id;
+            finalRestaurantId = activeCode.restaurant_id;
+        }
+
+        // Verify the code we found (or the one passed directly if provided)
         const pairingCode = await prisma.pairing_codes.findFirst({
             where: {
-                id: codeId,
-                restaurant_id: restaurantId
+                id: finalCodeId,
+                restaurant_id: finalRestaurantId
             }
         });
 
@@ -2221,17 +2233,9 @@ app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
             return res.status(404).json({ error: 'Pairing code not found' });
         }
 
-        // Get the staff member who created this code (for audit)
-        // In production: extract staffId from JWT. For now, we need it from somewhere.
-        // TEMPORARY: We'll use the code's used_by field after verification
-        // TODO: After JWT implementation, get staffId from token
-
-        // For now, we'll do verification first, then use the staff context
-        // This is a temporary workaround — proper auth will fix this in Phase 2b
-
         const { authToken, deviceId } = await verifyPairingCode(
-            restaurantId,
-            codeId,
+            finalRestaurantId,
+            finalCodeId,
             code,
             deviceFingerprint,
             deviceName,
@@ -2240,7 +2244,7 @@ app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
         );
 
         // Notify restaurant via Socket.IO: new device paired
-        io.to(`restaurant:${restaurantId}`).emit('device_change', {
+        io.to(`restaurant:${finalRestaurantId}`).emit('device_change', {
             type: 'device_registered',
             device_id: deviceId,
             device_name: deviceName,
@@ -2275,16 +2279,16 @@ app.post('/api/pairing/verify', pairingVerifyLimiter, async (req, res) => {
  * Auth: Required (via JWT or x-staff-id header)
  * TODO: After JWT implementation, validate token
  */
-app.get('/api/pairing/devices', async (req, res) => {
-    const staffId = req.headers['x-staff-id'] as string;
-    const restaurantId = req.headers['x-restaurant-id'] as string;
+app.get('/api/pairing/devices', authMiddleware, async (req, res) => {
+    const staffId = req.staffId;
+    const restaurantId = req.restaurantId;
 
     if (!staffId || !restaurantId) {
         return res.status(400).json({ error: 'Missing staffId or restaurantId' });
     }
 
     try {
-        const devices = await listPairedDevices(restaurantId, staffId);
+        const devices = await listPairedDevices(restaurantId as string, staffId as string);
         res.json({ success: true, devices });
     } catch (error: any) {
         console.error('[ERROR] /api/pairing/devices:', error.message);
@@ -2298,17 +2302,17 @@ app.get('/api/pairing/devices', async (req, res) => {
  * 
  * Auth: Required
  */
-app.delete('/api/pairing/devices/:deviceId', async (req, res) => {
+app.delete('/api/pairing/devices/:deviceId', authMiddleware, async (req, res) => {
     const { deviceId } = req.params;
-    const staffId = req.headers['x-staff-id'] as string;
-    const restaurantId = req.headers['x-restaurant-id'] as string;
+    const staffId = req.staffId;
+    const restaurantId = req.restaurantId;
 
     if (!staffId || !restaurantId) {
         return res.status(400).json({ error: 'Missing staffId or restaurantId' });
     }
 
     try {
-        await disableDevice(deviceId, staffId, restaurantId);
+        await disableDevice(deviceId, staffId as string, restaurantId as string);
 
         // Notify restaurant: device disabled
         io.to(`restaurant:${restaurantId}`).emit('device_change', {

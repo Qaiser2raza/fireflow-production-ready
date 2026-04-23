@@ -155,6 +155,10 @@ export async function seatPartyWithCapacityCheck(
     });
 
     if (io) {
+        // Emit db_change so ALL views (Floor, POS, KDS) update in real-time
+        io.emit('db_change', { table: 'orders', eventType: 'INSERT', data: result.order });
+        io.emit('db_change', { table: 'tables', eventType: 'UPDATE', data: result.table });
+
         io.emit('party:seated', {
             orderId: result.order.id,
             tableId: result.table.id,
@@ -270,6 +274,9 @@ export async function updateGuestCount(
     });
 
     if (io) {
+        // Emit db_change so ALL views update in real-time
+        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result.updatedOrder });
+
         io.emit('order:guest-count-updated', {
             orderId,
             tableId: order.table_id,
@@ -341,9 +348,15 @@ export async function createTable(restaurantId: string, data: any, io?: Server):
 }
 
 export async function updateTable(id: string, restaurantId: string, data: any, io?: Server): Promise<Table> {
+    // Enforce: when releasing a table to AVAILABLE, always sever the active_order_id link.
+    // This prevents the TableCard from resurrecting a ghost order and re-locking the table.
+    const finalData = data.status === 'AVAILABLE'
+        ? { ...data, active_order_id: null }
+        : data;
+
     const table = await prisma.tables.update({
         where: { id, restaurant_id: restaurantId },
-        data
+        data: finalData
     }) as unknown as Table;
     if (io) io.emit('db_change', { table: 'tables', eventType: 'UPDATE', data: table });
     return table;

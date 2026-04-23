@@ -1,33 +1,31 @@
 @echo off
-:: Request Admin Privileges automatically
->nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
-if '%errorlevel%' NEQ '0' (
-    echo Requesting administrative privileges...
-    goto UACPrompt
-) else ( goto gotAdmin )
-
-:UACPrompt
-    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
-    echo UAC.ShellExecute "cmd.exe", "/c ""%~s0""", "", "runas", 1 >> "%temp%\getadmin.vbs"
-    "%temp%\getadmin.vbs"
-    del "%temp%\getadmin.vbs"
-    exit /B
-
-:gotAdmin
-    pushd "%CD%"
-    CD /D "%~dp0"
-    echo.
-    echo ====================================================
-    echo   FIREFLOW NETWORK CONFIGURATOR
-    echo ====================================================
-    echo.
-    echo Opening Port 3001 in Windows Firewall for Mobile Access...
-    netsh advfirewall firewall add rule name="Fireflow Backend API (3001)" dir=in action=allow protocol=TCP localport=3001
-    echo.
-    echo Opening Port 3000 in Windows Firewall for UI Access...
-    netsh advfirewall firewall add rule name="Fireflow Frontend UI (3000)" dir=in action=allow protocol=TCP localport=3000
-    echo.
-    echo ====================================================
-    echo SUCCESS! Your mobile device should now be able to connect!
-    echo ====================================================
+echo ==========================================
+echo Fireflow POS - Network Firewall Configurer
+echo ==========================================
+echo.
+echo Checking for Administrator privileges...
+net session >nul 2>&1
+if %errorLevel% == 0 (
+    echo Administrator privileges confirmed.
+) else (
+    echo [ERROR] This script must be run as Administrator!
+    echo Please right-click this file and select "Run as Administrator".
     pause
+    exit /b 1
+)
+
+echo.
+echo Opening Port 3000 (React Frontend)...
+netsh advfirewall firewall add rule name="FireFlow POS - Frontend (Port 3000)" dir=in action=allow protocol=TCP localport=3000 profile=private,domain
+netsh advfirewall firewall add rule name="FireFlow POS - Frontend (Port 3000) Out" dir=out action=allow protocol=TCP localport=3000 profile=private,domain
+
+echo.
+echo Opening Port 3001 (Node API / Websockets)...
+netsh advfirewall firewall add rule name="FireFlow POS - API (Port 3001)" dir=in action=allow protocol=TCP localport=3001 profile=private,domain
+netsh advfirewall firewall add rule name="FireFlow POS - API (Port 3001) Out" dir=out action=allow protocol=TCP localport=3001 profile=private,domain
+
+echo.
+echo Firewall rules applied successfully!
+echo Kitchen tabs and Waiter devices can now communicate with this Host Computer.
+echo.
+pause

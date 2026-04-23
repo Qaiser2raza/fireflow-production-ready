@@ -882,43 +882,50 @@ export const POSView: React.FC = () => {
                 {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save / Update'}
               </button>
 
-              <button
-                disabled={currentOrderItems.length === 0 || isSubmitting}
-                onClick={async () => {
-                  const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
+              {/* DELIVERY orders must be settled via Logistics Hub — block POS payment */}
+              {(orderToEdit?.type === 'DELIVERY' || orderType === 'DELIVERY') && !currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
+                <div className="flex-[2] h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center gap-2 text-amber-400 font-black text-[8px] tracking-widest uppercase cursor-not-allowed select-none">
+                  <Bike size={13} />
+                  <span>Settle via Logistics</span>
+                </div>
+              ) : (
+                <button
+                  disabled={currentOrderItems.length === 0 || isSubmitting}
+                  onClick={async () => {
+                    const isReadyForPayment = (orderToEdit?.status === 'READY' || orderToEdit?.status === 'SERVED') && !isWaitstaff;
+                    const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT') && !isReadyForPayment;
 
-                  if (hasUnfiredItems) {
-                    try {
-                      await handleOrderAction(true);
-                    } catch (e: any) {
-                      addNotification('error', e.message);
-                    }
-                  } else {
-                    if (isWaitstaff) {
-                        setShowReceiptPreview(true);
+                    if (hasUnfiredItems) {
+                      try {
+                        await handleOrderAction(true);
+                      } catch (e: any) {
+                        addNotification('error', e.message);
+                      }
+                    } else if (isWaitstaff) {
+                      setShowReceiptPreview(true);
                     } else {
-                        setShowPaymentModal(true);
+                      setShowPaymentModal(true);
                     }
-                  }
-                }}
-                className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (isWaitstaff ? 'bg-slate-700 hover:bg-slate-600 shadow-slate-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40')}`}
-              >
-                {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (
-                  <>
-                    {currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
-                      <>
-                        <Flame size={14} className="animate-pulse" />
-                        <span>Fire Order</span>
-                      </>
+                  }}
+                  className={`flex-[2] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${
+                    (currentOrderItems.some(i => i.item_status === 'DRAFT') && !((orderToEdit?.status === 'READY' || orderToEdit?.status === 'SERVED') && !isWaitstaff))
+                      ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40'
+                      : isWaitstaff
+                        ? 'bg-slate-700 hover:bg-slate-600 shadow-slate-900/40'
+                        : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'
+                  }`}
+                >
+                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (() => {
+                    const isReadyForPayment = (orderToEdit?.status === 'READY' || orderToEdit?.status === 'SERVED') && !isWaitstaff;
+                    const showFire = currentOrderItems.some(i => i.item_status === 'DRAFT') && !isReadyForPayment;
+                    return showFire ? (
+                      <><Flame size={14} className="animate-pulse" /><span>Fire Order</span></>
                     ) : (
-                      <>
-                        {isWaitstaff ? <Printer size={14} /> : <Banknote size={14} />}
-                        <span>{isWaitstaff ? 'Request Bill' : 'Process Payment'}</span>
-                      </>
-                    )}
-                  </>
-                )}
-              </button>
+                      <>{isWaitstaff ? <Printer size={14} /> : <Banknote size={14} />}<span>{isWaitstaff ? 'Request Bill' : 'Process Payment'}</span></>
+                    );
+                  })()}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1016,22 +1023,41 @@ export const POSView: React.FC = () => {
                   {isSubmitting ? <Loader2 className="animate-spin mx-auto opacity-50" size={14} /> : 'Save'}
                 </button>
 
-                <button
-                  disabled={currentOrderItems.length === 0 || isSubmitting}
-                  onClick={() => {
-                    const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT');
-                    if (hasUnfiredItems) {
+                {/* DELIVERY orders must be settled via Logistics Hub — block POS payment (mobile) */}
+                {(orderToEdit?.type === 'DELIVERY' || orderType === 'DELIVERY') && !currentOrderItems.some(i => i.item_status === 'DRAFT') ? (
+                  <div className="flex-[1.5] h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center gap-1.5 text-amber-400 font-black text-[8px] tracking-widest uppercase cursor-not-allowed select-none">
+                    <Bike size={12} />
+                    <span>Logistics</span>
+                  </div>
+                ) : (
+                  <button
+                    disabled={currentOrderItems.length === 0 || isSubmitting}
+                    onClick={() => {
+                      const isReadyForPayment = (orderToEdit?.status === 'READY' || orderToEdit?.status === 'SERVED') && !isWaitstaff;
+                      const hasUnfiredItems = currentOrderItems.some(i => i.item_status === 'DRAFT') && !isReadyForPayment;
+                      if (hasUnfiredItems) {
                         handleOrderAction(true);
-                    } else if (isWaitstaff) {
+                      } else if (isWaitstaff) {
                         setShowReceiptPreview(true);
-                    } else {
+                      } else {
                         setShowPaymentModal(true);
-                    }
-                  }}
-                  className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${currentOrderItems.some(i => i.item_status === 'DRAFT') ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40' : (isWaitstaff ? 'bg-slate-700 hover:bg-slate-600 shadow-slate-900/40' : 'bg-green-600 hover:bg-green-500 shadow-green-900/40')}`}
-                >
-                  {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (currentOrderItems.some(i => i.item_status === 'DRAFT') ? <><Flame size={14} className="animate-pulse" /><span>Fire</span></> : (isWaitstaff ? <><Printer size={14}/><span>Bill</span></> : <><Banknote size={14} /><span>Pay</span></>))}
-                </button>
+                      }
+                    }}
+                    className={`flex-[1.5] h-10 rounded-xl text-white font-black text-[9px] tracking-[0.2em] shadow-xl transition-all active:scale-95 disabled:opacity-20 flex items-center justify-center gap-2 uppercase italic ${
+                      (currentOrderItems.some(i => i.item_status === 'DRAFT') && !((orderToEdit?.status === 'READY' || orderToEdit?.status === 'SERVED') && !isWaitstaff))
+                        ? 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 shadow-orange-900/40'
+                        : isWaitstaff
+                          ? 'bg-slate-700 hover:bg-slate-600 shadow-slate-900/40'
+                          : 'bg-green-600 hover:bg-green-500 shadow-green-900/40'
+                    }`}
+                  >
+                    {isSubmitting ? <Loader2 className="animate-spin" size={14} /> : (() => {
+                      const isReadyForPayment = (orderToEdit?.status === 'READY' || orderToEdit?.status === 'SERVED') && !isWaitstaff;
+                      const showFire = currentOrderItems.some(i => i.item_status === 'DRAFT') && !isReadyForPayment;
+                      return showFire ? <><Flame size={14} className="animate-pulse" /><span>Fire</span></> : (isWaitstaff ? <><Printer size={14}/><span>Bill</span></> : <><Banknote size={14} /><span>Pay</span></>);
+                    })()}
+                  </button>
+                )}
               </div>
             </div>
           </div>

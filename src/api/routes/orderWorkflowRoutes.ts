@@ -154,6 +154,26 @@ router.post(
         userRole
       );
 
+      // Broadcast recalled order to ALL views (KDS, POS, Floor)
+      const io = req.app.get('io');
+      if (io) {
+        const fullOrder = await prisma.orders.findUnique({
+          where: { id: orderId },
+          include: {
+            order_items: { include: { menu_item_variants: true } },
+            dine_in_orders: true, takeaway_orders: true,
+            delivery_orders: true, reservation_orders: true
+          }
+        });
+        if (fullOrder) {
+          io.emit('db_change', {
+            table: 'orders',
+            eventType: 'UPDATE',
+            data: fullOrder
+          });
+        }
+      }
+
       res.status(200).json({
         success: true,
         data: result

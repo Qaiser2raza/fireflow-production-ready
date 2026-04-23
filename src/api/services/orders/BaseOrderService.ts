@@ -60,6 +60,7 @@ export abstract class BaseOrderService implements IOrderService {
                     // Standard Prisma connections for relations
                     tables: data.table_id ? { connect: { id: data.table_id } } : undefined,
                     staff_orders_assigned_waiter_idTostaff: (data.waiter_id || data.assigned_waiter_id) ? { connect: { id: data.waiter_id || data.assigned_waiter_id } } : undefined,
+                    session_id: data.session_id || undefined,
                     created_at: timestamp,
                     updated_at: timestamp
                 }
@@ -192,6 +193,7 @@ export abstract class BaseOrderService implements IOrderService {
                 customer_name: data.customer_name,
                 customer_phone: data.customer_phone,
                 delivery_address: data.delivery_address,
+                session_id: data.session_id !== undefined ? data.session_id : undefined,
                 updated_at: new Date()
             };
 
@@ -272,7 +274,7 @@ export abstract class BaseOrderService implements IOrderService {
                         const meta = menuItemsMetadata.find(m => m.id === item.menu_item_id);
                         const newItem = await tx.order_items.create({
                             data: {
-                                id: item.id || undefined, 
+                                id: (item.id && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(item.id)) ? item.id : undefined, 
                                 order_id: id,
                                 menu_item_id: item.menu_item_id,
                                 quantity: item.quantity,

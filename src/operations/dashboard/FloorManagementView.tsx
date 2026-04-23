@@ -27,13 +27,14 @@ export const FloorManagementView: React.FC = () => {
 
     // Get dine-in orders
     const dineInOrders = useMemo(() => {
-        // v4.5: Keep orders visible in the hub through their entire lifecycle
-        // until explicitly cleared (VOIDED/CANCELLED). 
-        // PAID orders are included so they stay visible until vacated.
-        return orders.filter(o => 
-            o.type === 'DINE_IN' && 
-            o.status !== OrderStatus.CANCELLED && 
-            o.status !== OrderStatus.VOIDED
+        // v4.5+: Exclude CLOSED orders from the active feed.
+        // DIRTY tables remain visible via the t.status === 'DIRTY' branch in filteredTables,
+        // so the "Mark Cleaned" workflow is unaffected — ghost orders no longer lock the card.
+        return orders.filter(o =>
+            o.type === 'DINE_IN' &&
+            o.status !== OrderStatus.CANCELLED &&
+            o.status !== OrderStatus.VOIDED &&
+            o.status !== 'CLOSED'
         );
     }, [orders]);
 

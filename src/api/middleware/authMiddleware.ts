@@ -171,7 +171,10 @@ export function requireRole(...allowedRoles: string[]) {
       return;
     }
 
-    if (!allowedRoles.includes(req.role)) {
+    const userRoleUpper = req.role.toUpperCase();
+    const allowedRolesUpper = allowedRoles.map(r => r.toUpperCase());
+
+    if (!allowedRolesUpper.includes(userRoleUpper)) {
       console.warn(
         `[AUTH] Unauthorized: Staff ${req.staffId} (role: ${req.role}) ` +
         `attempted to access resource requiring: ${allowedRoles.join(', ')}`
