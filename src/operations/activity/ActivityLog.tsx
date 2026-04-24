@@ -469,10 +469,10 @@ export const ActivityLog: React.FC = () => {
                            </div>
                         )}
 
-                        {selectedOrder.type === 'DELIVERY' && (
+                        {(selectedOrder.delivery_fee !== undefined && selectedOrder.delivery_fee > 0) && (
                            <div className="flex justify-between items-center text-sm">
-                              <span className="text-slate-400 font-medium">Logistics Fee</span>
-                              <span className="text-amber-400 font-mono">+Rs. {selectedOrder.delivery_fee || 0}</span>
+                              <span className="text-slate-400 font-medium">Delivery Fee</span>
+                              <span className="text-amber-400 font-mono">+Rs. {selectedOrder.delivery_fee.toLocaleString()}</span>
                            </div>
                         )}
 

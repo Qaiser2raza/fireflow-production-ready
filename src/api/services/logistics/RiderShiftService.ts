@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { AccountingService } from '../AccountingService';
+import { journalEntryService } from '../JournalEntryService';
 
 const prisma = new PrismaClient();
 const accounting = new AccountingService();
@@ -50,7 +51,7 @@ export class RiderShiftService {
                     restaurantId: data.restaurantId,
                     transactionType: 'CREDIT', // Main cash leaves
                     amount: amount,
-                    referenceType: 'ADJUSTMENT', // Using generic for now, will refine
+                    referenceType: 'SETTLEMENT', // Fixed: was ADJUSTMENT, now correctly impacts Calculated Cash
                     referenceId: shift.id,
                     description: `Shift Opening Float issued to rider`,
                     processedBy: data.openedBy
@@ -64,6 +65,14 @@ export class RiderShiftService {
                     referenceType: 'ADJUSTMENT',
                     referenceId: shift.id,
                     description: `Shift Opening Float received`,
+                    processedBy: data.openedBy
+                }, tx);
+
+                await journalEntryService.recordRiderFloatJournal({
+                    restaurantId: data.restaurantId,
+                    riderId: data.riderId,
+                    amount: amount,
+                    shiftId: shift.id,
                     processedBy: data.openedBy
                 }, tx);
             }
@@ -170,6 +179,14 @@ export class RiderShiftService {
                     referenceType: 'SETTLEMENT',
                     referenceId: shift.id,
                     description: `Shift fully reconciled — liability cleared`,
+                    processedBy: data.closedBy
+                }, tx);
+
+                await journalEntryService.recordRiderSettlementJournal({
+                    restaurantId: shift.restaurant_id,
+                    riderId: shift.rider_id,
+                    amount: received,
+                    settlementId: shift.id,
                     processedBy: data.closedBy
                 }, tx);
             }

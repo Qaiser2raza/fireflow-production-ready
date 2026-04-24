@@ -31,7 +31,7 @@ export async function sessionGateMiddleware(
     return next();
   }
 
-  const sessionId = req.headers['x-session-id'] as string;
+  const sessionId = req.headers['x-session-id'] as string || req.body?.session_id;
   const terminalId = req.headers['x-terminal-id'] as string;
 
   if (!sessionId) {

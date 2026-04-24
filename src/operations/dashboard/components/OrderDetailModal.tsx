@@ -246,6 +246,14 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                                                     </span>
                                                 </div>
                                             )}
+                                            {order.delivery_fee && order.delivery_fee > 0 && (
+                                                <div className="flex justify-between text-xs">
+                                                    <span className="text-slate-400">Delivery Fee</span>
+                                                    <span className="text-white font-bold">
+                                                        Rs. {Math.round(order.delivery_fee).toLocaleString()}
+                                                    </span>
+                                                </div>
+                                            )}
                                             {order.tax && order.tax > 0 && (
                                                 <div className="flex justify-between text-xs">
                                                     <span className="text-slate-400">Tax</span>

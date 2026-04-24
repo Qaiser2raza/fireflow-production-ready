@@ -25,6 +25,8 @@ import { authMiddleware } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
 import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
+import { journalEntryService } from './services/JournalEntryService';
+
 
 const accounting = new AccountingService();
 import {
@@ -958,11 +960,24 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             }
 
             // 4. Accounting entry
-            // Normal sale — Dine-In, Takeaway, or direct-delivery settlement
+            if (isLogisticsSettle) {
+                // Delivery settled via Logistics Hub:
+                // Revenue already posted when order was assigned to rider
+                // Just clear the rider receivable: DR Cash, CR Rider Receivable
+                await journalEntryService.recordRiderSettlementJournal({
+                    restaurantId: order.restaurant_id,
+                    riderId: order.assigned_driver_id || '',
+                    amount: totalReceived,
+                    settlementId: order.id,
+                    processedBy: req.staffId
+                }, tx);
+            } else {
+                // Normal sale — Dine-In, Takeaway
                 await accounting.recordOrderSale(order.id, tx, {
                     amount: totalReceived,
                     paymentMethod: paymentLines[0].method
                 });
+            }
 
             return updatedOrder;
         });

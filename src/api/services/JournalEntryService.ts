@@ -406,6 +406,43 @@ export class JournalEntryService {
         }, db);
     }
 
+    async recordRiderFloatJournal(params: {
+        restaurantId: string;
+        riderId: string;
+        amount: number | Decimal;
+        shiftId: string;
+        processedBy?: string;
+    }, tx: any) {
+        const db = tx;
+
+        const existing = await db.journal_entries.findFirst({
+            where: { reference_type: 'RIDER_FLOAT', reference_id: params.shiftId }
+        });
+        if (existing) return;
+
+        const [cashAcc, riderAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.CASH, db),
+            resolveAccount(params.restaurantId, GL.RIDER_RECEIVABLE, db),
+        ]);
+
+        if (!cashAcc || !riderAcc) return;
+
+        const amount = new Decimal(params.amount.toString());
+
+        await postJournal({
+            restaurantId: params.restaurantId,
+            referenceType: 'RIDER_FLOAT',
+            referenceId: params.shiftId,
+            date: new Date(),
+            description: `Rider Float Issued`,
+            processedBy: params.processedBy,
+            lines: [
+                { accountId: riderAcc.id, description: 'Float issued to rider', debit: amount, referenceType: 'RIDER', referenceId: params.riderId, meta: { shiftId: params.shiftId } },
+                { accountId: cashAcc.id, description: 'Cash out to rider float', credit: amount, referenceType: 'RIDER', referenceId: params.riderId, meta: { shiftId: params.shiftId } },
+            ],
+        }, db);
+    }
+
     /**
      * POST RIDER SETTLEMENT JOURNAL
      * ─────────────────────────────────────────────────────────────────────
