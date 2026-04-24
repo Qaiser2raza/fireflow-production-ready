@@ -495,6 +495,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return prev;
         });
       }
+
+      window.dispatchEvent(new CustomEvent('fireflow:db_change', { 
+        detail: { table, eventType } 
+      }));
     });
 
     const savedPin = localStorage.getItem('saved_pin');

@@ -292,6 +292,19 @@ const FinancialCommandCenter: React.FC = () => {
         fetchLedger();
     }, [ledgerAccountFilter, ledgerTypeFilter, ledgerRefFilter, ledgerSearch]);
 
+    // Listen for global real-time DB changes bridged from socket
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const { table } = (e as CustomEvent<{table:string,eventType:string}>).detail || {};
+            if (['orders','transactions','rider_shifts','journal_entries'].includes(table)) {
+                debouncedFetchAll();
+            }
+        };
+        window.addEventListener('fireflow:db_change', handler);
+        return () => window.removeEventListener('fireflow:db_change', handler);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
 
     const handleOpenSession = async () => {
         try {

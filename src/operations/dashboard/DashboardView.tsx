@@ -126,6 +126,18 @@ export const DashboardView: React.FC = () => {
   // which would create a new interval on every re-render.
   }, [currentUser?.restaurant_id, fetchAnalytics]);
 
+  // Listen for global real-time DB changes bridged from socket
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { table } = (e as CustomEvent<{table:string,eventType:string}>).detail || {};
+      if (['orders','transactions','rider_shifts','journal_entries'].includes(table)) {
+        fetchAnalytics();
+      }
+    };
+    window.addEventListener('fireflow:db_change', handler);
+    return () => window.removeEventListener('fireflow:db_change', handler);
+  }, [fetchAnalytics]);
+
   const StatCard = ({ title, value, icon, subValue, color, trend }: any) => (
     <Card className="p-5 border-slate-800 bg-[#0f172a]/40 backdrop-blur-xl relative overflow-hidden group">
       <div className={`absolute top-0 right-0 w-24 h-24 -mr-10 -mt-10 rounded-full ${color.replace('text-', 'bg-')} opacity-5 blur-2xl group-hover:opacity-10 transition-opacity`}></div>

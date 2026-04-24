@@ -971,6 +971,17 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                     settlementId: order.id,
                     processedBy: req.staffId
                 }, tx);
+
+                // Also create ledger entry so Calculated Cash updates correctly
+                await accounting.createLedgerEntry({
+                    restaurantId: order.restaurant_id,
+                    transactionType: 'DEBIT',
+                    amount: totalReceived,
+                    referenceType: 'SETTLEMENT',
+                    referenceId: order.id,
+                    description: `Delivery order settled via Logistics Hub`,
+                    processedBy: req.staffId
+                }, tx);
             } else {
                 // Normal sale — Dine-In, Takeaway
                 await accounting.recordOrderSale(order.id, tx, {
