@@ -53,3 +53,11 @@ tmp/
 !postcss.config.js
 !tailwind.config.js
 !vite.config.ts
+
+# Scratch & Reports
+scratch_*.ts
+scratch_*.js
+*.mjs
+reconciliation_audit_report.md
+403_error_investigation_report.md
+implementation_plan.md
