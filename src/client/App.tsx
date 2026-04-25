@@ -496,6 +496,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
 
+      console.log('[BRIDGE] dispatching:', table, eventType);
       window.dispatchEvent(new CustomEvent('fireflow:db_change', { 
         detail: { table, eventType } 
       }));

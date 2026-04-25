@@ -141,6 +141,21 @@ export class RiderShiftService {
                         last_action_desc: 'Auto-settled on shift close'
                     } as any
                 });
+
+                // Create transaction records for each auto-closed order so they appear in Register & Revenue
+                for (const order of deliveredOrders) {
+                    await tx.transactions.create({
+                        data: {
+                            order_id: order.id,
+                            restaurant_id: shift.restaurant_id,
+                            amount: new Decimal(order.total.toString()),
+                            payment_method: 'CASH',
+                            status: 'PAID',
+                            transaction_ref: `RIDER_SHIFT_CLOSE_${shift.id}`,
+                            created_at: new Date()
+                        }
+                    });
+                }
             }
 
             // 3. Update Shift Record

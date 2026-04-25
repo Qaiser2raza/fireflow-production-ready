@@ -23,10 +23,10 @@
     "electron:dev": "concurrently \"npm run dev\" \"cross-env NODE_ENV=development node scripts/launch-electron.js\"",
     "electron:build": "npm run build:backend && npm run build && electron-builder",
     "migrate:pins": "tsx scripts/migrate-pins-to-bcrypt.ts",
-    "db:seed": "prisma db seed",
-    "db:reset": "prisma db seed",
+    "db:seed": "prisma db seed && npm run seed:coa",
+    "db:reset": "prisma db seed && npm run seed:coa",
     "db:reset-orders": "tsx scripts/reset_orders.ts",
-    "db:reset-all": "tsx scripts/reset_orders.ts",
+    "db:reset-all": "tsx scripts/reset_orders.ts && npm run seed:coa",
     "publish": "tsx scripts/publish-update.ts"
   },
   "dependencies": {

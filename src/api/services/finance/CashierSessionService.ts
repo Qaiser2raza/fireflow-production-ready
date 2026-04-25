@@ -180,13 +180,15 @@ export class CashierSessionService {
         const ledgers = await prisma.ledger_entries.findMany({
             where: {
                 restaurant_id: session.restaurant_id,
-                processed_by: session.opened_by,
-                created_at: { gte: session.opened_at, lte: endTime }
+                created_at: { gte: session.opened_at, lte: endTime },
+                account_id: null
             }
         });
 
         let payouts = 0;
         let customerPayments = 0;
+        let ledgerCashIn = 0;
+        let ledgerCashOut = 0;
 
         ledgers.forEach(l => {
             if (l.reference_type === 'PAYOUT' && l.transaction_type === 'CREDIT') {
@@ -194,6 +196,12 @@ export class CashierSessionService {
             }
             if (l.reference_type === 'SETTLEMENT' && l.transaction_type === 'DEBIT') {
                 customerPayments += Number(l.amount);
+            }
+
+            if (l.transaction_type === 'DEBIT') {
+                ledgerCashIn += Number(l.amount);
+            } else if (l.transaction_type === 'CREDIT') {
+                ledgerCashOut += Number(l.amount);
             }
         });
 
@@ -235,8 +243,9 @@ export class CashierSessionService {
             });
         });
 
-        // expected cash = opening float + all cash received - payouts
-        summary.expectedCash = summary.openingFloat + summary.cashSales + summary.customerPayments - summary.payouts;
+        // expectedCash = openingFloat + SUM of DEBIT ledger entries (cash in) - SUM of CREDIT ledger entries (cash out)
+        // using purely ledger entries, not transactions
+        summary.expectedCash = summary.openingFloat + ledgerCashIn - ledgerCashOut;
 
         const openedDate = session.opened_at.toDateString();
         const closeDate = endTime.toDateString();

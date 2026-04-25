@@ -23,6 +23,10 @@ const ACCOUNTS = [
   { code: '5000', name: 'Rider Expense', type: 'EXPENSE', is_system: true },
   { code: '5010', name: 'General Expense', type: 'EXPENSE', is_system: true },
   { code: '5020', name: 'Cost of Goods Sold', type: 'EXPENSE', is_system: true },
+  // SESSION CLOSE — required by JournalEntryService (GL.MANAGER_DRAWING, GL.MISC_INCOME, GL.SHORTAGE_EXPENSE)
+  { code: '1090', name: 'Manager Safe', type: 'ASSET', is_system: true },
+  { code: '4030', name: 'Misc Income', type: 'REVENUE', is_system: true },
+  { code: '5030', name: 'Shortage Expense', type: 'EXPENSE', is_system: true },
 ];
 
 async function main() {
