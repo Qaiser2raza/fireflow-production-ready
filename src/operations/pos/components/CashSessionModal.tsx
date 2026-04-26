@@ -131,7 +131,10 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                 setJournalLog(p => [...p, `✅ DR 2010 SVC Payable Rs.${svcAmount} | CR 1000 Cash Rs.${svcAmount}`]);
                 addNotification('success', `SVC Rs. ${svcAmount} disbursed to pool`);
             } else throw new Error(d.error);
-        } catch (e: any) { addNotification('error', e.message); }
+        } catch (e: any) { 
+            console.error('[SVC] distribute error:', e);
+            addNotification('error', e.message); 
+        }
         finally { setLoading(false); }
     };
 

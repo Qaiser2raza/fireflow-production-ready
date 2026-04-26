@@ -133,7 +133,7 @@ router.post('/logs/:logId/resolve', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN
  *
  * Body: { restaurantId, distributions: [{ staffName, staffId?, amount }] }
  */
-router.post('/:id/distribute-svc', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/:id/distribute-svc', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const sessionId = req.params.id;
         const { distributions, totalAmount: bodyTotal, restaurantId } = req.body;

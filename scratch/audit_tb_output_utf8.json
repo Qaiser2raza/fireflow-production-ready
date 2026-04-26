@@ -1,0 +1,66 @@
+﻿[
+  {
+    "account": "2010",
+    "debit": "0",
+    "credit": "212.5",
+    "ref_type": "ORDER_SALE",
+    "description": "DINE_IN Sale ΓÇô Order #ORD-18459-U91",
+    "created_at": "2026-04-25T13:09:13.036Z"
+  },
+  {
+    "account": "4030",
+    "debit": "0",
+    "credit": "6400",
+    "ref_type": "CASHIER_SESSION",
+    "description": "Session closed by 36c5b7e8-7768-4fc5-9787-63e0f4ddf11a",
+    "created_at": "2026-04-25T19:09:43.252Z"
+  },
+  {
+    "account": "1040",
+    "debit": "6350",
+    "credit": "0",
+    "ref_type": "ORDER_SALE",
+    "description": "DINE_IN Sale ΓÇô Order #ORD-1204-L7A",
+    "created_at": "2026-04-25T20:22:24.504Z"
+  },
+  {
+    "account": "2010",
+    "debit": "0",
+    "credit": "302.5",
+    "ref_type": "ORDER_SALE",
+    "description": "DINE_IN Sale ΓÇô Order #ORD-1204-L7A",
+    "created_at": "2026-04-25T20:22:24.504Z"
+  },
+  {
+    "account": "4030",
+    "debit": "0",
+    "credit": "6350",
+    "ref_type": "CASHIER_SESSION",
+    "description": "Session closed by 36c5b7e8-7768-4fc5-9787-63e0f4ddf11a",
+    "created_at": "2026-04-26T07:59:48.036Z"
+  },
+  {
+    "account": "2010",
+    "debit": "0",
+    "credit": "187",
+    "ref_type": "ORDER_SALE",
+    "description": "DINE_IN Sale ΓÇô Order #ORD-14119-S28",
+    "created_at": "2026-04-26T09:03:05.538Z"
+  },
+  {
+    "account": "2010",
+    "debit": "0",
+    "credit": "212.5",
+    "ref_type": "ORDER_SALE",
+    "description": "DINE_IN Sale ΓÇô Order #ORD-14279-TY7",
+    "created_at": "2026-04-26T09:28:41.160Z"
+  },
+  {
+    "account": "2010",
+    "debit": "0",
+    "credit": "185",
+    "ref_type": "ORDER_SALE",
+    "description": "DINE_IN Sale ΓÇô Order #ORD-14371-B19",
+    "created_at": "2026-04-26T09:38:34.148Z"
+  }
+]
