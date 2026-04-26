@@ -151,7 +151,7 @@ export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '
 
             {/* Items List */}
             <div className="space-y-3 mb-6">
-                {items.map((item, idx) => (
+                {items.filter(item => item.quantity > 0 && item.item_status !== 'SKIPPED' && Number(item.total_price) !== 0).map((item, idx) => (
                     <div key={idx} className="grid grid-cols-12 gap-1 text-[11px] items-start">
                         <div className="col-span-1 font-black">{item.quantity}x</div>
                         <div className="col-span-8">

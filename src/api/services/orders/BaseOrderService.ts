@@ -224,7 +224,7 @@ export abstract class BaseOrderService implements IOrderService {
             if (itemsToUpdate) {
                 const statusWeight: { [key: string]: number } = {
                     'DRAFT': 0, 'PENDING': 1, 'PREPARING': 2, 'DONE': 3,
-                    'SERVED': 4, 'CANCELLED': 5, 'VOIDED': 6
+                    'SERVED': 4, 'CANCELLED': 5, 'VOIDED': 6, 'SKIPPED': 7
                 };
 
                 const existingItems = await tx.order_items.findMany({ where: { order_id: id } });
@@ -253,12 +253,33 @@ export abstract class BaseOrderService implements IOrderService {
                     const dbWeight = existing ? (statusWeight[existing.item_status as string] ?? 0) : 0;
                     
                     // Status Guard: Backend status > Frontend status -> Persist Backend
-                    const finalStatus = dbWeight > incomingWeight 
+                    let finalStatus = dbWeight > incomingWeight 
                         ? existing!.item_status as string
                         : (item.item_status || 'PENDING');
 
+                    if (existing && item.quantity === 0 && ['DONE', 'SERVED'].includes(existing.item_status as string)) {
+                        finalStatus = 'SKIPPED';
+                    }
+
                     if (existing) {
                         claimedIds.add(existing.id);
+
+                        if (existing.quantity > item.quantity && ['DONE', 'SERVED'].includes(existing.item_status as string)) {
+                            await tx.audit_logs.create({
+                                data: {
+                                    restaurant_id: currentOrder.restaurant_id,
+                                    action_type: 'ITEM_QUANTITY_REDUCED',
+                                    entity_type: 'ORDER_ITEM',
+                                    entity_id: existing.id,
+                                    details: {
+                                        item_name: existing.item_name,
+                                        old_quantity: existing.quantity,
+                                        new_quantity: item.quantity,
+                                        order_id: id
+                                    }
+                                }
+                            });
+                        }
                         await tx.order_items.update({
                             where: { id: existing.id },
                             data: { 
@@ -298,6 +319,29 @@ export abstract class BaseOrderService implements IOrderService {
                     if (!claimedIds.has(existing.id)) {
                         if (statusWeight[existing.item_status as string] === 0) { // Only delete DRAFT
                             await tx.order_items.delete({ where: { id: existing.id } });
+                        } else if (['DONE', 'SERVED'].includes(existing.item_status as string)) {
+                            await tx.audit_logs.create({
+                                data: {
+                                    restaurant_id: currentOrder.restaurant_id,
+                                    action_type: 'ITEM_QUANTITY_REDUCED',
+                                    entity_type: 'ORDER_ITEM',
+                                    entity_id: existing.id,
+                                    details: {
+                                        item_name: existing.item_name,
+                                        old_quantity: existing.quantity,
+                                        new_quantity: 0,
+                                        order_id: id
+                                    }
+                                }
+                            });
+                            await tx.order_items.update({
+                                where: { id: existing.id },
+                                data: {
+                                    item_status: 'SKIPPED' as any,
+                                    quantity: 0,
+                                    total_price: 0
+                                }
+                            });
                         }
                     }
                 }

@@ -37,6 +37,28 @@ router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'),
     try {
         const { sessionId, actualCash, withdrawnAmount, closedBy, notes } = req.body;
         if (!sessionId || !closedBy) return res.status(400).json({ success: false, error: 'Missing params' });
+
+        const { prisma } = await import('../../shared/lib/prisma.js');
+        const openRiderShifts = await prisma.rider_shifts.findMany({
+            where: {
+                restaurant_id: req.restaurantId!,
+                status: 'OPEN'
+            },
+            include: {
+                staff: { select: { name: true } }
+            }
+        });
+
+        if (openRiderShifts.length > 0) {
+            const riderNames = openRiderShifts
+                .map(s => s.staff?.name || 'Unknown Rider')
+                .join(', ');
+            return res.status(409).json({
+                error: `Cannot close session — rider shifts still open for: ${riderNames}. Please close all rider shifts first.`,
+                code: 'OPEN_RIDER_SHIFTS',
+                riders: riderNames
+            });
+        }
         
         const session = await CashierSessionService.closeSession(sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
         res.json({ success: true, session });
@@ -114,13 +136,10 @@ router.post('/logs/:logId/resolve', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN
 router.post('/:id/distribute-svc', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const sessionId = req.params.id;
-        const { distributions, restaurantId } = req.body;
+        const { distributions, totalAmount: bodyTotal, restaurantId } = req.body;
 
-        if (!distributions || !Array.isArray(distributions) || distributions.length === 0) {
-            return res.status(400).json({ success: false, error: 'distributions array is required' });
-        }
-
-        const totalAmount = distributions.reduce((sum: number, d: any) => sum + Number(d.amount || 0), 0);
+        const totalAmount = bodyTotal ? Number(bodyTotal) : (distributions?.reduce((sum: number, d: any) => sum + Number(d.amount || 0), 0) || 0);
+        
         if (totalAmount <= 0) {
             return res.status(400).json({ success: false, error: 'Total distribution amount must be positive' });
         }
@@ -129,7 +148,7 @@ router.post('/:id/distribute-svc', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'
             restaurantId: restaurantId || req.restaurantId!,
             sessionId,
             totalAmount,
-            distributions,
+            distributions: distributions || [],
             processedBy: req.staffId!
         });
 

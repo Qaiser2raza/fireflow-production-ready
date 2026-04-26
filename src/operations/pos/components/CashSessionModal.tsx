@@ -15,6 +15,7 @@ interface CashSessionModalProps {
 export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClose, onSuccess }) => {
     const { currentUser, activeSession, addNotification } = useAppContext();
     const [loading, setLoading] = useState(false);
+    const [errorMsg, setErrorMsg] = useState('');
     const [openingFloat, setOpeningFloat] = useState('');
     const [expectedNextFloat, setExpectedNextFloat] = useState(0);
     const [actualCash, setActualCash] = useState('');
@@ -26,7 +27,7 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
     const [drawingAmount, setDrawingAmount] = useState('');
     const [drawingNotes, setDrawingNotes] = useState('');
     const [drawingPosted, setDrawingPosted] = useState(false);
-    const [svcDistributions, setSvcDistributions] = useState<{staffName:string;staffId?:string;amount:string}[]>([]);
+    const [svcAmount, setSvcAmount] = useState('');
     const [svcPosted, setSvcPosted] = useState(false);
     const [journalLog, setJournalLog] = useState<string[]>([]);
 
@@ -35,7 +36,6 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
     useEffect(() => {
         if (mode === 'CLOSE' && activeSession) {
             fetchSummary();
-            fetchStaff();
         } else if (mode === 'OPEN' && currentUser) {
             fetchExpectedFloat();
         }
@@ -54,24 +54,18 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
         }
     };
 
-    const fetchStaff = async () => {
-        try {
-            const res = await fetchWithAuth('/api/staff?limit=20');
-            const d = await res.json();
-            if (d.success && d.staff) {
-                const floorStaff = d.staff.filter((s:any) => ['WAITER','CASHIER'].includes(s.role));
-                if (floorStaff.length > 0) {
-                    setSvcDistributions(floorStaff.map((s:any) => ({ staffName: s.name, staffId: s.id, amount: '' })));
-                }
-            }
-        } catch {}
-    };
+
 
     const fetchSummary = async () => {
         try {
             const res = await fetchWithAuth(`/api/cashier/${activeSession.id}/summary`);
             const d = await res.json();
-            if (d.success) setSummary(d.summary);
+            if (d.success) {
+                setSummary(d.summary);
+                if (d.summary?.calculatedSummary?.serviceChargeCollected) {
+                    setSvcAmount(d.summary.calculatedSummary.serviceChargeCollected.toString());
+                }
+            }
         } catch (e) {
             console.error('Failed to fetch session summary');
         }
@@ -124,20 +118,18 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
     };
 
     const handleDistributeSVC = async () => {
-        const filled = svcDistributions.filter(d => Number(d.amount) > 0);
-        if (filled.length === 0) return addNotification('error', 'Enter at least one staff distribution amount');
+        if (!svcAmount || Number(svcAmount) <= 0) return addNotification('error', 'Enter a valid amount to disburse');
         setLoading(true);
         try {
             const res = await fetchWithAuth(`/api/cashier/${activeSession.id}/distribute-svc`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ distributions: filled.map(d => ({ ...d, amount: Number(d.amount) })), restaurantId: currentUser?.restaurant_id })
+                body: JSON.stringify({ totalAmount: Number(svcAmount), restaurantId: currentUser?.restaurant_id })
             });
             const d = await res.json();
-            const total = filled.reduce((s,d) => s + Number(d.amount), 0);
             if (d.success) {
                 setSvcPosted(true);
-                setJournalLog(p => [...p, `✅ DR 2010 SVC Payable Rs.${total} | CR 1000 Cash Rs.${total}`]);
-                addNotification('success', `SVC Rs. ${total} distributed to ${filled.length} staff`);
+                setJournalLog(p => [...p, `✅ DR 2010 SVC Payable Rs.${svcAmount} | CR 1000 Cash Rs.${svcAmount}`]);
+                addNotification('success', `SVC Rs. ${svcAmount} disbursed to pool`);
             } else throw new Error(d.error);
         } catch (e: any) { addNotification('error', e.message); }
         finally { setLoading(false); }
@@ -152,6 +144,12 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sessionId: activeSession.id, actualCash: Number(actualCash), withdrawnAmount: Number(withdrawnAmount || 0), closedBy: currentUser.id, notes })
             });
+            if (res.status === 409) {
+                const data = await res.json();
+                // Show the error inline
+                setErrorMsg(data.error);
+                return;
+            }
             const d = await res.json();
             if (d.success) {
                 setJournalLog(p => [...p,
@@ -160,7 +158,6 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                     variance > 0 ? `✅ DR 1000 Cash Rs.${variance.toFixed(0)} | CR 4030 Overage` : ''
                 ].filter(Boolean));
                 addNotification('success', 'Session closed and reconciled');
-                onSuccess();
                 setCloseStep('drawing'); // proceed to drawing step
             } else throw new Error(d.error);
         } catch (e: any) { addNotification('error', e.message); }
@@ -201,6 +198,12 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                 </div>
 
                 <div className="p-6 space-y-6">
+                    {errorMsg && (
+                        <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-start gap-3">
+                            <AlertTriangle className="text-red-400 shrink-0 mt-0.5" size={18} />
+                            <p className="text-sm font-bold text-red-400">{errorMsg}</p>
+                        </div>
+                    )}
                     {mode === 'OPEN' ? (
                         <div className="space-y-4">
                             <div className="bg-indigo-500/5 border border-indigo-500/20 p-4 rounded-xl flex items-start gap-4">
@@ -364,42 +367,32 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                                 <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-xl flex items-start gap-3">
                                     <Users className="text-amber-400 shrink-0 mt-0.5" size={18}/>
                                     <div>
-                                        <p className="text-sm font-bold text-amber-300">Service Charge Distribution</p>
-                                        <p className="text-xs text-amber-300/70 mt-0.5">Total SVC: <span className="font-bold text-amber-400">{summary ? fmt(summary.calculatedSummary?.serviceChargeCollected) : 'Rs. 0'}</span><br/>
-                                        <span className="font-mono text-amber-400/80">DR 2010 SVC Payable / CR 1000 Cash</span></p>
+                                        <p className="text-sm font-bold text-amber-300">Service Charge Disbursal</p>
+                                        <p className="text-xs text-amber-300/70 mt-0.5">Total collected this session: <span className="font-bold text-amber-400">{summary ? fmt(summary.calculatedSummary?.serviceChargeCollected) : 'Rs. 0'}</span></p>
                                     </div>
                                 </div>
                                 {svcPosted ? (
                                     <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl flex items-center gap-3">
                                         <CheckCircle2 className="text-emerald-400" size={20}/>
-                                        <p className="text-sm font-bold text-emerald-400">SVC Distributed ✓ — Liability cleared from books.</p>
+                                        <p className="text-sm font-bold text-emerald-400">SVC Disbursed ✓ — Liability cleared from books.</p>
                                     </div>
                                 ) : (
-                                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                                        {svcDistributions.length === 0 ? (
-                                            <p className="text-xs text-slate-500 text-center py-4">No floor staff found. Add distributions manually.</p>
-                                        ) : svcDistributions.map((d, i) => (
-                                            <div key={i} className="flex items-center gap-3 bg-[#1e293b] p-3 rounded-lg border border-[#334155]">
-                                                <div className="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-400 text-xs font-bold">{d.staffName.charAt(0)}</div>
-                                                <span className="flex-1 text-sm text-slate-300 font-medium">{d.staffName}</span>
-                                                <div className="relative w-28">
-                                                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">Rs.</span>
-                                                    <input type="number" className="w-full bg-[#0f172a] border border-[#334155] rounded-lg py-2 pl-8 pr-2 text-sm font-bold text-amber-300 focus:outline-none focus:border-amber-500 transition-all" placeholder="0" value={d.amount} onChange={e => setSvcDistributions(prev => prev.map((x,j) => j===i ? {...x,amount:e.target.value} : x))}/>
-                                                </div>
+                                    <div className="space-y-4">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount to Disburse</label>
+                                            <div className="relative">
+                                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">Rs.</span>
+                                                <input type="number" className="w-full bg-[#1e293b] border border-[#334155] rounded-xl py-4 pl-12 pr-4 text-2xl font-bold text-amber-400 focus:outline-none focus:border-amber-500 transition-all" placeholder="0.00" value={svcAmount} onChange={e => setSvcAmount(e.target.value)} autoFocus/>
                                             </div>
-                                        ))}
-                                        <div className="flex items-center justify-between bg-[#0f172a] p-2 rounded-lg border border-[#1e293b] border-dashed">
-                                            <span className="text-xs text-slate-500">Total to distribute:</span>
-                                            <span className="text-sm font-bold text-amber-400">{fmt(svcDistributions.reduce((s,d) => s+Number(d.amount||0),0))}</span>
                                         </div>
-                                        <button onClick={handleDistributeSVC} disabled={loading} className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-700 text-white transition-all">
-                                            {loading ? <Loader2 size={18} className="animate-spin"/> : <><Users size={18}/> Distribute & Post Journal</>}
+                                        <button onClick={handleDistributeSVC} disabled={loading} className="w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-700 text-white transition-all shadow-lg shadow-amber-500/10">
+                                            {loading ? <Loader2 size={20} className="animate-spin"/> : <><Users size={20}/> Disburse & Continue</>}
                                         </button>
                                     </div>
                                 )}
                                 <div className="flex gap-2">
                                     <button onClick={() => setCloseStep('drawing')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[#1e293b] text-slate-400 hover:text-white flex items-center justify-center gap-2"><ChevronLeft size={16}/>Back</button>
-                                    <button onClick={() => setCloseStep('confirm')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2">Finish <ChevronRight size={16}/></button>
+                                    <button onClick={() => setCloseStep('confirm')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center gap-2">Finish <ChevronRight size={16}/></button>
                                 </div>
                             </div>
                         )}
@@ -425,7 +418,7 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                                 </div>
                                 <div className="flex gap-2">
                                     <button onClick={() => { window.print(); }} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[#1e293b] text-slate-300 hover:text-white flex items-center justify-center gap-2">Print Z-Report</button>
-                                    <button onClick={onClose} className="flex-1 py-3 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center gap-2"><CheckCircle2 size={16}/> Done</button>
+                                    <button onClick={() => { onSuccess(); onClose(); }} className="flex-1 py-3 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center gap-2"><CheckCircle2 size={16}/> Done</button>
                                 </div>
                             </div>
                         )}

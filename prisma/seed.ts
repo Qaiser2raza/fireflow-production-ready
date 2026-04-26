@@ -80,6 +80,62 @@ async function main() {
     },
   })
 
+  // 2.5 Seed Order Type Defaults
+  console.log('🏗️  Seeding Order Type Defaults...')
+  await prisma.order_type_defaults.upsert({
+    where: { restaurant_id_order_type: { 
+      restaurant_id: restaurant.id, order_type: 'DINE_IN' 
+    }},
+    update: {},
+    create: {
+      restaurant_id: restaurant.id,
+      order_type: 'DINE_IN',
+      tax_enabled: true,
+      tax_rate: 16,
+      tax_type: 'INCLUSIVE',
+      svc_enabled: true,
+      svc_rate: 5,
+      delivery_fee: 0,
+      discount_max: 100
+    }
+  });
+
+  await prisma.order_type_defaults.upsert({
+    where: { restaurant_id_order_type: { 
+      restaurant_id: restaurant.id, order_type: 'TAKEAWAY' 
+    }},
+    update: {},
+    create: {
+      restaurant_id: restaurant.id,
+      order_type: 'TAKEAWAY',
+      tax_enabled: true,
+      tax_rate: 16,
+      tax_type: 'INCLUSIVE',
+      svc_enabled: false,
+      svc_rate: 5,
+      delivery_fee: 0,
+      discount_max: 100
+    }
+  });
+
+  await prisma.order_type_defaults.upsert({
+    where: { restaurant_id_order_type: { 
+      restaurant_id: restaurant.id, order_type: 'DELIVERY' 
+    }},
+    update: {},
+    create: {
+      restaurant_id: restaurant.id,
+      order_type: 'DELIVERY',
+      tax_enabled: true,
+      tax_rate: 16,
+      tax_type: 'INCLUSIVE',
+      svc_enabled: false,
+      svc_rate: 0,
+      delivery_fee: 150,
+      discount_max: 100
+    }
+  });
+
   // 3. Create Stations
   console.log('🏗️  Seeding Stations...')
   const kitchen = await prisma.stations.create({
@@ -214,6 +270,7 @@ async function main() {
     { name: 'Waiter Bilal', role: 'WAITER', pin: '3333' },
     { name: 'Rider Raza', role: 'RIDER', pin: '4444' },
     { name: 'Rider Salman', role: 'RIDER', pin: '5555' },
+    { name: 'Head Chef', role: 'CHEF', pin: '2222', restaurant_id: restaurant.id },
   ]
 
   for (const s of staffData) {

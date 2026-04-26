@@ -431,11 +431,20 @@ export const POSView: React.FC = () => {
   const updateQuantity = (itemId: string, delta: number) => {
     if (isAlreadyPaid || isReadOnly) return;
     setCurrentOrderItems(prev => {
-      const index = prev.findIndex(i => i.id === itemId && i.item_status === 'DRAFT');
+      const index = prev.findIndex(i => i.id === itemId && (i.item_status === 'DRAFT' || (currentUser?.role === 'CASHIER' && ['DONE', 'SERVED'].includes(i.item_status || ''))));
       if (index === -1) return prev;
       const newItems = [...prev];
       const newQty = newItems[index].quantity + delta;
-      if (newQty <= 0) return newItems.filter((_, i) => i !== index);
+      
+      if (newQty <= 0) {
+        if (newItems[index].item_status === 'DRAFT') {
+          return newItems.filter((_, i) => i !== index);
+        } else {
+          newItems[index] = { ...newItems[index], quantity: 0, item_status: 'SKIPPED' as any };
+          return newItems;
+        }
+      }
+      
       newItems[index] = { ...newItems[index], quantity: newQty };
       return newItems;
     });
@@ -708,7 +717,7 @@ export const POSView: React.FC = () => {
                   </div>
                 </div>
 
-                {!isReadOnly && item.item_status === 'DRAFT' && (
+                {!isReadOnly && (item.item_status === 'DRAFT' || (currentUser?.role === 'CASHIER' && ['DONE', 'SERVED'].includes(item.item_status || ''))) && (
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
                     <button onClick={() => updateQuantity(item.id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>
@@ -904,6 +913,16 @@ export const POSView: React.FC = () => {
                     } else if (isWaitstaff) {
                       setShowReceiptPreview(true);
                     } else {
+                      // Always sync cart changes to server before payment
+                      // This ensures quantity reductions are saved before settlement
+                      try {
+                        if (orderToEdit?.id) {
+                          await handleOrderAction(false); // save without firing
+                        }
+                      } catch (e: any) {
+                        addNotification('error', 'Failed to save order changes');
+                        return;
+                      }
                       setShowPaymentModal(true);
                     }
                   }}
@@ -980,7 +999,7 @@ export const POSView: React.FC = () => {
                       </div>
                     </div>
 
-                    {!isReadOnly && item.item_status === 'DRAFT' && (
+                    {!isReadOnly && (item.item_status === 'DRAFT' || (currentUser?.role === 'CASHIER' && ['DONE', 'SERVED'].includes(item.item_status || ''))) && (
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-500 flex items-center justify-center transition-colors"><Minus size={14} /></button>
                         <button onClick={() => updateQuantity(item.id, 1)} className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-green-500/20 hover:text-green-500 flex items-center justify-center transition-colors"><Plus size={14} /></button>

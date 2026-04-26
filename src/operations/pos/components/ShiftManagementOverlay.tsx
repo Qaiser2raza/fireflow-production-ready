@@ -14,6 +14,7 @@ export const ShiftManagementOverlay: React.FC<Props> = ({ currentUser, onSession
   const [actualCash, setActualCash] = useState<string>('');
   const [notes, setNotes] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const [sessionSummary, setSessionSummary] = useState<any>(null);
   const [activeSession, setActiveSession] = useState<any>(null);
 
@@ -90,6 +91,12 @@ export const ShiftManagementOverlay: React.FC<Props> = ({ currentUser, onSession
           notes: notes
         })
       });
+      if (res.status === 409) {
+        const data = await res.json();
+        // Show the error inline
+        setErrorMsg(data.error);
+        return;
+      }
       const data = await res.json();
       if (data.success) {
         setMode('SUMMARY');
@@ -155,6 +162,13 @@ export const ShiftManagementOverlay: React.FC<Props> = ({ currentUser, onSession
             <h2 className="text-3xl font-bold text-white mb-1">End of Shift</h2>
             <p className="text-slate-400">Count your cash and reconcile the drawer.</p>
           </div>
+
+          {errorMsg && (
+            <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-start gap-3 mb-6">
+              <AlertTriangle className="text-red-400 shrink-0 mt-0.5" size={18} />
+              <p className="text-sm font-bold text-red-400">{errorMsg}</p>
+            </div>
+          )}
 
           <div className="space-y-6">
             <div>

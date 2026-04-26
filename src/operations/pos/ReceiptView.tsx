@@ -115,7 +115,7 @@ export const ReceiptView: React.FC<ReceiptViewProps> = ({
       </div>
 
       <div className="my-2 border-b pb-2">
-        {order.order_items?.map((item: OrderItem, idx: number) => (
+        {order.order_items?.filter(item => item.quantity > 0 && item.item_status !== 'SKIPPED' && Number(item.total_price) !== 0).map((item: OrderItem, idx: number) => (
           <div key={idx} className="flex justify-between my-1">
             <span className="w-[10%]">{item.quantity}</span>
             <div className="w-[60%]">

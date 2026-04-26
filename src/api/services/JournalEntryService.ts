@@ -1368,9 +1368,9 @@ export class JournalEntryService {
         }
 
         const amount = new Decimal(params.totalAmount.toString());
-        const distSummary = params.distributions
-            .map(d => `${d.staffName}: Rs. ${d.amount}`)
-            .join(' | ');
+        const distSummary = params.distributions.length > 0 
+            ? params.distributions.map(d => `${d.staffName}: Rs. ${d.amount}`).join(' | ')
+            : "SVC pool disbursement";
 
         await postJournal({
             restaurantId: params.restaurantId,

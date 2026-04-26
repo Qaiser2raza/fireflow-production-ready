@@ -198,9 +198,22 @@ export class CashierSessionService {
                 customerPayments += Number(l.amount);
             }
 
-            if (l.transaction_type === 'DEBIT') {
+            // Only count physical cash drawer movements
+            // DEBIT ORDER = cash sale received (dine-in/takeaway only)
+            // DEBIT SETTLEMENT = cash received from rider
+            // CREDIT SETTLEMENT = float issued to rider  
+            // CREDIT PAYOUT = expenses paid out
+            // Exclude: ORDER CREDIT (revenue) and DELIVERY ORDER debits 
+            //          (cash goes to rider not drawer)
+            
+            const isOrderDebit = l.reference_type === 'ORDER' && l.transaction_type === 'DEBIT';
+            const isSettlementDebit = l.reference_type === 'SETTLEMENT' && l.transaction_type === 'DEBIT';
+            const isSettlementCredit = l.reference_type === 'SETTLEMENT' && l.transaction_type === 'CREDIT';
+            const isPayoutCredit = l.reference_type === 'PAYOUT' && l.transaction_type === 'CREDIT';
+
+            if (isOrderDebit || isSettlementDebit) {
                 ledgerCashIn += Number(l.amount);
-            } else if (l.transaction_type === 'CREDIT') {
+            } else if (isSettlementCredit || isPayoutCredit) {
                 ledgerCashOut += Number(l.amount);
             }
         });
