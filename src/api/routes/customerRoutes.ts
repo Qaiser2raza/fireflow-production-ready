@@ -5,10 +5,7 @@ import { journalEntryService, interpretCustomerBalance } from '../services/Journ
 import { AccountingService } from '../services/AccountingService';
 import { Decimal } from '@prisma/client/runtime/library';
 
-import { authMiddleware } from '../middleware/authMiddleware';
-
 const router = Router();
-router.use(authMiddleware);
 const accounting = new AccountingService();
 // Schema validation
 const customerSchema = z.object({
@@ -534,3 +531,4 @@ router.post('/customers/:id/charge', async (req, res) => {
 });
 
 export default router;
+

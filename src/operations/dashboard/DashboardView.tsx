@@ -12,7 +12,7 @@ import { Card } from '../../shared/ui/Card';
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 
 export const DashboardView: React.FC = () => {
-  const { currentUser } = useAppContext();
+  const { currentUser, operationsConfig, setActiveView } = useAppContext();
   const { currentRestaurant } = useRestaurant();
   const [stats, setStats] = useState<any>({
     totalSales: 0,
@@ -31,6 +31,22 @@ export const DashboardView: React.FC = () => {
   const [productMix, setProductMix] = useState<any[]>([]);
   const [velocity, setVelocity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Stable primitive IDs — extracted BEFORE hooks so useCallback/useEffect deps
+  // compare primitive strings (not object references). This prevents fetchAnalytics
+  // from being recreated on every AppContext re-render caused by fetchInitialData
+  // state setters (setOrders, setTables, etc.), which was triggering duplicate fetches.
+  const restaurantId = currentUser?.restaurant_id ?? '';
+  const userRole = currentUser?.role ?? '';
+
+  // Mount guard: ensures fetchAnalytics fires exactly once on mount, not again
+  // when AppContext re-renders after fetchInitialData completes.
+  const hasFetchedRef = useRef(false);
+
+  // Ref to always hold the latest fetchAnalytics for the db_change listener
+  // without adding fetchAnalytics to its dependency array (which caused re-registration
+  // of the listener on every context re-render).
+  const fetchAnalyticsRef = useRef<() => Promise<void>>(async () => {});
 
   // Stable fetch function — deps pinned to primitive IDs, not the full user/restaurant object.
   // Using useCallback so the interval always calls the latest version without recreating it.
@@ -87,56 +103,47 @@ export const DashboardView: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  // Depend on stable primitives only — prevents re-creating the fn on every context render
-  }, [currentUser?.restaurant_id, currentUser?.role]);
+  // Depend on stable extracted primitives — not optional-chain expressions.
+  // This ensures useCallback only recreates fetchAnalytics when the restaurant
+  // or role actually changes, not on every AppContext re-render.
+  }, [restaurantId, userRole]);
 
-  // Ref to track the active interval so we can safely clear it in all code paths.
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    // Guard: no-op until the user is fully loaded
-    if (!currentUser?.restaurant_id) return;
+    // Guard 1: wait until user is authenticated
+    if (!restaurantId) return;
 
-    // Immediate fetch on mount (or when the authenticated user changes)
+    // Guard 2: fire exactly once on mount — prevents the duplicate fetch
+    // that occurred when AppContext re-rendered after fetchInitialData completed.
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+
     fetchAnalytics();
 
-    // Defensive clear: ensure no stale interval survives before starting a new one
-    if (intervalRef.current !== null) {
-      clearInterval(intervalRef.current);
-    }
-
-    // 45 s is appropriate for analytics dashboards (spec: 30–60 s).
-    // Pause polling when the tab is hidden to avoid unnecessary backend load.
-    intervalRef.current = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        fetchAnalytics();
-      }
+    // Polling — pause when tab is hidden to reduce backend load.
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchAnalytics();
     }, 45000);
 
-    // Cleanup: ALWAYS return a cleanup so React can clear the interval on
-    // unmount OR when restaurant_id/role changes — no early-return that skips this.
-    return () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  // Use stable primitives, NOT the whole `currentUser` object.
-  // Object references change on every context render even when data is identical,
-  // which would create a new interval on every re-render.
-  }, [currentUser?.restaurant_id, fetchAnalytics]);
+    return () => clearInterval(interval);
 
-  // Listen for global real-time DB changes bridged from socket
+  // Only re-run if the authenticated restaurant actually changes (e.g. SUPER_ADMIN
+  // switching tenants). NOT on context re-renders from unrelated state changes.
+  }, [restaurantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // db_change listener uses fetchAnalyticsRef (not fetchAnalytics directly)
+  // so the listener is registered ONCE on mount and always calls the latest
+  // version of fetchAnalytics without needing fetchAnalytics in its dep array.
   useEffect(() => {
     const handler = (e: Event) => {
       const { table } = (e as CustomEvent<{table:string,eventType:string}>).detail || {};
       if (['orders','transactions','rider_shifts','journal_entries'].includes(table)) {
-        fetchAnalytics();
+        fetchAnalyticsRef.current();
       }
     };
     window.addEventListener('fireflow:db_change', handler);
     return () => window.removeEventListener('fireflow:db_change', handler);
-  }, [fetchAnalytics]);
+  }, []); // stable — ref keeps it current without re-registration
 
   const StatCard = ({ title, value, icon, subValue, color, trend }: any) => (
     <Card className="p-5 border-slate-800 bg-[#0f172a]/40 backdrop-blur-xl relative overflow-hidden group">
@@ -172,8 +179,12 @@ export const DashboardView: React.FC = () => {
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
             <span className="text-[9px] sm:text-[10px] text-slate-500 font-black uppercase tracking-[0.2em]">{currentUser?.restaurant_id ? 'Live System' : 'Offline Mode'}</span>
           </div>
-          <h1 className="text-3xl sm:text-4xl font-serif font-black text-white tracking-tighter uppercase transition-all leading-none">
-            {currentRestaurant?.name || 'FireFlow'} <span className="text-slate-500 font-normal block sm:inline mt-1 sm:mt-0">Dashboard</span>
+          <h1 
+            className="text-3xl sm:text-4xl font-serif font-black text-white tracking-tighter uppercase transition-all leading-none cursor-pointer hover:text-gold-500"
+            onClick={() => setActiveView?.('SETTINGS')}
+            title="Click to manage Business Profile"
+          >
+            {operationsConfig?.business_name || currentRestaurant?.name || 'FireFlow'} <span className="text-slate-500 font-normal block sm:inline mt-1 sm:mt-0 cursor-default">Dashboard</span>
           </h1>
           <p className="text-[8px] sm:text-[9px] text-slate-600 font-bold uppercase tracking-[0.2em] mt-2 sm:mt-1">
             {currentRestaurant?.name?.toUpperCase() || 'RESTAURANT'} | {currentRestaurant?.slug || 'SYSTEM'}

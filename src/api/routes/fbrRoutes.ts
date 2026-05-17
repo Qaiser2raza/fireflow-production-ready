@@ -1,7 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { fbrService } from '../services/FBRService';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { requireRole } from '../middleware/authMiddleware';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -10,7 +10,7 @@ const prisma = new PrismaClient();
  * GET /api/fbr/stats
  * Dashboard statistics for FBR summary
  */
-router.get('/stats', authMiddleware, async (req: any, res) => {
+router.get('/stats', async (req: any, res) => {
     try {
         const restaurant_id = req.user?.restaurant_id || req.restaurantId;
 
@@ -51,7 +51,7 @@ router.get('/stats', authMiddleware, async (req: any, res) => {
  * GET /api/fbr/invoices
  * List invoices with sync status
  */
-router.get('/invoices', authMiddleware, async (req: any, res) => {
+router.get('/invoices', async (req: any, res) => {
     try {
         const restaurant_id = req.user.restaurant_id;
         const { status, search, limit = '50', page = '1' } = req.query;
@@ -91,7 +91,7 @@ router.get('/invoices', authMiddleware, async (req: any, res) => {
  * POST /api/fbr/sync/:orderId
  * Manually sync a specific order
  */
-router.post('/sync/:orderId', authMiddleware, requireRole('MANAGER', 'ADMIN'), async (req, res) => {
+router.post('/sync/:orderId', requireRole('MANAGER', 'ADMIN'), async (req, res) => {
     try {
         const result = await fbrService.syncOrder(req.params.orderId);
         res.json(result);
@@ -104,7 +104,7 @@ router.post('/sync/:orderId', authMiddleware, requireRole('MANAGER', 'ADMIN'), a
  * POST /api/fbr/void/:orderId
  * Voids a pending FBR invoice so it's excluded from sync batches
  */
-router.post('/void/:orderId', authMiddleware, async (req: any, res) => {
+router.post('/void/:orderId', async (req: any, res) => {
     try {
         await prisma.orders.update({
             where: { id: req.params.orderId },
@@ -117,7 +117,7 @@ router.post('/void/:orderId', authMiddleware, async (req: any, res) => {
 });
 
 // GET /api/fbr/queue
-router.get('/queue', authMiddleware, async (req: any, res) => {
+router.get('/queue', async (req: any, res) => {
     try {
         const restaurant_id = req.user?.restaurant_id || req.restaurantId;
         const orders = await prisma.orders.findMany({
@@ -152,7 +152,7 @@ router.get('/queue', authMiddleware, async (req: any, res) => {
 });
 
 // GET /api/fbr/aggregate
-router.get('/aggregate', authMiddleware, async (req: any, res) => {
+router.get('/aggregate', async (req: any, res) => {
     try {
         const restaurant_id = req.user?.restaurant_id || req.restaurantId;
         const allOrders = await prisma.orders.findMany({
@@ -208,7 +208,7 @@ router.get('/aggregate', authMiddleware, async (req: any, res) => {
 });
 
 // POST /api/fbr/sync
-router.post('/sync', authMiddleware, async (req: any, res) => {
+router.post('/sync', async (req: any, res) => {
     try {
         const orderIds = Array.isArray(req.body) ? req.body : req.body.orderIds;
         if (!Array.isArray(orderIds)) return res.status(400).json({ error: 'Array of order IDs required' });
@@ -231,7 +231,7 @@ router.post('/sync', authMiddleware, async (req: any, res) => {
  * POST /api/fbr/sync-all
  * Batch sync pending orders
  */
-router.post('/sync-all', authMiddleware, requireRole('MANAGER', 'ADMIN'), async (req: any, res) => {
+router.post('/sync-all', requireRole('MANAGER', 'ADMIN'), async (req: any, res) => {
     try {
         const restaurant_id = req.user.restaurant_id;
 
@@ -262,7 +262,7 @@ router.post('/sync-all', authMiddleware, requireRole('MANAGER', 'ADMIN'), async 
 });
 
 // GET /api/fbr/tax-liability
-router.get('/tax-liability', authMiddleware, async (req: any, res) => {
+router.get('/tax-liability', async (req: any, res) => {
     try {
         const restaurant_id = req.user?.restaurant_id || req.restaurantId;
         const { from, to } = req.query;
@@ -352,3 +352,4 @@ router.get('/tax-liability', authMiddleware, async (req: any, res) => {
 });
 
 export default router;
+

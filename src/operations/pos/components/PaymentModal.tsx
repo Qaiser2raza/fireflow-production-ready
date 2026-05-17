@@ -67,7 +67,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     onPaymentCompleteClose,
     customer,
 }) => {
-    const { currentUser, activeSession, setActiveSession, addNotification } = useAppContext();
+    const { currentUser, activeSession, setActiveSession, addNotification, operationsConfig } = useAppContext();
     const isCashierWithoutSession = ["CASHIER", "MANAGER"].includes(currentUser?.role || '') && !activeSession;
     
     // Shift inline state
@@ -703,7 +703,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                     {/* ── RIGHT: RECEIPT PREVIEW ── */}
                     <div className="flex-1 min-w-[360px] max-w-[480px] bg-black/40 p-8 border-l border-white/5 flex flex-col overflow-y-auto custom-scrollbar items-center">
                         <div className="scale-90 origin-top w-full flex justify-center">
-                            <ThermalReceipt order={previewOrder as any} width="100%" />
+                            <ThermalReceipt order={previewOrder as any} width="100%" config={operationsConfig} />
                         </div>
                     </div>
                 </div>

@@ -2,11 +2,10 @@ import { Router } from 'express';
 import { AccountingService } from '../services/AccountingService';
 import { journalEntryService } from '../services/JournalEntryService';
 import { z } from 'zod';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { requireRole } from '../middleware/authMiddleware';
 import { toUTCRange } from '../../shared/utils/dateUtils';
 
 const router = Router();
-router.use(authMiddleware);
 router.use(requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN', 'CASHIER'));
 // const prisma = new PrismaClient(); // Unused
 const accounting = new AccountingService();
@@ -118,10 +117,10 @@ router.get('/ledger', async (req, res) => {
                 journal_entries: {
                     select: { reference_type: true, reference_id: true, description: true, date: true, created_at: true }
                 },
-                chart_of_accounts: { select: { code: true, name: true } }
+                chart_of_accounts: { select: { code: true, name: true, type: true } }
             },
-            orderBy: [{ journal_entries: { date: 'desc' } }, { id: 'asc' }],
-            take: Number(limit) || 100
+            orderBy: [{ journal_entries: { date: 'asc' } }, { id: 'asc' }],
+            take: Number(limit) || 1000 // Increased limit for ledgers
         });
 
         let entries = lines.map(l => ({
@@ -140,8 +139,36 @@ router.get('/ledger', async (req, res) => {
         if (type) {
             entries = entries.filter(e => e.transaction_type === type);
         }
+
+        let opening_balance = 0;
+        let account_type = null;
+
+        if (accountId) {
+            const account = await prisma.chart_of_accounts.findUnique({
+                where: { id: accountId as string }
+            });
+
+            if (account) {
+                account_type = account.type;
+                if (dateFilter.gte) {
+                    const prevLines = await prisma.journal_entry_lines.findMany({
+                        where: {
+                            account_id: accountId as string,
+                            journal_entries: { date: { lt: dateFilter.gte } }
+                        },
+                        select: { debit: true, credit: true }
+                    });
+
+                    const sumDebit = prevLines.reduce((acc, l) => acc + Number(l.debit), 0);
+                    const sumCredit = prevLines.reduce((acc, l) => acc + Number(l.credit), 0);
+                    
+                    const isDebitNormal = account.type === 'ASSET' || account.type === 'EXPENSE';
+                    opening_balance = isDebitNormal ? sumDebit - sumCredit : sumCredit - sumDebit;
+                }
+            }
+        }
         
-        return res.json({ success: true, entries });
+        return res.json({ success: true, entries, opening_balance, account_type });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
@@ -443,3 +470,4 @@ router.get('/gl-revenue', async (req, res) => {
 });
 
 export default router;
+

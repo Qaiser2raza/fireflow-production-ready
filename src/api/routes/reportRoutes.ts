@@ -12,10 +12,9 @@ import { getProfitLossReport } from '../services/reports/ProfitLossReport';
 import { getBalanceSheetReport } from '../services/reports/BalanceSheetReport';
 import { renderReport } from '../services/reports/reportTemplates';
 import { z } from 'zod';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { requireRole } from '../middleware/authMiddleware';
 
 const router = Router();
-router.use(authMiddleware);
 router.use(requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'));
 
 const reportQuerySchema = z.object({
@@ -85,3 +84,4 @@ router.get('/rider-audit', (req, res) => {
 });
 
 export default router;
+

@@ -1,6 +1,6 @@
 import express from 'express';
 import { ExpenseService } from '../services/ExpenseService';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { requireRole } from '../middleware/authMiddleware';
 import { prisma } from '../../shared/lib/prisma';
 import { z } from 'zod';
 
@@ -12,9 +12,6 @@ const expenseSchema = z.object({
     amount: z.number().positive(),
     description: z.string().min(1)
 });
-
-router.use(authMiddleware);
-
 router.post('/', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const validated = expenseSchema.parse(req.body);
@@ -48,3 +45,4 @@ router.get('/', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res)
 });
 
 export default router;
+

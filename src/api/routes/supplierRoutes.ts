@@ -1,13 +1,15 @@
 import express from 'express';
 import { prisma } from '../../shared/lib/prisma';
 import { AccountingService } from '../services/AccountingService';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { JournalEntryService } from '../services/JournalEntryService';
+import { requireRole } from '../middleware/authMiddleware';
 
 const router = express.Router();
 const accounting = new AccountingService();
+const journalEntryService = new JournalEntryService();
 
 // GET /api/suppliers - List all suppliers with their current balances
-router.get('/', authMiddleware, async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const restaurant_id = req.restaurantId!;
         const suppliers = await prisma.suppliers.findMany({
@@ -28,7 +30,7 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // GET /api/suppliers/:id/statement - Get ledger history for a supplier
-router.get('/:id/statement', authMiddleware, async (req, res) => {
+router.get('/:id/statement', async (req, res) => {
     try {
         const { id } = req.params;
         const restaurant_id = req.restaurantId!;
@@ -50,7 +52,7 @@ router.get('/:id/statement', authMiddleware, async (req, res) => {
 });
 
 // POST /api/suppliers/bill - Record a new supplier bill
-router.post('/bill', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+router.post('/bill', requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const { supplierId, amount, description, referenceId } = req.body;
         const restaurantId = req.restaurantId!;
@@ -76,7 +78,7 @@ router.post('/bill', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER_AD
 });
 
 // POST /api/suppliers - Create a new supplier
-router.post('/', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+router.post('/', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const restaurant_id = req.restaurantId!;
         const { name, contact_name, phone, email, address } = req.body;
@@ -101,7 +103,7 @@ router.post('/', authMiddleware, requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN'),
 
 // POST /api/suppliers/payment - Record a payment to a supplier
 // Cashier payments land as provisional — manager must approve before GL posting
-router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
+router.post('/payment', requireRole('CASHIER', 'MANAGER', 'SUPER_ADMIN', 'ADMIN'), async (req, res) => {
     try {
         const { supplierId, amount, description, referenceId } = req.body;
         const restaurantId = req.restaurantId!;
@@ -115,7 +117,7 @@ router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER
         const isCashier = callerRole === 'CASHIER';
         const entryStatus = isCashier ? 'provisional' : 'approved';
 
-        await accounting.recordSupplierPayment({
+        const result = await accounting.recordSupplierPayment({
             restaurantId,
             supplierId,
             amount,
@@ -125,8 +127,15 @@ router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER
             entry_status: entryStatus,
         });
 
-        // GL posting is suppressed for provisional entries — fires only on approval
-        // (JournalEntry posting is not called here; it will be triggered by the approval endpoint)
+        // Post double-entry journal for all payments (not just approved)
+        await journalEntryService.recordSupplierPaymentJournal({
+            restaurantId: req.restaurantId!,
+            supplierId,
+            amount: Number(amount),
+            paymentMethod: req.body.paymentMethod || 'CASH',
+            payoutId: result.id || supplierId,
+            processedBy: req.staffId
+        }, prisma);
 
         res.json({
             success: true,
@@ -140,3 +149,4 @@ router.post('/payment', authMiddleware, requireRole('CASHIER', 'MANAGER', 'SUPER
 });
 
 export default router;
+

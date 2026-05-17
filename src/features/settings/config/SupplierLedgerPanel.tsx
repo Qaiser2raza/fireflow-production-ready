@@ -21,6 +21,12 @@ export const SupplierLedgerPanel: React.FC = () => {
     const [showBillModal, setShowBillModal] = useState(false);
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [form, setForm] = useState({ amount: '', description: '', paymentMethod: 'CASH', referenceId: '' });
+    
+    // Add Supplier State
+    const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
+    const [supplierForm, setSupplierForm] = useState({
+        name: '', contact_name: '', phone: '', email: '', address: ''
+    });
 
     const hasFetched = useRef(false);
 
@@ -116,6 +122,33 @@ export const SupplierLedgerPanel: React.FC = () => {
         }
     };
 
+    const handleAddSupplier = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            const baseUrl = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
+            const res = await fetchWithAuth(`${baseUrl}/suppliers`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(supplierForm)
+            });
+
+            if (res.ok) {
+                addNotification('success', 'Supplier registered successfully');
+                setShowAddSupplierModal(false);
+                setSupplierForm({ name: '', contact_name: '', phone: '', email: '', address: '' });
+                fetchSuppliers();
+            } else {
+                const err = await res.json();
+                addNotification('error', err.error || 'Failed to add supplier');
+            }
+        } catch (e) {
+            addNotification('error', 'Connection error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const filteredSuppliers = suppliers.filter((s: any) => 
         s.name.toLowerCase().includes(search.toLowerCase()) ||
         (s.contact_person && s.contact_person.toLowerCase().includes(search.toLowerCase()))
@@ -125,14 +158,24 @@ export const SupplierLedgerPanel: React.FC = () => {
         <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-250px)] animate-in fade-in slide-in-from-right-4 duration-500 text-white relative">
             {/* Sidebar: Supplier List */}
             <div className="w-full md:w-80 space-y-4 flex flex-col">
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                    <Input 
-                        placeholder="Search Suppliers..." 
-                        className="pl-10 h-10 bg-slate-900 border-slate-800"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                    />
+                <div className="flex gap-2">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                        <Input 
+                            placeholder="Search Suppliers..." 
+                            className="pl-10 h-10 bg-slate-900 border-slate-800"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                        />
+                    </div>
+                    {['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') && (
+                        <Button 
+                            className="h-10 px-4 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shrink-0 border-indigo-500/50"
+                            onClick={() => setShowAddSupplierModal(true)}
+                        >
+                            <Users className="w-4 h-4" />
+                        </Button>
+                    )}
                 </div>
                 
                 <div className="flex-1 overflow-y-auto space-y-2 pr-2 no-scrollbar">
@@ -356,6 +399,92 @@ export const SupplierLedgerPanel: React.FC = () => {
                                 {loading ? 'Processing...' : 'Confirm Entry'}
                              </Button>
                          </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Register Supplier Modal */}
+            {showAddSupplierModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] max-w-md w-full shadow-2xl relative overflow-hidden">
+                        <div className="absolute top-0 left-0 right-0 h-1 bg-indigo-500" />
+                        
+                        <h2 className="text-2xl font-serif text-white flex items-center gap-3 mb-6">
+                            Register Supplier
+                        </h2>
+
+                        <form onSubmit={handleAddSupplier} className="space-y-4">
+                            <div>
+                                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1 mb-1.5 block">Company Name</label>
+                                <Input 
+                                    required
+                                    placeholder="e.g. Fresh Veggies Co"
+                                    className="bg-slate-950 border-slate-800"
+                                    value={supplierForm.name}
+                                    onChange={(e) => setSupplierForm({...supplierForm, name: e.target.value})}
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1 mb-1.5 block">Contact Person (Optional)</label>
+                                <Input 
+                                    placeholder="e.g. Ali"
+                                    className="bg-slate-950 border-slate-800"
+                                    value={supplierForm.contact_name}
+                                    onChange={(e) => setSupplierForm({...supplierForm, contact_name: e.target.value})}
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1 mb-1.5 block">Phone (Optional)</label>
+                                    <Input 
+                                        placeholder="0300..."
+                                        className="bg-slate-950 border-slate-800"
+                                        value={supplierForm.phone}
+                                        onChange={(e) => setSupplierForm({...supplierForm, phone: e.target.value})}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1 mb-1.5 block">Email (Optional)</label>
+                                    <Input 
+                                        type="email"
+                                        placeholder="ali@..."
+                                        className="bg-slate-950 border-slate-800"
+                                        value={supplierForm.email}
+                                        onChange={(e) => setSupplierForm({...supplierForm, email: e.target.value})}
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1 mb-1.5 block">Address (Optional)</label>
+                                <Input 
+                                    placeholder="Full street address..."
+                                    className="bg-slate-950 border-slate-800"
+                                    value={supplierForm.address}
+                                    onChange={(e) => setSupplierForm({...supplierForm, address: e.target.value})}
+                                />
+                            </div>
+
+                            <div className="flex gap-4 mt-10 pt-4">
+                                <Button 
+                                    type="button"
+                                    variant="secondary" 
+                                    className="flex-1 py-4 rounded-2xl border-slate-800 text-slate-500 hover:text-white"
+                                    onClick={() => {
+                                        setShowAddSupplierModal(false);
+                                        setSupplierForm({ name: '', contact_name: '', phone: '', email: '', address: '' });
+                                    }}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button 
+                                    type="submit"
+                                    className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-2xl text-white font-black uppercase tracking-widest text-xs shadow-xl active:scale-95 transition-all"
+                                    disabled={loading || !supplierForm.name}
+                                >
+                                    {loading ? 'Processing...' : 'Register'}
+                                </Button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}

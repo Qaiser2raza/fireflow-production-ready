@@ -44,6 +44,15 @@ export const SuppliersView: React.FC = () => {
     });
     const [billLoading, setBillLoading] = useState(false);
 
+    // Payment Modal State
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [paymentForm, setPaymentForm] = useState({
+        amount: '',
+        description: '',
+        paymentMethod: 'CASH' as 'CASH' | 'CARD'
+    });
+    const [paymentLoading, setPaymentLoading] = useState(false);
+
     // Supplier Form State
     const [supplierForm, setSupplierForm] = useState({
         name: '',
@@ -134,6 +143,37 @@ export const SuppliersView: React.FC = () => {
             addNotification?.('error', 'Failed to record bill');
         } finally {
             setBillLoading(false);
+        }
+    };
+
+    const handleRecordPayment = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedSupplierId || !paymentForm.amount) return;
+        setPaymentLoading(true);
+
+        try {
+            const response = await fetchWithAuth(`${API_URL}/suppliers/payment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    supplierId: selectedSupplierId,
+                    amount: Number(paymentForm.amount),
+                    description: paymentForm.description,
+                    paymentMethod: paymentForm.paymentMethod,
+                    restaurantId: currentUser?.restaurant_id
+                })
+            });
+
+            if (!response.ok) throw new Error('Failed to record payment');
+
+            addNotification?.('success', 'Payment recorded successfully');
+            setShowPaymentModal(false);
+            setPaymentForm({ amount: '', description: '', paymentMethod: 'CASH' });
+            loadSuppliers(); // Refresh balance
+        } catch (error) {
+            addNotification?.('error', 'Failed to record payment');
+        } finally {
+            setPaymentLoading(false);
         }
     };
 
@@ -317,6 +357,13 @@ export const SuppliersView: React.FC = () => {
                                     Post New Bill
                                 </button>
                                 <button
+                                    onClick={() => setShowPaymentModal(true)}
+                                    className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                                >
+                                    <Zap size={16} />
+                                    Record Payment
+                                </button>
+                                <button
                                     onClick={fetchHistory}
                                     className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-indigo-400 border border-slate-800 rounded-2xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2"
                                 >
@@ -394,6 +441,69 @@ export const SuppliersView: React.FC = () => {
                                     className="flex-1 py-4 bg-indigo-600 text-white font-black rounded-xl uppercase text-[10px] tracking-widest shadow-lg shadow-indigo-600/20 disabled:opacity-50 transition-all"
                                 >
                                     {billLoading ? 'Processing...' : 'Post Bill'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ═══ PAYMENT RECORDING MODAL ═══ */}
+            {showPaymentModal && (
+                <div className="fixed inset-0 z-[115] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4">
+                    <div className="bg-[#080d1a] border border-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-8">
+                        <h2 className="text-2xl font-black text-white uppercase tracking-tighter mb-6 flex items-center gap-2">
+                            <Zap className="text-emerald-500" />
+                            Record Supplier Payment
+                        </h2>
+                        <form onSubmit={handleRecordPayment} className="space-y-6">
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Payment Amount (Rs.)</label>
+                                <input
+                                    type="number"
+                                    required
+                                    autoFocus
+                                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-white font-bold focus:outline-none focus:border-indigo-500 transition-all font-mono"
+                                    placeholder="Enter amount..."
+                                    value={paymentForm.amount}
+                                    onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Payment Method</label>
+                                <select
+                                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-white font-bold focus:outline-none focus:border-indigo-500 transition-all text-xs uppercase"
+                                    value={paymentForm.paymentMethod}
+                                    onChange={e => setPaymentForm({ ...paymentForm, paymentMethod: e.target.value as 'CASH' | 'CARD' })}
+                                >
+                                    <option value="CASH">CASH</option>
+                                    <option value="CARD">CARD / BANK TRANSFER</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Description / Notes</label>
+                                <textarea
+                                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-white font-bold focus:outline-none focus:border-indigo-500 transition-all text-xs"
+                                    rows={3}
+                                    placeholder="e.g. Paid via Easypaisa, Cash given to rider..."
+                                    value={paymentForm.description}
+                                    onChange={e => setPaymentForm({ ...paymentForm, description: e.target.value })}
+                                />
+                            </div>
+                            <div className="flex gap-4 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPaymentModal(false)}
+                                    className="flex-1 py-4 bg-slate-900 text-slate-400 font-black rounded-xl uppercase text-[10px] tracking-widest transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={paymentLoading}
+                                    className="flex-1 py-4 bg-emerald-600 text-white font-black rounded-xl uppercase text-[10px] tracking-widest shadow-lg shadow-emerald-600/20 disabled:opacity-50 transition-all"
+                                >
+                                    {paymentLoading ? 'Processing...' : 'Confirm Payment'}
                                 </button>
                             </div>
                         </form>

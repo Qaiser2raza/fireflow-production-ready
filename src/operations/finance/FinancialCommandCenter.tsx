@@ -1,26 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-    Wallet,
-    ArrowUpRight,
-    ArrowDownLeft,
     History,
     PlusCircle,
     MinusCircle,
     Info,
     ShieldCheck,
-    Package,
-    TrendingUp,
-    PieChart,
-    CreditCard,
     X,
     FileText,
-    FileWarning,
     Users,
-    ShieldAlert,
-    Banknote,
     Eye,
     Printer,
-    Bike,
     FileEdit
 } from 'lucide-react';
 import { useAppContext as useApp } from '../../client/contexts/AppContext';
@@ -56,8 +45,8 @@ const FinancialCommandCenter: React.FC = () => {
         todaySales: 0,
         totalPayouts: 0
     });
-    const [glBalance, setGlBalance] = useState(0);
-    const [glRevenue, setGlRevenue] = useState(0);
+    const [_glBalance, setGlBalance] = useState(0);
+    const [_glRevenue, setGlRevenue] = useState(0);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -67,7 +56,7 @@ const FinancialCommandCenter: React.FC = () => {
     const [metrics, setMetrics] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [coaAccounts, setCoaAccounts] = useState<any[]>([]);
-    const [ledgerAccountFilter, setLedgerAccountFilter] = useState<string>('');
+    const [ledgerAccountFilter, _setLedgerAccountFilter] = useState<string>('');
     const [ledgerTypeFilter, setLedgerTypeFilter] = useState<string>('');
     const [ledgerRefFilter, setLedgerRefFilter] = useState<string>('');
     const [ledgerSearch, setLedgerSearch] = useState<string>('');
@@ -80,8 +69,8 @@ const FinancialCommandCenter: React.FC = () => {
     const [openingAmount, setOpeningAmount] = useState('');
     const [payoutData, setPayoutData] = useState({ amount: '', category: 'EXPENSE', notes: '', supplierId: '' });
     const [actualCount, setActualCount] = useState('');
-    const [productMix, setProductMix] = useState<any[]>([]);
-    const [velocity, setVelocity] = useState<any[]>([]);
+    const [_productMix, setProductMix] = useState<any[]>([]);
+    const [_velocity, setVelocity] = useState<any[]>([]);
     const [showHistoryModal, setShowHistoryModal] = useState(false);
     const [sessionHistory, setSessionHistory] = useState<any[]>([]);
     const [previewReport, setPreviewReport] = useState<{ title: string; endpoint: string; type?: string } | null>(null);
@@ -144,7 +133,28 @@ const FinancialCommandCenter: React.FC = () => {
                 });
             } else {
                 setMetrics({});
-                setStats({ expectedCash: 0, todaySales: 0, totalPayouts: 0 });
+                // Fall back to GL data when no session for this date
+                // Revenue comes from coaAccounts 4000 + 4010
+                // Cash comes from coaAccounts 1000
+                const revenueAccount = coaAccounts?.find((a: any) => a.code === '4000');
+                const cashAccount = coaAccounts?.find((a: any) => a.code === '1000');
+                const deliveryAccount = coaAccounts?.find((a: any) => a.code === '4010');
+                
+                const glRevenue = revenueAccount 
+                  ? Number(revenueAccount.total_credit || 0) - Number(revenueAccount.total_debit || 0)
+                  : 0;
+                const glCash = cashAccount
+                  ? Number(cashAccount.total_debit || 0) - Number(cashAccount.total_credit || 0)
+                  : 0;
+                const glDelivery = deliveryAccount
+                  ? Number(deliveryAccount.total_credit || 0) - Number(deliveryAccount.total_debit || 0)
+                  : 0;
+
+                setStats({ 
+                  expectedCash: glCash, 
+                  todaySales: glRevenue + glDelivery, 
+                  totalPayouts: 0 
+                });
             }
         } catch (err) {
             console.error('Failed to fetch session', err);
@@ -447,29 +457,14 @@ const FinancialCommandCenter: React.FC = () => {
     if (loading) return <div className="p-8 text-slate-500 animate-pulse font-mono uppercase tracking-widest text-xs">Initializing Ledger...</div>;
 
     return (
-        <div className="flex flex-col h-full bg-slate-950 text-slate-300 p-8 space-y-8 animate-in fade-in duration-700">
-            {/* Header Section */}
-            {/* Header Metrics */}
-            <div className="flex justify-between items-center mb-10">
+        <div className="flex flex-col h-full bg-slate-950 text-slate-300 p-6 space-y-5 animate-in fade-in duration-700">
+            {/* ── HEADER ─────────────────────────────────────── */}
+            <div className="flex justify-between items-center">
                 <div>
-                    <h1 className="text-4xl font-black text-white tracking-tighter uppercase mb-1">Financial Command</h1>
-                    <p className="text-slate-500 font-mono text-xs uppercase tracking-[0.2em]">Real-time GL & Performance Intelligence</p>
+                    <h1 className="text-xl font-black text-white uppercase tracking-wider">Daily Financial Summary</h1>
+                    <p className="text-slate-500 text-[10px] font-mono mt-0.5 uppercase tracking-widest">{useRange ? `${startDate} → ${endDate}` : selectedDate}</p>
                 </div>
-                <div className="flex gap-4 items-center">
-                    <div className="flex bg-slate-900 p-1 rounded-2xl border border-slate-800">
-                        <button
-                            onClick={() => setUseRange(false)}
-                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${!useRange ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
-                        >
-                            Single Day
-                        </button>
-                        <button
-                            onClick={() => setUseRange(true)}
-                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${useRange ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
-                        >
-                            Date Range
-                        </button>
-                    </div>
+                <div className="flex gap-2 items-center">
 
                     {!useRange ? (
                         <div className="flex flex-col items-end mr-2">
@@ -529,143 +524,85 @@ const FinancialCommandCenter: React.FC = () => {
                 </div>
             </div>
 
-            {/* Session Status and Actions */}
-            <div className="flex justify-between items-end">
-                <div>
-                    <div className="flex items-center gap-3">
-                        <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${activeSession ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}`}>
-                            {activeSession ? '● Drawer Active' : '○ Drawer Closed'}
-                        </div>
-                        <span className="text-slate-500 text-xs font-mono uppercase">
-                            Session ID: {activeSession?.id.slice(-8).toUpperCase() || 'NO_ACTIVE_SESSION'}
-                        </span>
+            {/* ── SESSION STATUS BAR ───────────────────────────── */}
+            <div className="flex items-center justify-between bg-slate-900/50 border border-slate-800/70 rounded-xl px-5 py-3">
+                <div className="flex items-center gap-4">
+                    <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${activeSession ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${activeSession ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                        Session: {activeSession ? 'Open' : 'Closed'}
                     </div>
+                    <span className="text-slate-500 text-xs font-mono">
+                        {activeSession
+                            ? `Opened ${formatTime((activeSession as any).opened_at || new Date())}`
+                            : sessionHistory[0]?.closed_at
+                                ? `Last closed ${formatTime(sessionHistory[0].closed_at)}`
+                                : 'No session recorded'}
+                    </span>
                 </div>
-
-                <div className="flex gap-4">
-                    <button
-                        onClick={() => setShowManualJournalModal(true)}
-                        className="px-5 py-3 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-600/20 hover:text-indigo-300 transition-all flex items-center gap-2"
-                    >
-                        <FileEdit size={16} strokeWidth={3} /> Post Journal
-                    </button>
-                    <button
-                        onClick={() => setShowTrialBalanceModal(true)}
-                        className="px-5 py-3 bg-slate-900 border border-slate-800 text-blue-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:border-blue-500/50 hover:text-blue-300 transition-all flex items-center gap-2"
-                    >
-                        <FileText size={16} strokeWidth={3} /> Trial Balance
-                    </button>
-                    <button
-                        onClick={handleViewHistory}
-                        className="px-5 py-3 bg-slate-900 border border-slate-800 text-slate-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:border-slate-600 hover:text-white transition-all flex items-center gap-2"
-                    >
-                        <History size={16} strokeWidth={3} /> Z-Report History
-                    </button>
+                <div className="flex gap-2">
                     {activeSession && (
-                        <button
-                            onClick={() => setShowDaybookReviewModal(true)}
-                            className="px-5 py-3 bg-slate-900 border border-slate-800 text-orange-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:border-orange-500/50 hover:text-orange-300 transition-all flex items-center gap-2"
-                        >
-                            <Info size={16} strokeWidth={3} /> Review Daybook
+                        <button onClick={() => setShowDaybookReviewModal(true)} className="px-3 py-1.5 bg-slate-800 text-orange-400 border border-slate-700 rounded-lg font-black text-[9px] uppercase tracking-widest hover:border-orange-500/40 transition-all flex items-center gap-1.5">
+                            <Info size={11} strokeWidth={3} /> Daybook
                         </button>
                     )}
                     {activeSession && (
-                        <button
-                            onClick={() => setShowPayoutModal(true)}
-                            className="px-6 py-3 bg-slate-900 border border-slate-800 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:border-red-500/50 transition-all flex items-center gap-2"
-                        >
-                            <MinusCircle size={16} strokeWidth={3} className="text-red-500" /> New Payout
+                        <button onClick={() => setShowPayoutModal(true)} className="px-3 py-1.5 bg-slate-800 text-slate-300 border border-slate-700 rounded-lg font-black text-[9px] uppercase tracking-widest hover:border-red-500/40 hover:text-red-400 transition-all flex items-center gap-1.5">
+                            <MinusCircle size={11} strokeWidth={3} className="text-red-500" /> Payout
                         </button>
                     )}
+                    <button onClick={handleViewHistory} className="px-3 py-1.5 bg-slate-800 text-slate-400 border border-slate-700 rounded-lg font-black text-[9px] uppercase tracking-widest hover:text-white transition-all flex items-center gap-1.5">
+                        <History size={11} strokeWidth={3} /> History
+                    </button>
                 </div>
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-                {/* Expected Cash Card */}
-                <div className="bg-gradient-to-br from-slate-900 to-slate-950 border-2 border-slate-800/50 rounded-[2.5rem] p-8 relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 p-8 text-white/5 group-hover:text-white/10 transition-colors">
-                        <Wallet size={120} />
-                    </div>
-                    <div className="relative z-10">
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-4">Calculated Cash</p>
-                        <h2 className="text-5xl font-black text-white tracking-tighter mb-2">
-                            <span className="text-slate-600 text-2xl mr-2 font-light tracking-normal">Rs.</span>
-                            {stats.expectedCash.toLocaleString()}
-                        </h2>
-                        <div className="flex items-center gap-2 text-emerald-500 text-xs font-bold mt-4">
-                            <ArrowUpRight size={14} strokeWidth={3} />
-                            <span>System Verified Balance</span>
-                        </div>
+            {/* ── 3 KPI CARDS ────────────────────────────────────── */}
+            <div className="grid grid-cols-3 gap-5">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.25em] mb-3">Cash Drawer</p>
+                    <h2 className="text-4xl font-black text-white tracking-tight mb-1"><span className="text-slate-600 text-base font-normal mr-1">Rs.</span>{stats.expectedCash.toLocaleString()}</h2>
+                    <p className="text-[10px] text-slate-500 mb-3">Expected in drawer</p>
+                    <div className="pt-3 border-t border-slate-800/70 flex gap-3 flex-wrap">
+                        <span className="text-[10px] font-bold bg-slate-800 px-2 py-1 rounded-md text-slate-400 uppercase">{metrics?.orderCount || 0} Orders</span>
+                        <span className="text-[10px] font-bold text-slate-500 uppercase">Payouts: Rs. {stats.totalPayouts.toLocaleString()}</span>
                     </div>
                 </div>
-
-                {/* Sales Snapshot */}
-                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 group hover:border-slate-700 transition-all">
-                    <div className="flex justify-between items-start mb-6">
-                        <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform">
-                            <ArrowUpRight size={24} strokeWidth={3} />
-                        </div>
-                    </div>
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">Today's Net Sales</p>
-                    <h3 className="text-3xl font-black text-white tracking-tight">
-                        Rs. {stats.todaySales.toLocaleString()}
-                    </h3>
-                    <div className="mt-4 flex gap-4">
-                        <div className="text-[10px] font-bold py-1 px-2 bg-slate-800 rounded-lg text-slate-400 uppercase tracking-widest leading-none">
-                            {metrics?.orderCount || 0} Orders
-                        </div>
-                    </div>
-                </div>
-
-                {/* Payouts Snapshot */}
-                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 group hover:border-slate-700 transition-all">
-                    <div className="flex justify-between items-start mb-6">
-                        <div className="w-12 h-12 bg-red-500/10 rounded-2xl flex items-center justify-center text-red-500 group-hover:scale-110 transition-transform">
-                            <ArrowDownLeft size={24} strokeWidth={3} />
-                        </div>
-                    </div>
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">Drawer Payouts</p>
-                    <h3 className="text-3xl font-black text-white tracking-tight">
-                        Rs. {stats.totalPayouts.toLocaleString()}
-                    </h3>
-                    <div className="mt-4 flex gap-4 text-xs font-bold text-slate-500">
-                        <span>Suppliers, Expenses, SCA</span>
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.25em] mb-3">Revenue</p>
+                    <h2 className="text-4xl font-black text-white tracking-tight mb-1"><span className="text-slate-600 text-base font-normal mr-1">Rs.</span>{stats.todaySales.toLocaleString()}</h2>
+                    <p className="text-[10px] text-slate-500 mb-3">Net sales for period</p>
+                    <div className="pt-3 border-t border-slate-800/70 space-y-1.5">
+                        {Number(metrics?.cashSales || 0) > 0 && (
+                            <div className="flex justify-between text-[10px] font-bold">
+                                <span className="text-slate-500 uppercase">Food & Beverage</span>
+                                <span className="text-slate-300 font-mono">Rs. {Number(metrics.cashSales).toLocaleString()}</span>
+                            </div>
+                        )}
+                        {Number(metrics?.settlements || 0) > 0 && (
+                            <div className="flex justify-between text-[10px] font-bold">
+                                <span className="text-slate-500 uppercase">Delivery</span>
+                                <span className="text-slate-300 font-mono">Rs. {Number(metrics.settlements).toLocaleString()}</span>
+                            </div>
+                        )}
                     </div>
                 </div>
-
-                {/* GL Cash Position */}
-                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 group hover:border-slate-700 transition-all">
-                    <div className="flex justify-between items-start mb-6">
-                        <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 group-hover:scale-110 transition-transform">
-                            <Wallet size={24} strokeWidth={3} />
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.25em] mb-3">Outstanding</p>
+                    <h2 className="text-4xl font-black text-white tracking-tight mb-1"><span className="text-slate-600 text-base font-normal mr-1">Rs.</span>{(Number(coaAccounts.find((a: any) => a.code === '2010')?.balance ?? 0) + Number(coaAccounts.find((a: any) => a.code === '2000')?.balance ?? 0)).toLocaleString()}</h2>
+                    <p className="text-[10px] text-slate-500 mb-3">Total liabilities pending</p>
+                    <div className="pt-3 border-t border-slate-800/70 space-y-1.5">
+                        <div className="flex justify-between text-[10px] font-bold">
+                            <span className="text-slate-500 uppercase">SVC Payable</span>
+                            <span className={`font-mono ${Number(coaAccounts.find((a: any) => a.code === '2010')?.balance ?? 0) > 0 ? 'text-amber-400' : 'text-slate-500'}`}>Rs. {Number(coaAccounts.find((a: any) => a.code === '2010')?.balance ?? 0).toLocaleString()}</span>
                         </div>
-                    </div>
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">GL Cash Position</p>
-                    <h3 className="text-3xl font-black text-white tracking-tight">
-                        Rs. {glBalance.toLocaleString()}
-                    </h3>
-                    <div className="mt-4 flex gap-4 text-xs font-bold text-slate-500">
-                        <span>Account Code: 1000</span>
-                    </div>
-                </div>
-
-                {/* GL Revenue (4000) */}
-                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 group hover:border-slate-700 transition-all">
-                    <div className="flex justify-between items-start mb-6">
-                        <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform">
-                            <TrendingUp size={24} strokeWidth={3} />
+                        <div className="flex justify-between text-[10px] font-bold">
+                            <span className="text-slate-500 uppercase">Tax (FBR)</span>
+                            <span className={`font-mono ${Number(coaAccounts.find((a: any) => a.code === '2000')?.balance ?? 0) > 0 ? 'text-rose-400' : 'text-slate-500'}`}>Rs. {Number(coaAccounts.find((a: any) => a.code === '2000')?.balance ?? 0).toLocaleString()}</span>
                         </div>
-                    </div>
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">GL Revenue (4000)</p>
-                    <h3 className="text-3xl font-black text-white tracking-tight">
-                        Rs. {glRevenue.toLocaleString()}
-                    </h3>
-                    <div className="mt-4 flex gap-4 text-xs font-bold text-slate-500">
-                        <span>Net Account Balance</span>
                     </div>
                 </div>
             </div>
+
 
             {/* Detailed Ledger Section */}
             <div className="flex-1 bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] overflow-hidden flex flex-col">
@@ -705,55 +642,43 @@ const FinancialCommandCenter: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Filter Bar */}
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {/* Filter bar */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                             {/* Search */}
-                            <div className="relative group">
-                                <PlusCircle className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 group-hover:text-indigo-500 transition-colors" size={14} />
+                            <div className="relative">
+                                <PlusCircle className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" size={13} />
                                 <input
                                     type="text"
-                                    placeholder="Search ledger description..."
+                                    placeholder="Search transactions..."
                                     value={ledgerSearch}
                                     onChange={e => setLedgerSearch(e.target.value)}
-                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-[10px] font-bold text-white outline-none focus:border-indigo-500/50 transition-all"
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-[10px] font-bold text-white outline-none focus:border-indigo-500/50 transition-all"
                                 />
                             </div>
 
-                            {/* Account Filter */}
-                            <select
-                                value={ledgerAccountFilter}
-                                onChange={e => setLedgerAccountFilter(e.target.value)}
-                                className="bg-slate-950 border border-slate-800 text-white text-[10px] font-bold uppercase rounded-xl px-4 py-2.5 outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
-                            >
-                                <option value="">Filter By Account (All)</option>
-                                {coaAccounts.map((a: any) => (
-                                    <option key={a.id} value={a.id}>{a.code} – {a.name}</option>
-                                ))}
-                            </select>
-
-                            {/* Reference Filter */}
+                            {/* Transaction type */}
                             <select
                                 value={ledgerRefFilter}
                                 onChange={e => setLedgerRefFilter(e.target.value)}
-                                className="bg-slate-950 border border-slate-800 text-white text-[10px] font-bold uppercase rounded-xl px-4 py-2.5 outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
+                                className="bg-slate-950 border border-slate-800 text-white text-[10px] font-bold uppercase rounded-xl px-4 py-2 outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
                             >
-                                <option value="">Reference (All)</option>
-                                <option value="ORDER">Order Sales</option>
-                                <option value="PAYOUT">Payouts/Expenses</option>
+                                <option value="">All Types</option>
+                                <option value="ORDER">Orders</option>
+                                <option value="PAYOUT">Payouts / Expenses</option>
                                 <option value="SETTLEMENT">Rider Settlements</option>
                                 <option value="MANUAL">Manual Journals</option>
-                                <option value="OPENING_BALANCE">Opening Balances</option>
+                                <option value="OPENING_BALANCE">Opening Balance</option>
                             </select>
 
-                            {/* Nature / Type Toggle */}
+                            {/* In / Out toggle */}
                             <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
-                                {['', 'DEBIT', 'CREDIT'].map((t) => (
+                                {[{ val: '', label: 'All' }, { val: 'DEBIT', label: 'In' }, { val: 'CREDIT', label: 'Out' }].map(t => (
                                     <button
-                                        key={t}
-                                        onClick={() => setLedgerTypeFilter(t)}
-                                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${ledgerTypeFilter === t ? 'bg-slate-800 text-white' : 'text-slate-600 hover:text-slate-400'}`}
+                                        key={t.val}
+                                        onClick={() => setLedgerTypeFilter(t.val)}
+                                        className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${ledgerTypeFilter === t.val ? 'bg-slate-800 text-white' : 'text-slate-600 hover:text-slate-400'}`}
                                     >
-                                        {t || 'All'}
+                                        {t.label}
                                     </button>
                                 ))}
                             </div>
@@ -812,97 +737,44 @@ const FinancialCommandCenter: React.FC = () => {
                 </div>
             </div>
 
-            {/* Management Intelligence Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-8">
-                {/* Product Mix Card */}
-                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8">
-                    <div className="flex justify-between items-center mb-6">
-                        <div className="flex items-center gap-3">
-                            <Package className="text-gold-500" size={20} />
-                            <h2 className="text-sm font-black text-white uppercase tracking-widest">Top Performance (Mix)</h2>
-                        </div>
-                    </div>
-                    <div className="space-y-4">
-                        {productMix.length > 0 ? productMix.map((item: any, idx: number) => (
-                            <div key={idx} className="flex justify-between items-center group">
-                                <div className="flex items-center gap-4">
-                                    <span className="text-[10px] font-black text-slate-600">0{idx + 1}</span>
-                                    <div>
-                                        <p className="text-xs font-bold text-slate-300 group-hover:text-white transition-colors uppercase">{item.name}</p>
-                                        <p className="text-[9px] text-slate-500 uppercase font-bold">{item.category}</p>
-                                    </div>
-                                </div>
-                                <div className="text-right">
-                                    <p className="text-xs font-mono font-bold text-white">Rs. {Math.round(item.revenue).toLocaleString()}</p>
-                                    <p className="text-[9px] text-emerald-500 font-black">{item.quantity} SOLD</p>
-                                </div>
-                            </div>
-                        )) : (
-                            <p className="text-center py-8 text-slate-600 italic text-xs">No sales data found for today.</p>
-                        )}
-                    </div>
-                </div>
-
-                {/* Sales Velocity Card */}
-                <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8">
-                    <div className="flex justify-between items-center mb-6">
-                        <div className="flex items-center gap-3">
-                            <TrendingUp className="text-blue-500" size={20} />
-                            <h2 className="text-sm font-black text-white uppercase tracking-widest">Hourly Peak Velocity</h2>
-                        </div>
-                    </div>
-                    <div className="flex items-end gap-2 h-32">
-                        {velocity.length > 0 ? velocity.slice(-12).map((v: any, idx: number) => (
-                            <div key={idx} className="flex-1 group relative">
-                                <div
-                                    className="bg-blue-600/20 group-hover:bg-blue-500/40 border-t-2 border-blue-500 transition-all rounded-t-lg"
-                                    style={{ height: `${Math.max(5, (v.revenue / (Math.max(...velocity.map((x: any) => x.revenue)) || 1)) * 100)}%` }}
-                                ></div>
-                                <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-[8px] font-black px-1 rounded z-10">
-                                    {v.count} ord
-                                </div>
-                                <p className="text-[8px] font-black text-slate-600 mt-2 text-center">{v.hour.split(':')[0]}</p>
-                            </div>
-                        )) : (
-                            <p className="w-full text-center text-slate-600 italic text-xs">Awaiting data...</p>
-                        )}
-                    </div>
-                </div>
-            </div>
-
-            {/* Enterprise Reports Grid */}
-            <div className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] p-8 pb-8 mb-8">
-                <div className="flex justify-between items-center mb-6">
-                    <div className="flex items-center gap-3">
-                        <FileText className="text-purple-500" size={20} />
-                        <h2 className="text-sm font-black text-white uppercase tracking-widest">Enterprise Reports Extractor</h2>
-                    </div>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {/* ── ACTIONS BAR ──────────────────────────────────── */}
+            <div className="flex items-center gap-3 pt-2 pb-6 border-t border-slate-800/70">
+                <button
+                    onClick={() => setShowManualJournalModal(true)}
+                    className="px-5 py-2.5 bg-indigo-600/10 border border-indigo-500/30 text-indigo-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-indigo-600/20 hover:text-indigo-300 transition-all flex items-center gap-2"
+                >
+                    <FileEdit size={14} strokeWidth={3} /> Post Journal
+                </button>
+                <button
+                    onClick={() => setShowTrialBalanceModal(true)}
+                    className="px-5 py-2.5 bg-slate-900 border border-slate-800 text-blue-400 rounded-xl font-black text-xs uppercase tracking-widest hover:border-blue-500/40 hover:text-blue-300 transition-all flex items-center gap-2"
+                >
+                    <FileText size={14} strokeWidth={3} /> Trial Balance
+                </button>
+                <button
+                    onClick={handleViewHistory}
+                    className="px-5 py-2.5 bg-slate-900 border border-slate-800 text-slate-400 rounded-xl font-black text-xs uppercase tracking-widest hover:border-slate-600 hover:text-white transition-all flex items-center gap-2"
+                >
+                    <History size={14} strokeWidth={3} /> Z-Report
+                </button>
+                <div className="flex-1" />
+                {/* Secondary: Enterprise Reports */}
+                <div className="flex items-center gap-2 flex-wrap justify-end">
                     {[
-                        { title: 'Daily Sales', desc: 'Net revenue, taxes & discounts', endpoint: '/api/reports/daily-sales', icon: <Banknote size={16}/> },
-                        { title: 'Tax Liability', desc: 'FBR/SRB compliance data', endpoint: '/api/reports/tax-liability', icon: <FileWarning size={16}/> },
-                        { title: 'Staff Performance', desc: 'Waiters, Riders, Cashiers', endpoint: '/api/reports/staff-performance', icon: <Users size={16}/> },
-                        { title: 'Category Sales', desc: 'Revenue breakdown by group', endpoint: '/api/reports/category-sales', icon: <PieChart size={16}/> },
-                        { title: 'Payment Methods', desc: 'Cash vs Digital split', endpoint: '/api/reports/payment-methods', icon: <CreditCard size={16}/> },
-                        { title: 'Product Mix', desc: 'Top & bottom movers', endpoint: '/api/reports/product-mix', icon: <Package size={16}/> },
-                        { title: 'Rider Audit', desc: 'Detailed log for delivery staff', endpoint: '/api/reports/rider-audit', type: 'rider-audit', icon: <Bike size={16}/> },
-                        { title: 'Loss Prevention', desc: 'Voids & cancel audit', endpoint: '/api/reports/loss-prevention', icon: <ShieldAlert size={16}/> },
-                        { title: 'Security Logs', desc: 'Operational audit trail', endpoint: '/api/reports/security', icon: <ShieldCheck size={16}/> },
+                        { title: 'Daily Sales', endpoint: '/api/reports/daily-sales' },
+                        { title: 'Tax Liability', endpoint: '/api/reports/tax-liability' },
+                        { title: 'Staff', endpoint: '/api/reports/staff-performance' },
+                        { title: 'Payment Methods', endpoint: '/api/reports/payment-methods' },
+                        { title: 'Product Mix', endpoint: '/api/reports/product-mix' },
+                        { title: 'Loss Prevention', endpoint: '/api/reports/loss-prevention' },
+                        { title: 'Rider Audit', endpoint: '/api/reports/rider-audit', type: 'rider-audit' },
                     ].map(r => (
                         <button
                             key={r.title}
-                            onClick={() => {
-                                setPreviewReport(r);
-                                handleFetchReport(r.endpoint, r.title);
-                            }}
-                            className="bg-slate-950/50 border border-slate-800/50 hover:border-purple-500/50 hover:bg-purple-500/10 p-4 rounded-3xl transition-all text-left flex flex-col justify-between h-32 group"
+                            onClick={() => { setPreviewReport(r); handleFetchReport(r.endpoint, r.title); }}
+                            className="px-3 py-1.5 bg-slate-900/60 border border-slate-800 text-slate-500 rounded-lg font-black text-[9px] uppercase tracking-widest hover:text-purple-400 hover:border-purple-500/30 transition-all"
                         >
-                            <div className="text-slate-500 group-hover:text-purple-400 mb-2 transition-colors">{r.icon}</div>
-                            <div>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-white group-hover:text-purple-200 transition-colors">{r.title}</p>
-                                <p className="text-[9px] text-slate-500 font-bold mt-1 line-clamp-2 leading-tight">{r.desc}</p>
-                            </div>
+                            {r.title}
                         </button>
                     ))}
                 </div>

@@ -1,11 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../../shared/lib/prisma';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { requireRole } from '../middleware/authMiddleware';
 import { toUTCRange } from '../../shared/utils/dateUtils';
 import { Decimal } from '@prisma/client/runtime/library';
 
 const router = Router();
-router.use(authMiddleware);
 
 /**
  * GET /api/analytics/finance/summary

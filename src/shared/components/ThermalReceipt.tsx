@@ -5,11 +5,12 @@ import { Order } from '../types';
 interface ThermalReceiptProps {
     order: Order;
     width?: string; // e.g., '58mm' or '80mm' -> mapped to pixels
+    config?: any;
 }
 
-export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '380px' }) => {
-    // Load local config for identity overrides
-    const config = JSON.parse(localStorage.getItem(`fireflow_operations_config_${order.restaurant_id}`) || '{}');
+export const ThermalReceipt: React.FC<ThermalReceiptProps> = ({ order, width = '380px', config: propConfig }) => {
+    // Load local config for identity overrides, prefer prop over localStorage
+    const config = propConfig || JSON.parse(localStorage.getItem(`fireflow_operations_config_${order.restaurant_id}`) || '{}');
 
     // Helper to format currency
     const formatCurrency = (amount: number) => `Rs. ${Math.round(amount).toLocaleString()}`;

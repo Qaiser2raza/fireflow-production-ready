@@ -4,10 +4,7 @@ import { z } from 'zod';
 import { AccountingService } from '../services/AccountingService';
 import { journalEntryService } from '../services/JournalEntryService';
 import { RiderShiftService } from '../services/logistics/RiderShiftService';
-import { authMiddleware } from '../middleware/authMiddleware';
-
 const router = Router();
-router.use(authMiddleware);
 const prisma = new PrismaClient();
 const accounting = new AccountingService();
 const shiftService = new RiderShiftService();
@@ -641,3 +638,4 @@ router.get('/riders/:driverId/pending-settlement', async (req, res) => {
 });
 
 export default router;
+

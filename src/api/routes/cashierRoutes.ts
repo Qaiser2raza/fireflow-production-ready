@@ -1,11 +1,9 @@
 import { Router } from 'express';
 import { CashierSessionService } from '../services/finance/CashierSessionService.js';
 import { CashierShiftLogService } from '../services/finance/CashierShiftLogService.js';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware.js';
+import { requireRole } from '../middleware/authMiddleware.js';
 
 const router = Router();
-router.use(authMiddleware);
-
 // Get current active session for a staff member
 router.get('/current', async (req, res) => {
     try {
@@ -166,7 +164,7 @@ router.post('/:id/distribute-svc', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'S
  *
  * Body: { amount, notes?, restaurantId }
  */
-router.post('/:id/manager-drawing', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/:id/manager-drawing', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const sessionId = req.params.id;
         const { amount, notes, restaurantId } = req.body;
@@ -190,3 +188,4 @@ router.post('/:id/manager-drawing', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN
 });
 
 export default router;
+

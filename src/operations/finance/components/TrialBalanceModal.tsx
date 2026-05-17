@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, Download, Loader2, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import { X, FileText, Download, Loader2, ArrowUpRight, ArrowDownLeft, Eye } from 'lucide-react';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
+import { AccountLedgerModal } from './AccountLedgerModal';
 
 interface TrialBalanceModalProps {
     isOpen: boolean;
@@ -21,6 +22,8 @@ export const TrialBalanceModal: React.FC<TrialBalanceModalProps> = ({ isOpen, on
     const [balances, setBalances] = useState<TrialBalanceRow[]>([]);
     const [dateFrom, setDateFrom] = useState('');
     const [dateTo, setDateTo] = useState('');
+
+    const [selectedAccount, setSelectedAccount] = useState<{ id: string, code: string, name: string } | null>(null);
 
     const fetchBalances = async () => {
         setLoading(true);
@@ -147,8 +150,17 @@ export const TrialBalanceModal: React.FC<TrialBalanceModalProps> = ({ isOpen, on
                             </thead>
                             <tbody className="text-xs font-mono">
                                 {balances.map(b => (
-                                    <tr key={b.id} className="border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors">
-                                        <td className="px-4 py-3 text-slate-400 font-bold">{b.code}</td>
+                                    <tr 
+                                        key={b.id} 
+                                        className="border-b border-slate-800/30 hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                                        onClick={() => setSelectedAccount({ id: b.id, code: b.code, name: b.name })}
+                                    >
+                                        <td className="px-4 py-3 text-slate-400 font-bold group-hover:text-indigo-400 transition-colors">
+                                            <div className="flex items-center gap-2">
+                                                <Eye size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                                                {b.code}
+                                            </div>
+                                        </td>
                                         <td className="px-4 py-3 text-white max-w-[200px] truncate">{b.name}</td>
                                         <td className="px-4 py-3 text-center">
                                             <span className="inline-block px-2 py-0.5 rounded border border-slate-700 text-[9px] bg-slate-800 text-slate-300 font-black uppercase tracking-widest">
@@ -200,6 +212,18 @@ export const TrialBalanceModal: React.FC<TrialBalanceModalProps> = ({ isOpen, on
                     )}
                 </div>
             </div>
+
+            {selectedAccount && (
+                <AccountLedgerModal
+                    isOpen={!!selectedAccount}
+                    onClose={() => setSelectedAccount(null)}
+                    accountId={selectedAccount.id}
+                    accountCode={selectedAccount.code}
+                    accountName={selectedAccount.name}
+                    dateFrom={dateFrom}
+                    dateTo={dateTo}
+                />
+            )}
         </div>
     );
 };

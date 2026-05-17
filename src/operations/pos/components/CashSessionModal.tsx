@@ -4,7 +4,7 @@ import { useAppContext } from '../../../client/contexts/AppContext';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { XReportPrintView } from './XReportPrintView';
 
-type CloseStep = 'reconcile' | 'drawing' | 'svc' | 'confirm';
+type CloseStep = 'reconcile' | 'svc' | 'drawing' | 'confirm';
 
 interface CashSessionModalProps {
     mode: 'OPEN' | 'CLOSE';
@@ -19,7 +19,6 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
     const [openingFloat, setOpeningFloat] = useState('');
     const [expectedNextFloat, setExpectedNextFloat] = useState(0);
     const [actualCash, setActualCash] = useState('');
-    const [withdrawnAmount, setWithdrawnAmount] = useState('');
     const [notes, setNotes] = useState('');
     const [summary, setSummary] = useState<any>(null);
     // Day-end accounting state
@@ -145,7 +144,7 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
         try {
             const res = await fetchWithAuth('/api/cashier/close', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: activeSession.id, actualCash: Number(actualCash), withdrawnAmount: Number(withdrawnAmount || 0), closedBy: currentUser.id, notes })
+                body: JSON.stringify({ sessionId: activeSession.id, actualCash: Number(actualCash), withdrawnAmount: 0, closedBy: currentUser.id, notes })
             });
             if (res.status === 409) {
                 const data = await res.json();
@@ -156,12 +155,11 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
             const d = await res.json();
             if (d.success) {
                 setJournalLog(p => [...p,
-                    `✅ DR 1090 Manager Safe Rs.${withdrawnAmount||0} | CR 1000 Cash (close withdrawal)`,
                     variance < 0 ? `✅ DR 5030 Shortage Rs.${Math.abs(variance).toFixed(0)} | CR 1000 Cash` : '',
                     variance > 0 ? `✅ DR 1000 Cash Rs.${variance.toFixed(0)} | CR 4030 Overage` : ''
                 ].filter(Boolean));
-                addNotification('success', 'Session closed and reconciled');
-                setCloseStep('drawing'); // proceed to drawing step
+                addNotification('success', 'Session locked — proceed to disburse SVC');
+                setCloseStep('svc'); // NEW: SVC first, then drawing
             } else throw new Error(d.error);
         } catch (e: any) { addNotification('error', e.message); }
         finally { setLoading(false); }
@@ -240,10 +238,10 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                         {/* Step indicator */}
                         {closeStep !== 'confirm' && (
                             <div className="flex items-center gap-1">
-                                {(['reconcile','drawing','svc'] as CloseStep[]).map((s, i) => {
-                                    const labels = ['1. Count','2. Drawing','3. SVC'];
+                                {(['reconcile','svc','drawing'] as CloseStep[]).map((s, i) => {
+                                    const labels = ['1. Count','2. SVC','3. Drawing'];
                                     const active = closeStep === s;
-                                    const done = (['reconcile','drawing','svc'] as CloseStep[]).indexOf(closeStep) > i;
+                                    const done = (['reconcile','svc','drawing'] as CloseStep[]).indexOf(closeStep) > i;
                                     return (
                                         <React.Fragment key={s}>
                                             <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${active ? 'bg-indigo-600 text-white' : done ? 'bg-emerald-500/20 text-emerald-400' : 'bg-[#1e293b] text-slate-500'}`}>
@@ -299,72 +297,19 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                                     <textarea className="w-full bg-[#1e293b] border border-[#334155] rounded-xl px-4 py-3 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 transition-all resize-none" placeholder="Any discrepancies or shift notes..." rows={2} value={notes} onChange={e => setNotes(e.target.value)}/>
                                 </div>
                                 <div className="bg-[#1e293b]/60 p-3 rounded-lg border border-[#1e293b] border-dashed">
-                                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">Journal to Post on Close</p>
-                                    <p className="text-xs font-mono text-slate-400">DR 1090 Manager Safe  |  CR 1000 Cash  (withdrawal)</p>
-                                    {variance < 0 && <p className="text-xs font-mono text-red-400">DR 5030 Shortage  |  CR 1000 Cash  (shortage)</p>}
-                                    {variance > 0 && <p className="text-xs font-mono text-emerald-400">DR 1000 Cash  |  CR 4030 Overage  (surplus)</p>}
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                                        <span>Handover to Manager</span>
-                                        <span className="text-[10px] text-slate-400 normal-case">Withdraw from till</span>
-                                    </label>
-                                    <div className="relative">
-                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">Rs.</span>
-                                        <input type="number" className="w-full bg-indigo-500/5 border border-indigo-500/20 rounded-xl py-4 pl-12 pr-4 text-xl font-bold text-indigo-300 focus:outline-none focus:border-indigo-500 transition-all" placeholder="Amount to withdraw..." value={withdrawnAmount} onChange={e => setWithdrawnAmount(e.target.value)}/>
-                                    </div>
+                                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1.5">Journals that will post</p>
+                                    {variance < 0 && <p className="text-xs font-mono text-red-400">DR 5030 Shortage  |  CR 1000 Cash</p>}
+                                    {variance > 0 && <p className="text-xs font-mono text-emerald-400">DR 1000 Cash  |  CR 4030 Overage</p>}
+                                    {variance === 0 && <p className="text-xs font-mono text-slate-500">No variance — books balanced.</p>}
                                 </div>
                                 <button onClick={handleClose} disabled={loading || !actualCash} className="w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-700 disabled:text-slate-500 text-white transition-all shadow-lg shadow-indigo-500/20">
-                                    {loading ? <Loader2 size={20} className="animate-spin"/> : <><Calculator size={20}/> Close & Reconcile</>}
+                                    {loading ? <Loader2 size={20} className="animate-spin"/> : <><Calculator size={20}/>Lock &amp; Reconcile</>}
                                 </button>
                             </div>
+
                         )}
 
-                        {/* ── STEP 2: MANAGER DRAWING ───────────────────── */}
-                        {closeStep === 'drawing' && (
-                            <div className="space-y-4">
-                                <div className="bg-violet-500/10 border border-violet-500/20 p-4 rounded-xl flex items-start gap-3">
-                                    <Vault className="text-violet-400 shrink-0 mt-0.5" size={18}/>
-                                    <div>
-                                        <p className="text-sm font-bold text-violet-300">Manager Safe Transfer</p>
-                                        <p className="text-xs text-violet-300/70 mt-0.5">Post a formal journal for cash moved from till to safe.<br/>
-                                        <span className="font-mono text-violet-400/80">DR 1090 Manager Safe / CR 1000 Cash</span></p>
-                                    </div>
-                                </div>
-                                {drawingPosted ? (
-                                    <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl flex items-center gap-3">
-                                        <CheckCircle2 className="text-emerald-400" size={20}/>
-                                        <div>
-                                            <p className="text-sm font-bold text-emerald-400">Drawing Posted ✓</p>
-                                            <p className="text-xs text-emerald-300/70">Rs. {drawingAmount} transferred to safe — journal recorded.</p>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount to Safe</label>
-                                            <div className="relative">
-                                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">Rs.</span>
-                                                <input type="number" className="w-full bg-[#1e293b] border border-[#334155] rounded-xl py-4 pl-12 pr-4 text-2xl font-bold text-violet-300 focus:outline-none focus:border-violet-500 transition-all" placeholder="0.00" value={drawingAmount} onChange={e => setDrawingAmount(e.target.value)} autoFocus/>
-                                            </div>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Note (Optional)</label>
-                                            <input type="text" className="w-full bg-[#1e293b] border border-[#334155] rounded-xl px-4 py-3 text-sm text-slate-300 focus:outline-none focus:border-violet-500 transition-all" placeholder="e.g. Evening safe drop" value={drawingNotes} onChange={e => setDrawingNotes(e.target.value)}/>
-                                        </div>
-                                        <button onClick={handlePostDrawing} disabled={loading} className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:bg-slate-700 text-white transition-all">
-                                            {loading ? <Loader2 size={18} className="animate-spin"/> : <><Vault size={18}/> Post Drawing Journal</>}
-                                        </button>
-                                    </>
-                                )}
-                                <div className="flex gap-2">
-                                    <button onClick={() => setCloseStep('reconcile')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[#1e293b] text-slate-400 hover:text-white flex items-center justify-center gap-2"><ChevronLeft size={16}/>Back</button>
-                                    <button onClick={() => setCloseStep('svc')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center gap-2">Next: SVC <ChevronRight size={16}/></button>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* ── STEP 3: SVC DISTRIBUTION ──────────────────── */}
+                        {/* ── STEP 2: SVC DISTRIBUTION ──────────────────── */}
                         {closeStep === 'svc' && (
                             <div className="space-y-4">
                                 <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-xl flex items-start gap-3">
@@ -372,6 +317,7 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                                     <div>
                                         <p className="text-sm font-bold text-amber-300">Service Charge Disbursal</p>
                                         <p className="text-xs text-amber-300/70 mt-0.5">Total collected this session: <span className="font-bold text-amber-400">{summary ? fmt(summary.calculatedSummary?.serviceChargeCollected) : 'Rs. 0'}</span></p>
+                                        <p className="text-xs font-mono text-amber-400/60 mt-1">DR 2010 SVC Payable  |  CR 1000 Cash</p>
                                     </div>
                                 </div>
                                 {svcPosted ? (
@@ -389,12 +335,56 @@ export const CashSessionModal: React.FC<CashSessionModalProps> = ({ mode, onClos
                                             </div>
                                         </div>
                                         <button onClick={handleDistributeSVC} disabled={loading} className="w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-700 text-white transition-all shadow-lg shadow-amber-500/10">
-                                            {loading ? <Loader2 size={20} className="animate-spin"/> : <><Users size={20}/> Disburse & Continue</>}
+                                            {loading ? <Loader2 size={20} className="animate-spin"/> : <><Users size={20}/> Disburse &amp; Continue</>}
                                         </button>
                                     </div>
                                 )}
                                 <div className="flex gap-2">
-                                    <button onClick={() => setCloseStep('drawing')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[#1e293b] text-slate-400 hover:text-white flex items-center justify-center gap-2"><ChevronLeft size={16}/>Back</button>
+                                    <button onClick={() => setCloseStep('reconcile')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[#1e293b] text-slate-400 hover:text-white flex items-center justify-center gap-2"><ChevronLeft size={16}/>Back</button>
+                                    <button onClick={() => setCloseStep('drawing')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center gap-2">Next: Safe Transfer <ChevronRight size={16}/></button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ── STEP 3: MANAGER DRAWING ───────────────────── */}
+                        {closeStep === 'drawing' && (
+                            <div className="space-y-4">
+                                <div className="bg-violet-500/10 border border-violet-500/20 p-4 rounded-xl flex items-start gap-3">
+                                    <Vault className="text-violet-400 shrink-0 mt-0.5" size={18}/>
+                                    <div>
+                                        <p className="text-sm font-bold text-violet-300">Manager Safe Transfer</p>
+                                        <p className="text-xs text-violet-300/70 mt-0.5">Remaining after SVC: <span className="font-bold text-violet-400">{fmt((Number(actualCash) || 0) - (svcPosted ? Number(svcAmount) : 0))}</span><br/>
+                                        <span className="font-mono text-violet-400/80">DR 1090 Manager Safe  |  CR 1000 Cash</span></p>
+                                    </div>
+                                </div>
+                                {drawingPosted ? (
+                                    <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl flex items-center gap-3">
+                                        <CheckCircle2 className="text-emerald-400" size={20}/>
+                                        <div>
+                                            <p className="text-sm font-bold text-emerald-400">Drawing Posted ✓</p>
+                                            <p className="text-xs text-emerald-300/70">Rs. {drawingAmount} transferred to safe — journal recorded.</p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amount to Transfer to Safe</label>
+                                            <div className="relative">
+                                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">Rs.</span>
+                                                <input type="number" className="w-full bg-[#1e293b] border border-[#334155] rounded-xl py-4 pl-12 pr-4 text-2xl font-bold text-violet-300 focus:outline-none focus:border-violet-500 transition-all" placeholder="0.00" value={drawingAmount} onChange={e => setDrawingAmount(e.target.value)} autoFocus/>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Note (Optional)</label>
+                                            <input type="text" className="w-full bg-[#1e293b] border border-[#334155] rounded-xl px-4 py-3 text-sm text-slate-300 focus:outline-none focus:border-violet-500 transition-all" placeholder="e.g. Evening safe drop" value={drawingNotes} onChange={e => setDrawingNotes(e.target.value)}/>
+                                        </div>
+                                        <button onClick={handlePostDrawing} disabled={loading} className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:bg-slate-700 text-white transition-all">
+                                            {loading ? <Loader2 size={18} className="animate-spin"/> : <><Vault size={18}/> Post Drawing Journal</>}
+                                        </button>
+                                    </>
+                                )}
+                                <div className="flex gap-2">
+                                    <button onClick={() => setCloseStep('svc')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-[#1e293b] text-slate-400 hover:text-white flex items-center justify-center gap-2"><ChevronLeft size={16}/>Back</button>
                                     <button onClick={() => setCloseStep('confirm')} className="flex-1 py-3 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center gap-2">Finish <ChevronRight size={16}/></button>
                                 </div>
                             </div>

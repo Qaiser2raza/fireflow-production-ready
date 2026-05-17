@@ -4,6 +4,7 @@ import { X, Printer, Loader2, RefreshCw } from 'lucide-react';
 import { Order } from '../types';
 import { ThermalReceipt } from './ThermalReceipt';
 import { fetchWithAuth } from '../lib/authInterceptor';
+import { useAppContext } from '../../client/contexts/AppContext';
 
 interface ReceiptPreviewModalProps {
     isOpen: boolean;
@@ -27,6 +28,7 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
     const [liveOrder, setLiveOrder] = useState<Order | null>(null);
     const [isFetching, setIsFetching] = useState(false);
     const receiptRef = useRef<HTMLDivElement>(null);
+    const { operationsConfig } = useAppContext();
 
     // ── Fetch fresh order from API when orderId is provided ─────────────────
     useEffect(() => {
@@ -232,7 +234,7 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
                         </div>
                     ) : (
                         <div ref={receiptRef} className="origin-top transform transition-transform duration-300">
-                            <ThermalReceipt order={displayOrder} width={receiptWidth} />
+                            <ThermalReceipt order={displayOrder} width={receiptWidth} config={operationsConfig} />
                         </div>
                     )}
                 </div>

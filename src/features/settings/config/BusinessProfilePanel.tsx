@@ -9,7 +9,7 @@ import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 const API_BASE_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 export const BusinessProfilePanel: React.FC = () => {
-    const { currentUser, addNotification, socket } = useAppContext();
+    const { currentUser, addNotification, socket, fetchInitialData } = useAppContext();
     const [config, setConfig] = useState<any>({});
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
@@ -65,18 +65,32 @@ export const BusinessProfilePanel: React.FC = () => {
 
         setIsSaving(true);
         try {
-            const response = await fetchWithAuth(`${API_BASE_URL}/operations/config/${restaurantId}`, {
+            // Send only identity fields to the new profile endpoint
+            const payload = {
+                name: config.business_name,
+                address: config.business_address,
+                phone: config.business_phone,
+                email: config.business_email,
+                tax_number: config.ntn_number
+            };
+
+            const response = await fetchWithAuth(`${API_BASE_URL}/restaurants/${restaurantId}/profile`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
+                body: JSON.stringify(payload)
             });
 
-            if (!response.ok) throw new Error('Failed to save configuration');
+            if (!response.ok) throw new Error('Failed to save business profile');
 
             const data = await response.json();
             if (data.success) {
                 addNotification('success', 'Business profile updated successfully');
-                await cacheSet('configs', cacheKey, data.config);
+                
+                // Refresh global state so dashboard picks up new name
+                if (fetchInitialData) {
+                    await fetchInitialData();
+                }
+
                 await createAuditLog({
                     restaurant_id: restaurantId,
                     staff_id: currentUser?.id || '',

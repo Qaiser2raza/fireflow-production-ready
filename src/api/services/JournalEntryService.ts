@@ -247,10 +247,16 @@ export class JournalEntryService {
 
                 if (t.payment_method === 'CREDIT' && customerAcc) {
                     assetAcc = customerAcc;
-                } else if (t.payment_method === 'CARD' && cardAcc) {
-                    assetAcc = cardAcc;
-                } else if (t.payment_method === 'RAAST' && cardAcc) { // Raast hits digital receivable
-                    assetAcc = cardAcc;
+                } else if (
+                    // All digital / non-cash methods → 1010 Card/Digital Receivables
+                    (t.payment_method === 'CARD' ||
+                     t.payment_method === 'RAAST' ||
+                     t.payment_method === 'JAZZCASH' ||
+                     t.payment_method === 'EASYPAISA' ||
+                     t.payment_method === 'NAYAPAY' ||
+                     t.payment_method === 'SADAPAY') && cardAcc
+                ) {
+                    assetAcc = cardAcc; // → 1010 Card / Digital Receivables
                 }
 
                 if (assetAcc) {
@@ -265,10 +271,10 @@ export class JournalEntryService {
                 }
             }
 
+
             if (lines.length === 0 && paymentOverride && cashAcc) {
-                const assetAcc = paymentOverride.paymentMethod === 'CARD' || paymentOverride.paymentMethod === 'RAAST' 
-                    ? cardAcc 
-                    : cashAcc;
+                const DIGITAL_METHODS = ['CARD', 'RAAST', 'JAZZCASH', 'EASYPAISA', 'NAYAPAY', 'SADAPAY'];
+                const assetAcc = DIGITAL_METHODS.includes(paymentOverride.paymentMethod) ? cardAcc : cashAcc;
                 if (assetAcc) {
                     lines.push({
                         accountId: assetAcc.id,
@@ -620,10 +626,11 @@ export class JournalEntryService {
             }
         });
 
-        const totals: Record<string, { code: string; name: string; type: string; debit: Decimal; credit: Decimal }> = {};
+        const totals: Record<string, { id: string; code: string; name: string; type: string; debit: Decimal; credit: Decimal }> = {};
 
         for (const acc of accounts) {
             totals[acc.id] = {
+                id: acc.id,
                 code: acc.code,
                 name: acc.name,
                 type: acc.type as string,
@@ -977,16 +984,28 @@ export class JournalEntryService {
     async recordInventoryPurchaseJournal(params: {
         restaurantId: string;
         supplierId: string;
-        amount: number | Decimal;
+        amount: number | string | Decimal;
         isCredit: boolean;
         referenceId: string; // PO or Bill ID
         description: string;
         processedBy?: string;
+        cashAccountId?: string;
     }, tx: any) {
         const db = tx;
-        const [inventoryAcc, cashAcc, payableAcc] = await Promise.all([
+        
+        let cashAcc = null;
+        if (!params.isCredit) {
+            if (params.cashAccountId) {
+                cashAcc = await db.chart_of_accounts.findFirst({
+                    where: { id: params.cashAccountId, restaurant_id: params.restaurantId }
+                });
+            } else {
+                cashAcc = await resolveAccount(params.restaurantId, GL.CASH, db);
+            }
+        }
+
+        const [inventoryAcc, payableAcc] = await Promise.all([
             resolveAccount(params.restaurantId, GL.INVENTORY_ASSET, db),
-            resolveAccount(params.restaurantId, GL.CASH, db),
             resolveAccount(params.restaurantId, GL.SUPPLIER_PAYABLE, db),
         ]);
 

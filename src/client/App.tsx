@@ -123,12 +123,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchWithAuth(`${API_URL}/vendors?restaurant_id=${restaurantId}`),
         fetchWithAuth(`${API_URL}/stations?restaurant_id=${restaurantId}`),
         fetchWithAuth(`${API_URL}/cashier/current?restaurantId=${restaurantId}&staffId=${user.id}`),
-        fetchWithAuth(`${API_URL}/operations/config/${restaurantId}`)
+        fetchWithAuth(`${API_URL}/operations/config/${restaurantId}`),
+        fetchWithAuth(`${API_URL}/restaurants/${restaurantId}/profile`)
       ];
       
-      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, vendDataRes, stationRes, sessionRes, opsCfgRes] = await Promise.all(fetches);
+      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, vendDataRes, stationRes, sessionRes, opsCfgRes, profileRes] = await Promise.all(fetches);
 
-      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, vendData, stationData, sessionData, opsCfgData] = await Promise.all([
+      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, vendData, stationData, sessionData, opsCfgData, profileData] = await Promise.all([
         ordersRes.ok ? ordersRes.json() : [],
         tablesRes.ok ? tablesRes.json() : [],
         sectionsRes.ok ? sectionsRes.json() : [],
@@ -140,12 +141,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         vendDataRes.ok ? vendDataRes.json() : [],
         stationRes.ok ? stationRes.json() : [],
         sessionRes.ok ? sessionRes.json() : { success: false },
-        opsCfgRes.ok ? opsCfgRes.json() : null
+        opsCfgRes.ok ? opsCfgRes.json() : null,
+        (profileRes && profileRes.ok) ? profileRes.json() : null
       ]);
 
-      if (sessionData.success && sessionData.session) {
-        setActiveSession(sessionData.session);
-      }
+      // Session is set after all state below — see authoritative call near end of fetchInitialData
 
       const mapOrder = (o: any) => {
         const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
@@ -206,12 +206,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Store operations config (tax/svc settings) in state + localStorage cache
       // API returns { success: true, config: { order_type_defaults, ... } } — unwrap .config
-      const resolvedCfg = opsCfgData?.config || opsCfgData || null;
-      if (resolvedCfg && typeof resolvedCfg === 'object' && !Array.isArray(resolvedCfg)) {
-        setOperationsConfig(resolvedCfg);
-        localStorage.setItem('fireflow_ops_cfg', JSON.stringify(resolvedCfg));
+      const resolvedCfg = opsCfgData?.config || opsCfgData || {};
+      
+      const finalCfg = {
+        ...resolvedCfg,
+        business_name: profileData?.restaurant?.name || resolvedCfg.business_name,
+        business_address: profileData?.restaurant?.address || resolvedCfg.business_address,
+        business_phone: profileData?.restaurant?.phone || resolvedCfg.business_phone,
+        ntn_number: profileData?.restaurant?.fbr_ntn || resolvedCfg.ntn_number
+      };
+
+      if (finalCfg && typeof finalCfg === 'object' && !Array.isArray(finalCfg)) {
+        setOperationsConfig(finalCfg);
+        localStorage.setItem('fireflow_ops_cfg', JSON.stringify(finalCfg));
         // Legacy key used by calculateOrderTotal fallback
-        localStorage.setItem(`fireflow_operations_config_${restaurantId}`, JSON.stringify(resolvedCfg));
+        localStorage.setItem(`fireflow_operations_config_${restaurantId}`, JSON.stringify(finalCfg));
       }
       
       if (sessionData.success && sessionData.session) {
@@ -287,10 +296,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveView('DASHBOARD');
       }
       
-      // Wait for state to update before fetching data
-      setTimeout(() => {
-        fetchInitialData(user);
-      }, 100);
+      // Use debounced fetch so rapid back-to-back login calls collapse into one request.
+      debouncedFetchInitialData(user);
       
       return true;
     } catch (err) {
@@ -329,6 +336,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     validateToken();
   }, []);
 
+  // AUTO-LOGIN: Run exactly once on mount. Separate from the socket effect so that
+  // login() completing and changing currentUser does NOT re-trigger this effect.
+  useEffect(() => {
+    const savedPin = localStorage.getItem('saved_pin');
+    if (savedPin) {
+      login(savedPin);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     socketIO.connect();
 
@@ -337,9 +353,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleSocketConnected = () => {
       if (currentUser?.restaurant_id) {
         socketIO.emit('join', { room: `restaurant:${currentUser.restaurant_id}` });
-        // Robust Sync: Re-fetch initial data on every connection/reconnection 
-        // to catch any changes that happened while the client was offline.
-        debouncedFetchInitialData();
+        // NOTE: Do NOT call fetchInitialData here. Login already calls it.
+        // Calling it on every socket reconnect caused 4x duplicate API calls.
       }
     };
     socketIO.on('connect', handleSocketConnected);
@@ -501,8 +516,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     });
 
-    const savedPin = localStorage.getItem('saved_pin');
-    if (savedPin && !currentUser) login(savedPin);
+    // NOTE: Auto-login from saved_pin is handled in the stable useEffect above.
+    // It must NOT live here — this effect re-runs on every currentUser change,
+    // which caused login() to be called twice, triggering two full fetch cycles.
 
     return () => {
       socketIO.off('db_change');

@@ -1,6 +1,6 @@
 import express from 'express';
 import { prisma } from '../../shared/lib/prisma';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { requireRole } from '../middleware/authMiddleware';
 import { journalEntryService } from '../services/JournalEntryService';
 import { Decimal } from '@prisma/client/runtime/library';
 
@@ -10,8 +10,8 @@ const router = express.Router();
  * POST /api/finance/inventory/purchase
  * Record a purchase of inventory (Cash or Credit)
  */
-router.post('/inventory/purchase', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
-    const { supplierId, amount, isCredit, description } = req.body;
+router.post('/inventory/purchase', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    const { supplierId, amount, isCredit, description, cashAccountId } = req.body;
     const restaurantId = req.restaurantId!;
     const staffId = req.staffId!;
 
@@ -52,7 +52,8 @@ router.post('/inventory/purchase', authMiddleware, requireRole('MANAGER', 'ADMIN
                 isCredit,
                 referenceId: ledgerEntry.id,
                 description: description || `Purchase from ${supplier.name}`,
-                processedBy: staffId
+                processedBy: staffId,
+                cashAccountId
             }, tx);
 
             return ledgerEntry;
@@ -69,7 +70,7 @@ router.post('/inventory/purchase', authMiddleware, requireRole('MANAGER', 'ADMIN
  * POST /api/finance/inventory/closing
  * Record manual stock count and adjust asset value
  */
-router.post('/inventory/closing', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/inventory/closing', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     const { closingAmount, description } = req.body;
     const restaurantId = req.restaurantId!;
     const staffId = req.staffId!;
@@ -100,7 +101,7 @@ router.post('/inventory/closing', authMiddleware, requireRole('MANAGER', 'ADMIN'
  * POST /api/finance/expenses
  * Record a general operating expense
  */
-router.post('/expenses', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/expenses', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     const { amount, description, category } = req.body;
     const restaurantId = req.restaurantId!;
     const staffId = req.staffId!;
@@ -131,7 +132,7 @@ router.post('/expenses', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_
  * GET /api/finance/suppliers/:id/ledger
  * Fetch supplier audit trail
  */
-router.get('/suppliers/:id/ledger', authMiddleware, async (req, res) => {
+router.get('/suppliers/:id/ledger', async (req, res) => {
     const { id } = req.params;
     try {
         const ledger = await prisma.supplier_ledgers.findMany({
@@ -149,7 +150,7 @@ router.get('/suppliers/:id/ledger', authMiddleware, async (req, res) => {
  * GET /api/finance/customers/:id/ledger
  * Fetch customer audit trail for finance/payments dashboard
  */
-router.get('/customers/:id/ledger', authMiddleware, async (req, res) => {
+router.get('/customers/:id/ledger', async (req, res) => {
     const { id } = req.params;
     try {
         const ledger = await prisma.customer_ledgers.findMany({
@@ -164,3 +165,4 @@ router.get('/customers/:id/ledger', authMiddleware, async (req, res) => {
 });
 
 export default router;
+

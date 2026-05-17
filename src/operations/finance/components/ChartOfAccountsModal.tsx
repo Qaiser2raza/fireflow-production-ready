@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Plus, Edit2, Archive, CheckCircle2, Lock, ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
+import { X, Plus, Edit2, Archive, CheckCircle2, Lock, ChevronRight, ChevronDown, Trash2, Eye } from 'lucide-react';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { useAppContext } from '../../../client/contexts/AppContext';
+import { AccountLedgerModal } from './AccountLedgerModal';
 
 interface Account {
     id: string;
@@ -60,13 +61,15 @@ export const ChartOfAccountsModal: React.FC<COAModalProps> = ({ onClose }) => {
     const [formData, setFormData] = useState({ ...DEFAULT_FORM });
     const [submitting, setSubmitting] = useState(false);
     const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [ledgerAccount, setLedgerAccount] = useState<{id: string, code: string, name: string} | null>(null);
 
     const loadCOA = async () => {
         try {
             setLoading(true);
             const res = await fetchWithAuth(`${apiBase}/accounting/coa`);
             if (res.ok) {
-                setAccounts(await res.json());
+                const data = await res.json();
+                setAccounts(data.accounts || []);
                 // Default: expand all parents
                 setExpandedParents(new Set());
             }
@@ -232,21 +235,28 @@ export const ChartOfAccountsModal: React.FC<COAModalProps> = ({ onClose }) => {
                     </td>
                     {/* Actions */}
                     <td className="px-4 py-3 text-right">
-                        {isLocked ? (
-                            <span className="text-[9px] text-slate-600 uppercase tracking-widest font-bold">System</span>
-                        ) : (
-                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 justify-end">
-                                <button
-                                    onClick={() => startEdit(acc)}
-                                    className="p-1.5 bg-slate-800 text-slate-300 hover:text-indigo-400 hover:bg-slate-700 rounded-lg transition"
-                                ><Edit2 size={12} /></button>
-                                <button
-                                    onClick={() => handleDelete(acc.id)}
-                                    disabled={deletingId === acc.id}
-                                    className="p-1.5 bg-slate-800 text-slate-300 hover:text-red-400 hover:bg-slate-700 rounded-lg transition disabled:opacity-50"
-                                ><Trash2 size={12} /></button>
-                            </div>
-                        )}
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 justify-end">
+                            <button
+                                onClick={() => setLedgerAccount({ id: acc.id, code: acc.code, name: acc.name })}
+                                className="p-1.5 bg-slate-800 text-slate-300 hover:text-indigo-400 hover:bg-slate-700 rounded-lg transition"
+                                title="View Ledger"
+                            ><Eye size={12} /></button>
+                            {isLocked ? (
+                                <span className="text-[9px] text-slate-600 uppercase tracking-widest font-bold ml-2">System</span>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={() => startEdit(acc)}
+                                        className="p-1.5 bg-slate-800 text-slate-300 hover:text-indigo-400 hover:bg-slate-700 rounded-lg transition"
+                                    ><Edit2 size={12} /></button>
+                                    <button
+                                        onClick={() => handleDelete(acc.id)}
+                                        disabled={deletingId === acc.id}
+                                        className="p-1.5 bg-slate-800 text-slate-300 hover:text-red-400 hover:bg-slate-700 rounded-lg transition disabled:opacity-50"
+                                    ><Trash2 size={12} /></button>
+                                </>
+                            )}
+                        </div>
                     </td>
                 </tr>
                 {hasChildren && isExpanded && children.map(child => renderRow(child, depth + 1))}
@@ -399,6 +409,18 @@ export const ChartOfAccountsModal: React.FC<COAModalProps> = ({ onClose }) => {
                     </div>
                 </div>
             </div>
+
+            {ledgerAccount && (
+                <AccountLedgerModal
+                    isOpen={!!ledgerAccount}
+                    onClose={() => setLedgerAccount(null)}
+                    accountId={ledgerAccount.id}
+                    accountCode={ledgerAccount.code}
+                    accountName={ledgerAccount.name}
+                    dateFrom=""
+                    dateTo=""
+                />
+            )}
         </div>
     );
 };

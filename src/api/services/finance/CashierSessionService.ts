@@ -56,27 +56,25 @@ export class CashierSessionService {
         });
 
         if (!session) {
-            // Find last closed session to get expected float
-            const lastSession = await prisma.cashier_sessions.findFirst({
-                where: { restaurant_id: restaurantId, status: 'CLOSED' },
-                orderBy: { closed_at: 'desc' }
+            const cashAccount = await prisma.chart_of_accounts.findFirst({
+                where: { 
+                    restaurant_id: restaurantId, 
+                    code: '1000' 
+                },
+                select: { id: true }
             });
+
             let expectedNextFloat = 0;
-            if (lastSession && lastSession.actual_cash !== null) {
-                const closingCash = Number(lastSession.actual_cash.toString());
-                
-                const withdrawnLine = await prisma.journal_entry_lines.findFirst({
-                    where: {
-                        reference_type: 'CASHIER_SESSION',
-                        reference_id: lastSession.id,
-                        description: 'Shift withdrawal to manager'
-                    }
+            if (cashAccount) {
+                const result = await prisma.journal_entry_lines.aggregate({
+                    where: { account_id: cashAccount.id },
+                    _sum: { debit: true, credit: true }
                 });
-                const withdrawn = withdrawnLine && withdrawnLine.debit ? Number(withdrawnLine.debit.toString()) : 0;
-                
-                const leftover = closingCash - withdrawn;
-                expectedNextFloat = Math.max(0, leftover);
+                const totalDebit = Number(result._sum.debit || 0);
+                const totalCredit = Number(result._sum.credit || 0);
+                expectedNextFloat = Math.max(0, totalDebit - totalCredit);
             }
+
             return { session: null, expectedNextFloat };
         }
 

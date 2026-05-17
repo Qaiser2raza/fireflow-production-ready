@@ -19,9 +19,11 @@ import orderWorkflowRoutes from './routes/orderWorkflowRoutes';
 import cashierRoutes from './routes/cashierRoutes';
 import analyticsRoutes from './routes/analyticsRoutes';
 import coaRoutes from './routes/coaRoutes';
+import supplierRoutes from './routes/supplierRoutes';
+import financeRoutes from './routes/financeRoutes';
 import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
-import { authMiddleware } from './middleware/authMiddleware';
+import { authMiddleware, requireRole } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
 import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
@@ -387,6 +389,63 @@ app.post('/api/staff', async (req, res) => {
 });
 
 /**
+ * PATCH /api/staff
+ * Update an existing staff record
+ */
+app.patch('/api/staff', async (req, res) => {
+    try {
+        const { id, name, role, pin, status, active_tables, image } = req.body;
+
+        if (!id) {
+            return res.status(400).json({ error: 'Staff ID is required for update' });
+        }
+
+        const staffData: any = {};
+        if (name !== undefined) staffData.name = name;
+        if (role !== undefined) staffData.role = role;
+        if (pin !== undefined) staffData.pin = pin;
+        if (status !== undefined) staffData.status = status;
+        if (active_tables !== undefined) staffData.active_tables = active_tables;
+        if (image !== undefined) staffData.image = image;
+
+        const updatedStaff = await prisma.staff.update({
+            where: { id },
+            data: staffData
+        });
+
+        console.log(`[STAFF] Staff updated: ${updatedStaff.name} (${updatedStaff.id})`);
+        res.json(updatedStaff);
+    } catch (error: any) {
+        console.error('[ERROR] PATCH /api/staff:', error.message);
+        res.status(500).json({ error: error.message || 'Failed to update staff' });
+    }
+});
+
+/**
+ * DELETE /api/staff
+ * Delete a staff record
+ */
+app.delete('/api/staff', async (req, res) => {
+    try {
+        const { id } = req.query;
+        
+        if (!id || typeof id !== 'string') {
+            return res.status(400).json({ error: 'Staff ID is required for deletion' });
+        }
+
+        await prisma.staff.delete({
+            where: { id }
+        });
+
+        console.log(`[STAFF] Staff deleted: ${id}`);
+        res.json({ success: true, message: 'Staff deleted successfully' });
+    } catch (error: any) {
+        console.error('[ERROR] DELETE /api/staff:', error.message);
+        res.status(500).json({ error: error.message || 'Failed to delete staff' });
+    }
+});
+
+/**
  * GET /api/restaurants
  * Fetch all restaurants (for super admin dashboard)
  */
@@ -634,6 +693,51 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
         res.status(500).json({ error: e.message });
     }
 });
+
+// Get restaurant identity/profile
+app.get('/api/restaurants/:restaurantId/profile', authMiddleware, async (req, res) => {
+    try {
+        const { restaurantId } = req.params;
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id: restaurantId },
+            select: { name: true, address: true, phone: true, fbr_ntn: true }
+        });
+        
+        if (!restaurant) {
+            return res.status(404).json({ error: 'Restaurant not found' });
+        }
+        
+        res.json({ success: true, restaurant });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Save restaurant identity/profile
+app.patch('/api/restaurants/:restaurantId/profile', 
+  authMiddleware, 
+  requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'),
+  async (req, res) => {
+    try {
+      const { restaurantId } = req.params;
+      const { name, address, phone, tax_number } = req.body;
+      
+      const updated = await prisma.restaurants.update({
+        where: { id: restaurantId },
+        data: {
+          ...(name && { name }),
+          ...(address && { address }),
+          ...(phone && { phone }),
+          ...(tax_number && { fbr_ntn: tax_number })
+        }
+      });
+      
+      res.json({ success: true, restaurant: updated });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  }
+);
 
 // Save operations config for a restaurant
 app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, res) => {
@@ -1044,14 +1148,26 @@ app.post('/api/floor/seat-party', authMiddleware, async (req, res) => {
     }
 });
 
-// Mount delivery/rider routes (SaaS Protected)
-app.use('/api', authMiddleware, deliveryRoutes);
-app.use('/api', authMiddleware, customerRoutes);
-app.use('/api/accounting', authMiddleware, accountingRoutes);
-app.use('/api/accounting/coa', authMiddleware, coaRoutes);
-app.use('/api/reports', authMiddleware, reportRoutes);
-app.use('/api/orders', authMiddleware, orderWorkflowRoutes);
-app.use('/api/cashier', authMiddleware, cashierRoutes);
+// ─── Enterprise Route Guard ────────────────────────────────────────────────
+// authMiddleware is applied ONCE on the shared protectedApiRouter.
+// Previously each app.use() call added its own authMiddleware instance,
+// causing JWT verification to run 3× per request and flooding logs with
+// duplicate [AUTH] entries. Now it runs exactly once per request.
+const protectedApiRouter = express.Router();
+protectedApiRouter.use(authMiddleware);
+
+protectedApiRouter.use('/', deliveryRoutes);
+protectedApiRouter.use('/', customerRoutes);
+protectedApiRouter.use('/analytics', analyticsRoutes);  // moved from standalone app.use below
+protectedApiRouter.use('/accounting/coa', coaRoutes);   // must be before /accounting
+protectedApiRouter.use('/accounting', accountingRoutes);
+protectedApiRouter.use('/reports', reportRoutes);
+protectedApiRouter.use('/orders', orderWorkflowRoutes);
+protectedApiRouter.use('/cashier', cashierRoutes);
+protectedApiRouter.use('/suppliers', supplierRoutes);
+protectedApiRouter.use('/finance', financeRoutes);
+
+app.use('/api', protectedApiRouter);
 
 /**
  * PATCH /api/orders/:id/guest-count
@@ -1122,9 +1238,10 @@ app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {
 // ==========================================
 // 📊 3. ANALYTICS
 // ==========================================
-app.use('/api/analytics', analyticsRoutes);
+// analyticsRoutes is now mounted via protectedApiRouter above.
+// Inline handlers below inherit auth from protectedApiRouter — no duplicate authMiddleware needed.
 
-app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
+app.get('/api/analytics/summary', async (req, res) => {
     if (!req.restaurantId) {
         return res.status(400).json({ error: 'Missing restaurant context' });
     }
@@ -1233,7 +1350,7 @@ app.get('/api/analytics/summary', authMiddleware, async (req, res) => {
     }
 });
 
-app.get('/api/analytics/sales/hourly', authMiddleware, async (req, res) => {
+app.get('/api/analytics/sales/hourly', async (req, res) => {
     const restaurant_id = req.restaurantId; // SaaS Security
     try {
         const todayStart = new Date();

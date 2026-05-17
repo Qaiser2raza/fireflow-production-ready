@@ -1,11 +1,9 @@
 import { Router } from 'express';
 import { prisma } from '../../shared/lib/prisma';
 import { z } from 'zod';
-import { authMiddleware, requireRole } from '../middleware/authMiddleware';
+import { requireRole } from '../middleware/authMiddleware';
 
 const router = Router();
-router.use(authMiddleware);
-
 const coaSchema = z.object({
     code: z.string().min(1),
     name: z.string().min(1),
@@ -152,3 +150,4 @@ router.delete('/:id', requireRole('ADMIN', 'SUPER_ADMIN'), async (req, res) => {
 });
 
 export default router;
+

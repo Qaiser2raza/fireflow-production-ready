@@ -1,12 +1,9 @@
 import { Router } from 'express';
 import { prisma } from '../../shared/lib/prisma';
 import { z } from 'zod';
-import { authMiddleware } from '../middleware/authMiddleware';
 import { PrinterService } from '../services/PrinterService';
 
 const router = Router();
-router.use(authMiddleware);
-
 const printerSchema = z.object({
     name: z.string().min(1),
     ip_address: z.string().min(1),
@@ -113,3 +110,4 @@ router.post('/test-print', async (req, res) => {
 });
 
 export default router;
+

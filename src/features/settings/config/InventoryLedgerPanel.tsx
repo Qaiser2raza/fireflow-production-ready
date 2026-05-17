@@ -3,7 +3,6 @@ import {
     Plus, 
     Calculator
 } from 'lucide-react';
-import { apiClient as api } from '../../../shared/lib/apiClient';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 import { useRestaurant } from '../../../client/RestaurantContext';
 import { useAppContext } from '../../../client/contexts/AppContext';
@@ -16,6 +15,7 @@ export const InventoryLedgerPanel: React.FC = () => {
     const { currentRestaurant } = useRestaurant();
     const { addNotification } = useAppContext();
     const [suppliers, setSuppliers] = useState<any[]>([]);
+    const [cashAccounts, setCashAccounts] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [showPurchaseModal, setShowPurchaseModal] = useState(false);
     const [showClosingModal, setShowClosingModal] = useState(false);
@@ -25,7 +25,8 @@ export const InventoryLedgerPanel: React.FC = () => {
         supplierId: '',
         amount: '',
         isCredit: false,
-        description: ''
+        description: '',
+        cashAccountId: ''
     });
     const [closingData, setClosingData] = useState({
         amount: ''
@@ -33,7 +34,28 @@ export const InventoryLedgerPanel: React.FC = () => {
 
     useEffect(() => {
         fetchSuppliers();
+        fetchCashAccounts();
     }, []);
+
+    const fetchCashAccounts = async () => {
+        try {
+            const baseUrl = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
+            const res = await fetchWithAuth(`${baseUrl}/accounting/coa`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.accounts) {
+                    const assets = data.accounts.filter((a: any) => a.type === 'ASSET');
+                    setCashAccounts(assets);
+                    const mainCash = assets.find((a: any) => a.code === '1000');
+                    if (mainCash) {
+                        setPurchaseData(prev => ({...prev, cashAccountId: mainCash.id}));
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to fetch cash accounts', e);
+        }
+    };
 
     const fetchSuppliers = async () => {
         try {
@@ -52,15 +74,7 @@ export const InventoryLedgerPanel: React.FC = () => {
         e.preventDefault();
         setLoading(true);
         try {
-            // api is for POST/PATCH/DELETE
-            await api.from('inventory_purchases').insert({
-                ...purchaseData,
-                restaurantId: currentRestaurant?.id,
-                amount: parseFloat(purchaseData.amount)
-            }).execute();
-            
-            // Note: Since api.from().insert() is a custom wrapper, we check the actual backend logic
-            // For periodic inventory, we're using the /api/finance/inventory/purchase endpoint instead
+            // For periodic inventory, we use the /api/finance/inventory/purchase endpoint
             const baseUrl = typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api';
             const res = await fetchWithAuth(`${baseUrl}/finance/inventory/purchase`, {
                 method: 'POST',
@@ -74,7 +88,7 @@ export const InventoryLedgerPanel: React.FC = () => {
             if (res.ok) {
                 addNotification('success', 'Purchase recorded successfully');
                 setShowPurchaseModal(false);
-                setPurchaseData({ supplierId: '', amount: '', isCredit: false, description: '' });
+                setPurchaseData(prev => ({ supplierId: '', amount: '', isCredit: false, description: '', cashAccountId: prev.cashAccountId }));
             }
         } catch (e) {
             addNotification('error', 'Failed to record purchase');
@@ -193,6 +207,23 @@ export const InventoryLedgerPanel: React.FC = () => {
                                 />
                                 <label htmlFor="isCredit" className="text-sm">Credit Purchase (Add to Ledger)</label>
                             </div>
+
+                            {!purchaseData.isCredit && cashAccounts.length > 0 && (
+                                <div>
+                                    <label className="text-sm text-slate-400 mb-1 block">Payment Account</label>
+                                    <select 
+                                        className="w-full bg-slate-800 border-slate-700 text-white rounded-lg p-2"
+                                        value={purchaseData.cashAccountId}
+                                        onChange={(e) => setPurchaseData({...purchaseData, cashAccountId: e.target.value})}
+                                        required
+                                    >
+                                        <option value="">Select Account</option>
+                                        {cashAccounts.map(a => (
+                                            <option key={a.id} value={a.id}>{a.code} - {a.name} (Rs. {a.balance || 0})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
 
                             <div>
                                 <label className="text-sm text-slate-400 mb-1 block">Description</label>

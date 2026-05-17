@@ -4,6 +4,8 @@
 // Location: src/shared/lib/auditLog.ts
 // Purpose: Centralized audit logging with type safety
 
+import { fetchWithAuth } from '../shared/lib/authInterceptor';
+
 export type AuditActionType = 
   | 'DB_RESEED'
   | 'CONFIG_UPDATE'
@@ -42,7 +44,7 @@ export interface CreateAuditLogParams {
  */
 export async function createAuditLog(params: CreateAuditLogParams): Promise<boolean> {
   try {
-    const response = await fetch('/api/audit-logs', {
+    const response = await fetchWithAuth('/api/audit-logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -84,7 +86,7 @@ export async function fetchAuditLogs(
       offset: String(filters?.offset || 0)
     });
 
-    const response = await fetch(`/api/audit-logs?${params}`);
+    const response = await fetchWithAuth(`/api/audit-logs?${params}`);
     const data = await response.json();
 
     return data.logs || [];
