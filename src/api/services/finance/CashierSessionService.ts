@@ -100,24 +100,36 @@ export class CashierSessionService {
             throw new Error('Invalid or already closed session.');
         }
 
-        // Direct query by session_id so ALL settled order types are captured
-        // (DINE_IN, TAKEAWAY, and DELIVERY settled via logistics all set session_id on close)
-        const sessionOrders = await prisma.orders.findMany({
-            where: { session_id: sessionId, is_deleted: false },
-            include: { transactions: true }
+        const cashAccount = await prisma.chart_of_accounts.findFirst({
+            where: { restaurant_id: session.restaurant_id, code: '1000' },
+            select: { id: true }
         });
 
-        // Calculate expected cash: opening float + sum of CASH transactions in this session
-        let cashSales = new Decimal(0);
-        sessionOrders.forEach(order => {
-            order.transactions.forEach(tx => {
-                if (tx.payment_method === 'CASH' && (tx.status === 'SUCCESS' || tx.status === 'PAID')) {
-                    cashSales = cashSales.plus(new Decimal(tx.amount.toString()));
+        let expectedCash = new Decimal(session.opening_float.toString());
+
+        if (cashAccount) {
+            const ledgers = await prisma.journal_entry_lines.findMany({
+                where: {
+                    account_id: cashAccount.id,
+                    journal_entries: {
+                        created_at: { gte: session.opened_at }
+                    }
                 }
             });
-        });
 
-        const expectedCash = new Decimal(session.opening_float.toString()).plus(cashSales);
+            ledgers.forEach(l => {
+                const isOrderDebit = l.reference_type === 'ORDER' && Number(l.debit) > 0;
+                const isSettlementDebit = l.reference_type === 'SETTLEMENT' && Number(l.debit) > 0;
+                const isSettlementCredit = l.reference_type === 'SETTLEMENT' && Number(l.credit) > 0;
+                const isPayoutCredit = l.reference_type === 'PAYOUT' && Number(l.credit) > 0;
+
+                if (isOrderDebit || isSettlementDebit) {
+                    expectedCash = expectedCash.plus(new Decimal(l.debit.toString()));
+                } else if (isSettlementCredit || isPayoutCredit) {
+                    expectedCash = expectedCash.minus(new Decimal(l.credit.toString()));
+                }
+            });
+        }
         const actual = new Decimal(actualCash);
         const difference = actual.minus(expectedCash);
 
