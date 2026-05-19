@@ -18,6 +18,7 @@ import { ChartOfAccountsModal } from './components/ChartOfAccountsModal';
 import { TrialBalanceModal } from './components/TrialBalanceModal';
 import { ManualJournalEntryModal } from './components/ManualJournalEntryModal';
 import { DaybookReviewModal } from './components/DaybookReviewModal';
+import { AccountLedgerModal } from './components/AccountLedgerModal';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 const FinancialCommandCenter: React.FC = () => {
@@ -80,6 +81,8 @@ const FinancialCommandCenter: React.FC = () => {
     const [showTrialBalanceModal, setShowTrialBalanceModal] = useState(false);
     const [showManualJournalModal, setShowManualJournalModal] = useState(false);
     const [showDaybookReviewModal, setShowDaybookReviewModal] = useState(false);
+    const [activeTab, setActiveTab] = useState('overview');
+    const [ledgerAccount, setLedgerAccount] = useState<{id: string, code: string, name: string} | null>(null);
 
     // Debounce timers for fetch operations
     const fetchAllDataDebounce = useRef<NodeJS.Timeout | null>(null);
@@ -524,7 +527,28 @@ const FinancialCommandCenter: React.FC = () => {
                 </div>
             </div>
 
-            {/* ── SESSION STATUS BAR ───────────────────────────── */}
+            
+            {/* ── TABS ─────────────────────────────────────── */}
+            <div className="flex items-center gap-2 mb-2">
+                {[
+                    { id: 'overview', label: 'Overview' },
+                    { id: 'accounts', label: 'Cash & Accounts' },
+                    { id: 'ledger', label: 'Ledger' },
+                    { id: 'reports', label: 'Reports' }
+                ].map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`px-5 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-900 border border-slate-800 text-slate-500 hover:text-white hover:border-slate-600'}`}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
+            </div>
+
+            {activeTab === 'overview' && (
+                <div className="space-y-5 animate-in fade-in duration-300">
+                    {/* ── SESSION STATUS BAR ───────────────────────────── */}
             <div className="flex items-center justify-between bg-slate-900/50 border border-slate-800/70 rounded-xl px-5 py-3">
                 <div className="flex items-center gap-4">
                     <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${activeSession ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}`}>
@@ -555,8 +579,7 @@ const FinancialCommandCenter: React.FC = () => {
                     </button>
                 </div>
             </div>
-
-            {/* ── 3 KPI CARDS ────────────────────────────────────── */}
+                    {/* ── 3 KPI CARDS ────────────────────────────────────── */}
             <div className="grid grid-cols-3 gap-5">
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
                     <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.25em] mb-3">Cash Drawer</p>
@@ -602,9 +625,72 @@ const FinancialCommandCenter: React.FC = () => {
                     </div>
                 </div>
             </div>
+                    <div className="flex items-center gap-3 pt-4 border-t border-slate-800/70">
+                        <button
+                            onClick={() => setShowManualJournalModal(true)}
+                            className="px-5 py-2.5 bg-indigo-600/10 border border-indigo-500/30 text-indigo-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-indigo-600/20 hover:text-indigo-300 transition-all flex items-center gap-2"
+                        >
+                            <FileEdit size={14} strokeWidth={3} /> Post Journal
+                        </button>
+                        <button
+                            onClick={() => setShowTrialBalanceModal(true)}
+                            className="px-5 py-2.5 bg-slate-900 border border-slate-800 text-blue-400 rounded-xl font-black text-xs uppercase tracking-widest hover:border-blue-500/40 hover:text-blue-300 transition-all flex items-center gap-2"
+                        >
+                            <FileText size={14} strokeWidth={3} /> Trial Balance
+                        </button>
+                        <button
+                            onClick={handleViewHistory}
+                            className="px-5 py-2.5 bg-slate-900 border border-slate-800 text-slate-400 rounded-xl font-black text-xs uppercase tracking-widest hover:border-slate-600 hover:text-white transition-all flex items-center gap-2"
+                        >
+                            <History size={14} strokeWidth={3} /> Z-Report
+                        </button>
+                    </div>
+                </div>
+            )}
 
+            {activeTab === 'accounts' && (
+                <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="grid grid-cols-3 gap-5">
+                        {[
+                            { code: '1000', title: 'Cashier Till' },
+                            { code: '1090', title: 'Manager Safe' },
+                            { code: '1100', title: 'Bank Account' }
+                        ].map(accConfig => {
+                            const acc = coaAccounts.find((a: any) => a.code === accConfig.code);
+                            const balance = Number(acc?.balance || 0);
+                            return (
+                                <div 
+                                    key={accConfig.code}
+                                    onClick={() => {
+                                        if (acc) setLedgerAccount({ id: acc.id, code: acc.code, name: acc.name });
+                                    }}
+                                    className="bg-slate-900 border border-slate-800 rounded-2xl p-6 cursor-pointer hover:border-indigo-500/50 hover:bg-slate-800/50 transition-all group"
+                                >
+                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.25em] mb-3">{accConfig.title}</p>
+                                    <h2 className="text-4xl font-black text-white tracking-tight mb-1 group-hover:text-indigo-400 transition-colors">
+                                        <span className="text-slate-600 text-base font-normal mr-1">Rs.</span>{balance.toLocaleString()}
+                                    </h2>
+                                    <p className="text-[10px] text-slate-500">Net GL balance (Acc: {accConfig.code})</p>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <div className="grid grid-cols-2 gap-5 mt-2">
+                        <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex justify-between items-center">
+                            <span className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Supplier Payable (2020)</span>
+                            <span className="text-rose-400 font-mono font-bold">Rs. {Number(coaAccounts.find((a: any) => a.code === '2020')?.balance || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex justify-between items-center">
+                            <span className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Customer AR (1040)</span>
+                            <span className="text-emerald-400 font-mono font-bold">Rs. {Number(coaAccounts.find((a: any) => a.code === '1040')?.balance || 0).toLocaleString()}</span>
+                        </div>
+                    </div>
+                </div>
+            )}
 
-            {/* Detailed Ledger Section */}
+            {activeTab === 'ledger' && (
+                <div className="flex-1 overflow-hidden flex flex-col animate-in fade-in duration-300">
+                    {/* Detailed Ledger Section */}
             <div className="flex-1 bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] overflow-hidden flex flex-col">
                 <div className="px-8 py-6 border-b border-slate-800/50 bg-[#0B0F19]">
                     <div className="flex flex-col gap-6">
@@ -736,50 +822,35 @@ const FinancialCommandCenter: React.FC = () => {
                     </table>
                 </div>
             </div>
-
-            {/* ── ACTIONS BAR ──────────────────────────────────── */}
-            <div className="flex items-center gap-3 pt-2 pb-6 border-t border-slate-800/70">
-                <button
-                    onClick={() => setShowManualJournalModal(true)}
-                    className="px-5 py-2.5 bg-indigo-600/10 border border-indigo-500/30 text-indigo-400 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-indigo-600/20 hover:text-indigo-300 transition-all flex items-center gap-2"
-                >
-                    <FileEdit size={14} strokeWidth={3} /> Post Journal
-                </button>
-                <button
-                    onClick={() => setShowTrialBalanceModal(true)}
-                    className="px-5 py-2.5 bg-slate-900 border border-slate-800 text-blue-400 rounded-xl font-black text-xs uppercase tracking-widest hover:border-blue-500/40 hover:text-blue-300 transition-all flex items-center gap-2"
-                >
-                    <FileText size={14} strokeWidth={3} /> Trial Balance
-                </button>
-                <button
-                    onClick={handleViewHistory}
-                    className="px-5 py-2.5 bg-slate-900 border border-slate-800 text-slate-400 rounded-xl font-black text-xs uppercase tracking-widest hover:border-slate-600 hover:text-white transition-all flex items-center gap-2"
-                >
-                    <History size={14} strokeWidth={3} /> Z-Report
-                </button>
-                <div className="flex-1" />
-                {/* Secondary: Enterprise Reports */}
-                <div className="flex items-center gap-2 flex-wrap justify-end">
-                    {[
-                        { title: 'Daily Sales', endpoint: '/api/reports/daily-sales' },
-                        { title: 'Tax Liability', endpoint: '/api/reports/tax-liability' },
-                        { title: 'Staff', endpoint: '/api/reports/staff-performance' },
-                        { title: 'Payment Methods', endpoint: '/api/reports/payment-methods' },
-                        { title: 'Product Mix', endpoint: '/api/reports/product-mix' },
-                        { title: 'Loss Prevention', endpoint: '/api/reports/loss-prevention' },
-                        { title: 'Rider Audit', endpoint: '/api/reports/rider-audit', type: 'rider-audit' },
-                    ].map(r => (
-                        <button
-                            key={r.title}
-                            onClick={() => { setPreviewReport(r); handleFetchReport(r.endpoint, r.title); }}
-                            className="px-3 py-1.5 bg-slate-900/60 border border-slate-800 text-slate-500 rounded-lg font-black text-[9px] uppercase tracking-widest hover:text-purple-400 hover:border-purple-500/30 transition-all"
-                        >
-                            {r.title}
-                        </button>
-                    ))}
                 </div>
-            </div>
-            {showOpenModal && (
+            )}
+
+            {activeTab === 'reports' && (
+                <div className="animate-in fade-in duration-300">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {[
+                            { title: 'Daily Sales', endpoint: '/api/reports/daily-sales', icon: FileText },
+                            { title: 'Tax Liability', endpoint: '/api/reports/tax-liability', icon: FileText },
+                            { title: 'Staff', endpoint: '/api/reports/staff-performance', icon: Users },
+                            { title: 'Payment Methods', endpoint: '/api/reports/payment-methods', icon: FileText },
+                            { title: 'Product Mix', endpoint: '/api/reports/product-mix', icon: FileText },
+                            { title: 'Loss Prevention', endpoint: '/api/reports/loss-prevention', icon: ShieldCheck },
+                            { title: 'Rider Audit', endpoint: '/api/reports/rider-audit', type: 'rider-audit', icon: FileText },
+                        ].map((r: any) => (
+                            <button
+                                key={r.title}
+                                onClick={() => { setPreviewReport(r); handleFetchReport(r.endpoint, r.title); }}
+                                className="p-6 bg-slate-900 border border-slate-800 text-slate-400 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:border-purple-500/40 hover:text-purple-400 transition-all flex flex-col items-center justify-center gap-3 aspect-video"
+                            >
+                                <r.icon size={20} className="mb-1" />
+                                {r.title}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+{showOpenModal && (
                 <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                     <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-[2.5rem] p-8 animate-in zoom-in duration-300">
                         <div className="flex items-center gap-3 mb-8">
@@ -1118,6 +1189,18 @@ const FinancialCommandCenter: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            {ledgerAccount && (
+                <AccountLedgerModal
+                    isOpen={!!ledgerAccount}
+                    onClose={() => setLedgerAccount(null)}
+                    accountId={ledgerAccount.id}
+                    accountCode={ledgerAccount.code}
+                    accountName={ledgerAccount.name}
+                    dateFrom={useRange ? startDate : selectedDate}
+                    dateTo={useRange ? endDate : selectedDate}
+                />
+            )}
         </div>
     );
 };
@@ -1152,5 +1235,4 @@ const renderPreviewContent = (data: any) => {
         {JSON.stringify(data.summary || data, null, 2)}
     </pre>;
 };
-
-export default FinancialCommandCenter;
+export default FinancialCommandCenter;

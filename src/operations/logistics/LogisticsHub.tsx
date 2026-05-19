@@ -315,7 +315,7 @@ export const LogisticsHub: React.FC = () => {
       if (settleRider.active_shift) {
          // Pre-fill with any cash entered, or with expected total as a convenience
          setShiftModal({ open: true, mode: 'CLOSE', riderId: settleRiderId });
-         setShiftAmount(receivedCash || String(expectedTotal));
+         setShiftAmount(receivedCash || String(settleRider.active_shift?.opening_float || 0));
       } else {
          addNotification?.('info', 'No active shift — start a session from the Fleet panel first.');
       }
@@ -377,7 +377,7 @@ export const LogisticsHub: React.FC = () => {
                               >
                                  <Send size={12} /> Dispatch ({selectedOrderIds.length})
                               </button>
-                              <button className="lh-btn lh-btn--ghost-red lh-btn--sm" onClick={() => { setShiftModal({ open: true, mode: 'CLOSE', riderId: rider.id }); setShiftAmount(String(rider.totalLiability)); setShiftNotes(''); }}>
+                              <button className="lh-btn lh-btn--ghost-red lh-btn--sm" onClick={() => { setShiftModal({ open: true, mode: 'CLOSE', riderId: rider.id }); setShiftAmount(String(rider.active_shift?.opening_float || 0)); setShiftNotes(''); }}>
                                  <Layers size={12} /> Close Shift
                               </button>
                            </>

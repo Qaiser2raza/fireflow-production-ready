@@ -129,10 +129,14 @@ export const calculateBill = (
   }
   tax = Math.round(tax * 100) / 100;
 
-  // 4. Service Charge (Calculated on afterDiscount as per Fire Grill requirement)
-  const serviceCharge = config.svcEnabled
-    ? Math.round(afterDiscount * (config.svcRate / 100) * 100) / 100
-    : 0;
+  // 4. Service Charge (Calculated on pre-tax net amount, matching BaseOrderService.ts)
+  let serviceCharge = 0;
+  if (config.svcEnabled) {
+    const svcBase = config.tax_type === 'INCLUSIVE' && config.taxEnabled && !config.tax_exempt
+      ? (afterDiscount - tax)
+      : afterDiscount;
+    serviceCharge = Math.round(svcBase * (config.svcRate / 100) * 100) / 100;
+  }
 
   // 5. Delivery Fee
   const deliveryFee = config.deliveryFee || 0;

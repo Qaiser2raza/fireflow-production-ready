@@ -120,12 +120,14 @@ export class CashierSessionService {
             ledgers.forEach(l => {
                 const isOrderDebit = l.reference_type === 'ORDER' && Number(l.debit) > 0;
                 const isSettlementDebit = l.reference_type === 'SETTLEMENT' && Number(l.debit) > 0;
+                const isRiderDebit = l.reference_type === 'RIDER' && Number(l.debit) > 0;
                 const isSettlementCredit = l.reference_type === 'SETTLEMENT' && Number(l.credit) > 0;
                 const isPayoutCredit = l.reference_type === 'PAYOUT' && Number(l.credit) > 0;
+                const isRiderCredit = l.reference_type === 'RIDER' && Number(l.credit) > 0;
 
-                if (isOrderDebit || isSettlementDebit) {
+                if (isOrderDebit || isSettlementDebit || isRiderDebit) {
                     expectedCash = expectedCash.plus(new Decimal(l.debit.toString()));
-                } else if (isSettlementCredit || isPayoutCredit) {
+                } else if (isSettlementCredit || isPayoutCredit || isRiderCredit) {
                     expectedCash = expectedCash.minus(new Decimal(l.credit.toString()));
                 }
             });
@@ -218,12 +220,14 @@ export class CashierSessionService {
             
             const isOrderDebit = l.reference_type === 'ORDER' && l.transaction_type === 'DEBIT';
             const isSettlementDebit = l.reference_type === 'SETTLEMENT' && l.transaction_type === 'DEBIT';
+            const isRiderDebit = l.reference_type === 'RIDER' && l.transaction_type === 'DEBIT';
             const isSettlementCredit = l.reference_type === 'SETTLEMENT' && l.transaction_type === 'CREDIT';
             const isPayoutCredit = l.reference_type === 'PAYOUT' && l.transaction_type === 'CREDIT';
+            const isRiderCredit = l.reference_type === 'RIDER' && l.transaction_type === 'CREDIT';
 
-            if (isOrderDebit || isSettlementDebit) {
+            if (isOrderDebit || isSettlementDebit || isRiderDebit) {
                 ledgerCashIn += Number(l.amount);
-            } else if (isSettlementCredit || isPayoutCredit) {
+            } else if (isSettlementCredit || isPayoutCredit || isRiderCredit) {
                 ledgerCashOut += Number(l.amount);
             }
         });

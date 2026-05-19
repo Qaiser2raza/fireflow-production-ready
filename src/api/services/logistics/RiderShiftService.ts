@@ -173,34 +173,34 @@ export class RiderShiftService {
             });
 
             // 4. Record Settlement in Ledger
-            if (!received.isZero()) {
-                // Main Cash increases
+            const floatReturned = new Decimal(shift.opening_float.toString());
+
+            if (!floatReturned.isZero()) {
                 await accounting.createLedgerEntry({
                     restaurantId: shift.restaurant_id,
                     transactionType: 'DEBIT',
-                    amount: received,
+                    amount: floatReturned,
                     referenceType: 'SETTLEMENT',
                     referenceId: shift.id,
-                    description: `Shift closing cash received from rider (${cashOrders.length} orders, Float + Sales)`,
+                    description: 'Shift closing float returned from rider',
                     processedBy: data.closedBy
                 }, tx);
 
-                // Rider liability fully cleared
                 await accounting.createLedgerEntry({
                     restaurantId: shift.restaurant_id,
                     accountId: shift.rider_id,
                     transactionType: 'CREDIT',
-                    amount: received,
+                    amount: floatReturned,
                     referenceType: 'SETTLEMENT',
                     referenceId: shift.id,
-                    description: `Shift fully reconciled — liability cleared`,
+                    description: 'Shift closing float reconciled',
                     processedBy: data.closedBy
                 }, tx);
 
                 await journalEntryService.recordRiderSettlementJournal({
                     restaurantId: shift.restaurant_id,
                     riderId: shift.rider_id,
-                    amount: received,
+                    amount: floatReturned,
                     settlementId: shift.id,
                     processedBy: data.closedBy
                 }, tx);
