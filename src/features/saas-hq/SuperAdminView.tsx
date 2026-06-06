@@ -56,6 +56,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
   const [payments, setPayments] = useState<any[]>([]);
   const [selectedPlan, setSelectedPlan] = useState<'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE'>('BASIC');
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  const [hardwareId, setHardwareId] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isVerifying, setIsVerifying] = useState<string | null>(null);
 
@@ -85,27 +86,27 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
     try {
       setLoading(true);
 
-      // 1. Fetch Restaurants via Local API
-      const res = await fetchWithAuth(`${API_BASE}/restaurants`);
+      // Fetch all restaurants with staff/order counts from the super-admin overview endpoint
+      // This endpoint already joins _count.staff and _count.orders — no extra calls needed
+      const res = await fetchWithAuth(`${API_BASE}/super-admin/restaurants`);
       const data = await res.json();
 
-      const formatted = await Promise.all(data.map(async (r: any) => {
-        const staffRes = await fetchWithAuth(`${API_BASE}/staff?restaurant_id=${r.id}&role=MANAGER`);
-        const staff = await staffRes.json();
-        const orderRes = await fetchWithAuth(`${API_BASE}/orders?restaurant_id=${r.id}`);
-        const orders = await orderRes.json();
+      if (!Array.isArray(data)) {
+        console.error('Unexpected response from /api/super-admin/restaurants:', data);
+        setRestaurants([]);
+        return;
+      }
 
-        return {
-          id: r.id,
-          name: r.name,
-          city: r.address?.split(',').pop()?.trim() || 'Remote',
-          subscription_status: r.subscription_status,
-          subscription_plan: r.subscription_plan,
-          ownerName: staff[0]?.name || 'N/A',
-          staffCount: Array.isArray(staff) ? staff.length : 0,
-          orderCount: Array.isArray(orders) ? orders.length : 0,
-          createdAt: r.created_at
-        };
+      const formatted: RestaurantWithOwner[] = data.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        city: r.address?.split(',').pop()?.trim() || 'Remote',
+        subscription_status: r.subscription_status || 'trial',
+        subscription_plan: r.subscription_plan || 'BASIC',
+        ownerName: r.staff?.[0]?.name || 'N/A',
+        staffCount: r._count?.staff ?? 0,
+        orderCount: r._count?.orders ?? 0,
+        createdAt: r.created_at
       }));
 
       setRestaurants(formatted);
@@ -468,6 +469,15 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                       </button>
                     ))}
                   </div>
+                  <div className="mt-4">
+                    <input
+                      type="text"
+                      placeholder="Paste Hardware Fingerprint (optional but required for POS activation)"
+                      value={hardwareId}
+                      onChange={(e) => setHardwareId(e.target.value)}
+                      className="w-full bg-slate-800/50 border border-slate-700 rounded-xl px-4 py-3 text-white outline-none focus:border-gold-500/50 transition-all placeholder:text-slate-500 font-mono text-xs"
+                    />
+                  </div>
                 </div>
 
                 <button
@@ -478,7 +488,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                       const response = await fetchWithAuth(`${API_BASE}/super-admin/licenses/generate`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ licenseType: selectedPlan })
+                        body: JSON.stringify({ 
+                          licenseType: selectedPlan,
+                          hardwareFingerprint: hardwareId.trim() || undefined
+                        })
                       });
                       const result = await response.json();
                       if (result.license_key) {
@@ -503,7 +516,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
               {generatedKey && (
                 <div className="mt-8 bg-slate-950 border border-gold-500/50 rounded-2xl p-6 flex flex-col items-center animate-in zoom-in duration-300">
                   <p className="text-gold-500/50 text-[10px] font-black uppercase tracking-[0.3em] mb-3">Live Activation Key</p>
-                  <code className="text-gold-500 text-4xl font-mono font-bold tracking-tighter mb-6">{generatedKey}</code>
+                  <code className="text-gold-500 text-sm md:text-lg font-mono font-bold tracking-tighter mb-6 break-all w-full bg-slate-900 p-4 rounded-xl border border-slate-800 text-center select-all">{generatedKey}</code>
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(generatedKey);
@@ -532,7 +545,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                   <tbody className="divide-y divide-slate-800">
                     {licenses.map(lic => (
                       <tr key={lic.id} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="px-6 py-5 font-mono text-gold-500/80 font-bold">{lic.key}</td>
+                        <td className="px-6 py-5 font-mono text-gold-500/80 font-bold max-w-[250px] truncate" title={lic.key}>{lic.key}</td>
                         <td className="px-6 py-5 text-white font-bold">{lic.plan}</td>
                         <td className="px-6 py-5">
                           <StatusBadge status={lic.status} />

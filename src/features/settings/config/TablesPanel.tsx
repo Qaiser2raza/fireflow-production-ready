@@ -1,9 +1,28 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../../../client/contexts/AppContext';
-import { Plus, Trash2, Edit2, X, LayoutTemplate } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, LayoutTemplate, Printer } from 'lucide-react';
+import { fetchWithAuth } from '../../../shared/lib/authInterceptor';
 
 export const TablesPanel: React.FC = () => {
-    const { tables, sections, addTable, updateTable, deleteTable } = useAppContext();
+    const { tables, sections, addTable, updateTable, deleteTable, addNotification } = useAppContext();
+
+    const handlePrintQR = async (tableId: string) => {
+        try {
+            const res = await fetchWithAuth(`${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/printers/print-table-qr`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ table_id: tableId })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                addNotification('success', data.message);
+            } else {
+                throw new Error(data.error || 'Failed to print QR code');
+            }
+        } catch (err: any) {
+            addNotification('error', err.message);
+        }
+    };
     const [isAdding, setIsAdding] = useState(false);
 
     // Add State
@@ -158,6 +177,7 @@ export const TablesPanel: React.FC = () => {
                                             Seats: <span className="text-white font-bold">{table.capacity}</span>
                                         </div>
                                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={() => handlePrintQR(table.id)} className="p-1 hover:bg-slate-700 rounded text-slate-300" title="Print QR Code"><Printer size={14} /></button>
                                             <button onClick={() => startEdit(table)} className="p-1 hover:bg-slate-700 rounded text-slate-300"><Edit2 size={14} /></button>
                                             <button onClick={() => deleteTable(table.id)} className="p-1 hover:bg-red-900/50 rounded text-red-500"><Trash2 size={14} /></button>
                                         </div>

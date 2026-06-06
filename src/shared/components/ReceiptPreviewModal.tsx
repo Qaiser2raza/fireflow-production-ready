@@ -71,75 +71,41 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
     // The order we actually render — prefer fresh server data
     const displayOrder = liveOrder || order;
 
-    const handlePrint = () => {
-        const content = receiptRef.current;
-        if (!content) return;
+    const [printers, setPrinters] = useState<any[]>([]);
+    const [selectedPrinterId, setSelectedPrinterId] = useState<string>('');
 
-        const printWindow = window.open('', '', 'height=700,width=450');
-        if (!printWindow) return;
+    useEffect(() => {
+        fetchWithAuth('/api/printers')
+            .then(res => res.json())
+            .then(data => {
+                const active = data.filter((p: any) => p.is_active);
+                setPrinters(active);
+                if (active.length > 0) {
+                    const localPrinter = active.find((p: any) => p.connection_type === 'LOCAL');
+                    setSelectedPrinterId(localPrinter ? localPrinter.id : active[0].id);
+                }
+            })
+            .catch(console.error);
+    }, []);
 
-        // Collect all stylesheets from the parent document
-        const stylesheets = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'));
-        let styleHTML = '';
-        stylesheets.forEach(el => {
-            styleHTML += el.outerHTML + '\n';
-        });
-
-        // Build a self-contained print document with all CSS
-        printWindow.document.write(`<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Receipt</title>
-    ${styleHTML}
-    <link href="https://fonts.googleapis.com/css2?family=Libre+Barcode+128&display=swap" rel="stylesheet">
-    <style>
-        @media print {
-            @page {
-                size: ${receiptWidth === '280px' ? '58mm' : '80mm'} auto;
-                margin: 2mm;
-            }
-            html, body {
-                width: ${receiptWidth === '280px' ? '58mm' : '80mm'};
-                margin: 0;
-                padding: 0;
-                background: #fff !important;
-                -webkit-print-color-adjust: exact;
-                print-color-adjust: exact;
-            }
-            * {
-                color: #000 !important;
-                background: transparent !important;
-            }
+    const handlePrint = async () => {
+        const html = document.getElementById('receipt-content')?.outerHTML ?? '';
+        const fullHtml = `<html><head><style>
+            body { font-family: monospace; width: 80mm; margin: 0; padding: 8px; }
+        </style></head><body>${html}</body></html>`;
+        
+        try {
+            const token = localStorage.getItem('fireflow_token');
+            const res = await fetch('/api/print', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ printerId: selectedPrinterId, type: 'RECEIPT', html: fullHtml })
+            });
+            if (res.ok) alert('Sent to printer ✓');
+            else alert('Print failed');
+        } catch (e: any) {
+            alert('Print error: ' + e.message);
         }
-        body {
-            margin: 0;
-            padding: 8px;
-            background: #fff;
-            display: flex;
-            justify-content: center;
-        }
-        .receipt-container {
-            width: ${receiptWidth};
-            max-width: 100%;
-        }
-    </style>
-</head>
-<body>
-    <div class="receipt-container">
-        ${content.innerHTML}
-    </div>
-</body>
-</html>`);
-        printWindow.document.close();
-
-        // Wait for stylesheets and fonts to load before triggering print
-        printWindow.onload = () => {
-            setTimeout(() => {
-                printWindow.focus();
-                printWindow.print();
-            }, 400);
-        };
     };
 
     useEffect(() => {
@@ -194,12 +160,23 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
                             80mm
                         </button>
                     </div>
+                    {printers.length > 0 && (
+                        <select
+                            value={selectedPrinterId}
+                            onChange={(e) => setSelectedPrinterId(e.target.value)}
+                            className="bg-slate-900 border border-slate-700 text-white text-xs rounded-lg px-2 py-2 focus:outline-none focus:border-blue-500"
+                        >
+                            {printers.map(p => (
+                                <option key={p.id} value={p.id}>{p.name} {p.connection_type === 'LOCAL' ? '(Local)' : ''}</option>
+                            ))}
+                        </select>
+                    )}
                     <button
                         onClick={handlePrint}
-                        disabled={isFetching}
+                        disabled={isFetching || !selectedPrinterId}
                         className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
                     >
-                        <Printer size={14} /> Print / PDF
+                        <Printer size={14} /> Print
                     </button>
                     {orderId && (
                         <button
@@ -233,7 +210,7 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
                             </p>
                         </div>
                     ) : (
-                        <div ref={receiptRef} className="origin-top transform transition-transform duration-300">
+                        <div ref={receiptRef} id="receipt-content" className="origin-top transform transition-transform duration-300">
                             <ThermalReceipt order={displayOrder} width={receiptWidth} config={operationsConfig} />
                         </div>
                     )}

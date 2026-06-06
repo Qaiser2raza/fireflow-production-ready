@@ -224,10 +224,11 @@ export async function checkLicenseKey(key: string): Promise<LicenseKeyResponse> 
   try {
     const client = getCloudClient();
 
+    const searchKey = key.includes('.') ? key : key.toUpperCase();
     const { data, error } = await client
       .from('license_keys')
       .select('id, key, plan, status')
-      .eq('key', key.toUpperCase())
+      .eq('key', searchKey)
       .single();
 
     if (error) {
@@ -285,6 +286,7 @@ export async function activateLicenseKey(
       };
     }
 
+    const searchKey = key.includes('.') ? key : key.toUpperCase();
     // Update license key status
     const { data, error } = await client
       .from('license_keys')
@@ -293,7 +295,7 @@ export async function activateLicenseKey(
         restaurant_id: restaurantId,
         activated_at: new Date().toISOString()
       })
-      .eq('key', key.toUpperCase())
+      .eq('key', searchKey)
       .select('id, key, restaurant_id, activated_at')
       .single();
 

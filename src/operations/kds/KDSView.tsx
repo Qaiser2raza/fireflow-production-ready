@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAppContext } from '../../client/App';
 import { Order, Station } from '../../shared/types';
-import { Clock, AlertCircle, CheckCircle2, ChefHat, Bike, ShoppingBag, CheckSquare, RotateCcw, Circle } from 'lucide-react';
+import { Clock, AlertCircle, CheckCircle2, ChefHat, Bike, ShoppingBag, CheckSquare, RotateCcw, Circle, Printer } from 'lucide-react';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 
 export const KDSView: React.FC = () => {
@@ -363,6 +363,50 @@ const KDSTicket: React.FC<{
   onVoidOrder: () => void;
   userRole: string;
 }> = ({ order, activeStationId, stations, tables, onReadyAll, onToggleItem, onVoidOrder, userRole }) => {
+  const [selectedPrinterId, setSelectedPrinterId] = useState<string>('');
+
+  useEffect(() => {
+      fetchWithAuth('/api/printers')
+          .then(res => res.json())
+          .then(data => {
+              const active = data.filter((p: any) => p.is_active);
+              if (active.length > 0) {
+                  setSelectedPrinterId(active[0].id);
+              }
+          })
+          .catch(console.error);
+  }, []);
+
+  const handlePrintKOT = async () => {
+    if (!selectedPrinterId) {
+        alert('No active printer found.');
+        return;
+    }
+    const kotHtml = `<html><body style="font-family:monospace;width:80mm;padding:8px;">
+      <h3 style="text-align:center;">KOT #${order.order_number || order.id.split('-').pop()}</h3>
+      <p>Table: ${(order as any).table_name ?? 'N/A'} | ${new Date().toLocaleTimeString()}</p>
+      <hr/>
+      ${(order.order_items || []).map((i: any) =>
+        `<p><b>${i.quantity}x</b> ${i.item_name}
+        ${i.special_instructions ? `<br/><small>* ${i.special_instructions}</small>` : ''}</p>`
+      ).join('')}
+      <hr/>
+    </body></html>`;
+
+    try {
+        const token = localStorage.getItem('fireflow_token');
+        const res = await fetch('/api/print', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ printerId: selectedPrinterId, type: 'KOT', html: kotHtml })
+        });
+        if (res.ok) alert('Sent to printer ✓');
+        else alert('Print failed');
+    } catch (e: any) {
+        alert('Print error: ' + e.message);
+    }
+  };
+
   const elapsed = Math.floor((Date.now() - new Date(order.created_at || (order as any).timestamp || Date.now()).getTime()) / 60000);
   const isUrgent = elapsed > 15;
   const isCritical = elapsed > 25;
@@ -377,6 +421,13 @@ const KDSTicket: React.FC<{
     if (order.type === 'DINE_IN') {
       const table = tables.find(t => t.id === order.table_id);
       return table ? table.name : 'TABLE';
+    }
+    if (order.type === 'TAKEAWAY') {
+      const token = order.order_number ? order.order_number.split('-').pop() : '';
+      return token ? `#${token}` : 'TAKEAWAY';
+    }
+    if (order.type === 'DELIVERY') {
+      return order.customer_phone ? `📞 ${order.customer_phone}` : 'DELIVERY';
     }
     return order.type;
   };
@@ -511,6 +562,12 @@ const KDSTicket: React.FC<{
             </button>
           </div>
         )}
+        <button
+          onClick={handlePrintKOT}
+          className="w-full h-10 bg-slate-800 hover:bg-slate-700 text-white font-black uppercase tracking-[0.2em] text-[10px] rounded-lg transition-all shadow-lg border border-slate-700/50 flex items-center justify-center gap-2"
+        >
+          <Printer size={14} /> Print KOT
+        </button>
       </div>
     </div>
   );

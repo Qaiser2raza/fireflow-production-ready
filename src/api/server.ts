@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
+import path from 'path';
 import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
 import rateLimit from 'express-rate-limit';
@@ -21,6 +22,8 @@ import analyticsRoutes from './routes/analyticsRoutes';
 import coaRoutes from './routes/coaRoutes';
 import supplierRoutes from './routes/supplierRoutes';
 import financeRoutes from './routes/financeRoutes';
+import superAdminRoutes from './routes/superAdminRoutes';
+import printerRoutes from './routes/printerRoutes';
 import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { authMiddleware, requireRole } from './middleware/authMiddleware';
@@ -28,6 +31,9 @@ import { sessionGateMiddleware } from './middleware/sessionGate';
 import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { journalEntryService } from './services/JournalEntryService';
+import { LicenseService } from './services/licensing/LicenseService';
+import { qrOrderBridge } from './services/qr/QROrderBridge';
+import { syncMenuToCloud } from './services/qr/MenuSync';
 
 
 const accounting = new AccountingService();
@@ -80,6 +86,7 @@ import {
 })();
 
 const prisma = new PrismaClient();
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -128,6 +135,9 @@ app.use(express.json());
 // Enterprise logging middleware
 app.use(requestLoggerMiddleware);
 
+// Serve the Local PWA Customer Menu
+app.use('/pwa', express.static(path.join(process.cwd(), 'public/pwa')));
+
 // Health check for Electron startup with monitoring
 app.get('/api/health', async (_req, res) => {
     try {
@@ -153,6 +163,132 @@ app.get('/api/health', async (_req, res) => {
             status: 'unhealthy',
             error: 'Health check failed'
         });
+    }
+});
+
+// ==========================================
+// 🔑 LICENSING & SUBSCRIPTION (PUBLIC)
+// ==========================================
+
+/**
+ * GET /api/licensing/fingerprint
+ * Returns the unique hardware fingerprint of this machine.
+ */
+app.get('/api/licensing/fingerprint', (_req, res) => {
+    try {
+        const fingerprint = LicenseService.getHardwareFingerprint();
+        res.json({ fingerprint });
+    } catch (e: any) {
+        console.error('[ERROR] GET /api/licensing/fingerprint:', e.message);
+        res.status(500).json({ error: 'Failed to retrieve hardware fingerprint' });
+    }
+});
+
+/**
+ * POST /api/licensing/activate
+ * Accepts a signed cryptographic license token, validates it, and writes it to disk.
+ * Body: { licenseToken: "eyJhb..." }
+ */
+app.post('/api/licensing/activate', async (req, res) => {
+    try {
+        const { licenseToken } = req.body;
+        if (!licenseToken) {
+            return res.status(400).json({ error: 'licenseToken is required in request body' });
+        }
+
+        // 1. Fetch restaurant ID from active restaurants
+        const activeRestaurant = await prisma.restaurants.findFirst({
+            select: { id: true }
+        });
+
+        if (!activeRestaurant) {
+            return res.status(404).json({ error: 'No local restaurant database initialized. Seed the DB first.' });
+        }
+
+        // 2. Perform test validation before saving
+        const payload = LicenseService.verifyLicenseToken(licenseToken);
+        if (!payload) {
+            return res.status(422).json({ error: 'Invalid license signature or corrupt license token format' });
+        }
+
+        if (payload.restaurant_id !== activeRestaurant.id) {
+            return res.status(422).json({ error: `This license belongs to a different restaurant (ID: ${payload.restaurant_id}) and cannot activate this terminal.` });
+        }
+
+        const systemFingerprint = LicenseService.getHardwareFingerprint();
+        if (payload.hardware_fingerprint && payload.hardware_fingerprint !== systemFingerprint) {
+            return res.status(422).json({ error: 'Hardware fingerprint in license does not match this server terminal.' });
+        }
+
+        // 3. Write license to disk
+        const saved = LicenseService.saveLicense(licenseToken);
+        if (!saved) {
+            return res.status(500).json({ error: 'Failed to write license file to system disk' });
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'License activated successfully!',
+            plan: payload.plan,
+            expiresAt: payload.subscription_expires_at
+        });
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/licensing/activate:', e.message);
+        res.status(500).json({ error: e.message || 'Activation failed' });
+    }
+});
+
+/**
+ * GET /api/licensing/status
+ * Returns full status of local cryptographic license.
+ */
+app.get('/api/licensing/status', async (_req, res) => {
+    try {
+        const activeRestaurant = await prisma.restaurants.findFirst({
+            select: { id: true, name: true, subscription_plan: true, subscription_status: true }
+        });
+
+        if (!activeRestaurant) {
+            return res.json({ status: 'unlicensed', error: 'No local restaurant initialized' });
+        }
+
+        const verification = await LicenseService.evaluateLocalLicenseStatus(activeRestaurant.id);
+        
+        // Synchronize local database meta strings on check
+        if (verification.status === 'active' && verification.payload) {
+            const currentDbStatus = activeRestaurant.subscription_status;
+            const currentDbPlan = activeRestaurant.subscription_plan;
+            
+            if (currentDbStatus !== 'active' || currentDbPlan !== verification.payload.plan) {
+                await prisma.restaurants.update({
+                    where: { id: activeRestaurant.id },
+                    data: { 
+                        subscription_status: 'active',
+                        subscription_plan: verification.payload.plan,
+                        subscription_expires_at: new Date(verification.payload.subscription_expires_at)
+                    }
+                });
+            }
+        } else if (verification.status === 'expired' || verification.status === 'tampered') {
+            if (activeRestaurant.subscription_status !== 'expired') {
+                await prisma.restaurants.update({
+                    where: { id: activeRestaurant.id },
+                    data: { subscription_status: 'expired' }
+                });
+            }
+        }
+
+        res.json({
+            status: verification.status,
+            daysRemaining: verification.daysRemaining || 0,
+            error: verification.error,
+            plan: verification.payload?.plan || activeRestaurant.subscription_plan || 'BASIC',
+            restaurantName: verification.payload?.restaurant_name || activeRestaurant.name,
+            expiresAt: verification.payload?.subscription_expires_at || null
+        });
+    } catch (e: any) {
+        console.error('[ERROR] GET /api/licensing/status:', e.message);
+        res.status(500).json({ error: 'Failed to retrieve license status' });
     }
 });
 
@@ -1148,6 +1284,31 @@ app.post('/api/floor/seat-party', authMiddleware, async (req, res) => {
     }
 });
 
+/**
+ * Express middleware to prevent operations if restaurant subscription is expired or tampered.
+ */
+async function verifyLicensingMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+    try {
+        const restaurantId = req.restaurantId;
+        if (!restaurantId || restaurantId === 'SYSTEM') {
+            return next(); // Skip check for system internal operations
+        }
+
+        const verification = await LicenseService.evaluateLocalLicenseStatus(restaurantId);
+        if (verification.status !== 'active') {
+            return res.status(402).json({
+                error: 'LICENSING_LOCKOUT',
+                status: verification.status,
+                message: verification.error || 'Your FireFlow license is inactive or expired.'
+            });
+        }
+        next();
+    } catch (e: any) {
+        console.error('[LICENSING MIDDLEWARE] Validation crash:', e.message);
+        res.status(500).json({ error: 'License verification service failed' });
+    }
+}
+
 // ─── Enterprise Route Guard ────────────────────────────────────────────────
 // authMiddleware is applied ONCE on the shared protectedApiRouter.
 // Previously each app.use() call added its own authMiddleware instance,
@@ -1155,6 +1316,7 @@ app.post('/api/floor/seat-party', authMiddleware, async (req, res) => {
 // duplicate [AUTH] entries. Now it runs exactly once per request.
 const protectedApiRouter = express.Router();
 protectedApiRouter.use(authMiddleware);
+protectedApiRouter.use(verifyLicensingMiddleware);
 
 protectedApiRouter.use('/', deliveryRoutes);
 protectedApiRouter.use('/', customerRoutes);
@@ -1166,8 +1328,45 @@ protectedApiRouter.use('/orders', orderWorkflowRoutes);
 protectedApiRouter.use('/cashier', cashierRoutes);
 protectedApiRouter.use('/suppliers', supplierRoutes);
 protectedApiRouter.use('/finance', financeRoutes);
+protectedApiRouter.use('/super-admin', superAdminRoutes);
+protectedApiRouter.use('/printers', printerRoutes);
+
+// New unified print endpoint
+import { PrinterService } from './services/PrinterService';
+protectedApiRouter.post('/print', async (req, res) => {
+    try {
+        const { printerId, html } = req.body;
+        if (!printerId || !html) {
+            return res.status(400).json({ error: 'printerId and html are required' });
+        }
+        await PrinterService.printDocument(printerId, html);
+        res.json({ success: true });
+    } catch (e: any) {
+        console.error('Print error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 app.use('/api', protectedApiRouter);
+
+// Standalone subscription_payments route — queries Supabase cloud (table not in local DB)
+app.get('/api/subscription_payments', authMiddleware, requireRole('SUPER_ADMIN', 'MANAGER'), async (_req, res) => {
+    try {
+        const { getSupabaseClient } = await import('../shared/lib/cloudClient');
+        const cloud = getSupabaseClient();
+        const { data, error } = await cloud
+            .from('subscription_payments')
+            .select('*')
+            .order('created_at', { ascending: false });
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+        res.json(data || []);
+    } catch (e: any) {
+        console.error('[SUPER ADMIN] GET /subscription_payments error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 /**
  * PATCH /api/orders/:id/guest-count
@@ -1477,10 +1676,12 @@ app.get('/api/menu_items', async (req, res) => {
         });
         
         // Map menu_item_variants to variant for frontend alignment
+        // Also expose `available` alias so the PWA can filter without knowing `is_available`
         const mappedItems = items.map((item: any) => {
             const { menu_item_variants, ...rest } = item;
             return {
                 ...rest,
+                available: item.is_available,  // PWA-compatible alias
                 variant: menu_item_variants.map((v: any) => ({
                     id: v.id,
                     name: v.name,
@@ -1513,6 +1714,7 @@ app.post('/api/menu_items', async (req, res) => {
 
         const item = await prisma.menu_items.create({ data: createData });
         io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: item });
+        if (item.restaurant_id) syncMenuToCloud(item.restaurant_id).catch(console.error);
         res.json(item);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -1552,6 +1754,7 @@ app.patch('/api/menu_items', async (req, res) => {
             data: updateData
         });
         io.emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: item });
+        if (item.restaurant_id) syncMenuToCloud(item.restaurant_id).catch(console.error);
         res.json(item);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -1563,6 +1766,9 @@ app.delete('/api/menu_items', async (req, res) => {
     try {
         await prisma.menu_items.delete({ where: { id: String(id) } });
         io.emit('db_change', { table: 'menu_items', eventType: 'DELETE', id });
+        // For delete, re-sync by the restaurant of the deleted item if we can resolve it
+        const restaurantEnv = process.env.RESTAURANT_ID;
+        if (restaurantEnv) syncMenuToCloud(restaurantEnv).catch(console.error);
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -1571,12 +1777,17 @@ app.delete('/api/menu_items', async (req, res) => {
 
 // Categories
 app.get('/api/menu_categories', async (req, res) => {
-    const { restaurant_id } = req.query;
+    const { restaurant_id, format } = req.query;
     try {
         const cats = await prisma.menu_categories.findMany({
             where: restaurant_id ? { restaurant_id: String(restaurant_id) } : {},
             orderBy: { priority: 'asc' }
         });
+        // format=names returns a plain string array for the PWA customer menu
+        if (format === 'names') {
+            return res.json(cats.map(c => c.name));
+        }
+        // Default: return full objects for the staff POS
         res.json(cats);
     } catch (e: any) {
         console.error('GET /api/menu_categories ERROR:', e);
@@ -1588,6 +1799,7 @@ app.post('/api/menu_categories', async (req, res) => {
     try {
         const cat = await prisma.menu_categories.create({ data: req.body });
         io.emit('db_change', { table: 'menu_categories', eventType: 'INSERT', data: cat });
+        syncMenuToCloud(cat.restaurant_id).catch(console.error);
         res.json(cat);
     } catch (e: any) {
         console.error('POST /api/menu_categories ERROR:', e);
@@ -1600,6 +1812,7 @@ app.patch('/api/menu_categories', async (req, res) => {
     try {
         const cat = await prisma.menu_categories.update({ where: { id: String(id) }, data });
         io.emit('db_change', { table: 'menu_categories', eventType: 'UPDATE', data: cat });
+        syncMenuToCloud(cat.restaurant_id).catch(console.error);
         res.json(cat);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -1760,8 +1973,9 @@ app.get('/api/vendors', async (req, res) => {
 // Sections
 app.post('/api/sections', async (req, res) => {
     try {
-        console.log('POST /api/sections body:', req.body);
-        const section = await createSection(req.body, io);
+        const { restaurant_id } = req.body;
+        if (!restaurant_id) return res.status(400).json({ error: 'Missing restaurant_id' });
+        const section = await createSection(restaurant_id, req.body, io);
         res.json(section);
     } catch (e: any) {
         console.error('POST /api/sections ERROR:', e);
@@ -1806,7 +2020,9 @@ app.delete('/api/sections', async (req, res) => {
 // Tables
 app.post('/api/tables', async (req, res) => {
     try {
-        const table = await createTable(req.body, io);
+        const { restaurant_id } = req.body;
+        if (!restaurant_id) return res.status(400).json({ error: 'Missing restaurant_id' });
+        const table = await createTable(restaurant_id, req.body, io);
         res.json(table);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2183,7 +2399,7 @@ app.get('/api/orders/:id', async (req, res, next) => {
     try {
         const { id } = req.params;
         // Skip if ID is actually a route name
-        if (['all', 'summary', 'upsert', 'fire'].includes(id)) return next();
+        if (['all', 'summary', 'upsert', 'fire', 'qr-status', 'qr-pending', 'qr-approve', 'qr-reject', 'qr'].includes(id)) return next();
 
         const order = await prisma.orders.findUnique({
             where: { id },
@@ -2723,5 +2939,311 @@ server.listen(PORT, '0.0.0.0', async () => {
             service: 'startup',
             action: 'subscription_checker_started'
         });
+    }
+
+    // ─── QR Order Bridge (Async Background Sync) ──────────────────────────
+    try {
+        const firstRestaurant = await prisma.restaurants.findFirst({
+            select: { id: true }
+        });
+        if (firstRestaurant) {
+            qrOrderBridge.start(firstRestaurant.id);
+            
+            // Listen for incoming cloud orders
+            qrOrderBridge.on('new_order', (localOrder) => {
+                io.to(`restaurant:${localOrder.restaurant_id}`).emit('qr_new_order', {
+                    id: localOrder.id,
+                    restaurant_id: localOrder.restaurant_id,
+                    table_number: localOrder.tables?.name ? Number(localOrder.tables.name) : undefined,
+                    table_label: localOrder.tables?.name || null,
+                    items: localOrder.items,
+                    subtotal: localOrder.total,
+                    notes: localOrder.special_instructions || null,
+                    customer_name: localOrder.customer_name,
+                    submitted_at: localOrder.created_at,
+                    sig_verified: true
+                });
+            });
+            
+            // Sync menu to cloud on startup
+            syncMenuToCloud(firstRestaurant.id).catch(console.error);
+        }
+    } catch (bridgeErr: any) {
+        console.warn('[QR BRIDGE] Could not auto-start bridge:', bridgeErr.message);
+    }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🟡 QR SELF-ORDERING: CASHIER APPROVAL ENDPOINTS
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE: GET /api/menu_items and GET /api/menu_categories are handled by the
+// canonical routes above (lines ~1650, ~1753). Those routes now support both
+// staff POS and PWA via the `available` alias and `?format=names` param.
+
+/**
+ * GET /api/orders/qr-status/:orderId
+ * Tracks the live status of an order for the PWA
+ */
+app.get('/api/orders/qr-status/:orderId', async (req, res) => {
+    try {
+        const order = await prisma.orders.findUnique({
+            where: { id: req.params.orderId },
+            select: { status: true, cancellation_reason: true }
+        });
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+        
+        let message = '';
+        if (order.status === 'PENDING_APPROVAL') message = 'Waiting for cashier approval...';
+        else if (order.status === 'ACTIVE') message = 'Order approved! Kitchen is preparing...';
+        else if (order.status === 'READY') message = 'Your order is ready! Please ask staff.';
+        else if (order.status === 'CANCELLED') message = `Order cancelled: ${order.cancellation_reason || 'No reason provided'}`;
+        else message = `Order status: ${order.status}`;
+        
+        res.json({ status: order.status, message });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /api/orders/qr
+ * Public endpoint for the local PWA to submit QR orders directly
+ */
+app.post('/api/orders/qr', async (req, res) => {
+    try {
+        const { tableId, items, total, customerName } = req.body;
+        
+        if (!tableId || !items || !Array.isArray(items)) {
+            return res.status(400).json({ error: 'tableId and items array are required' });
+        }
+
+        const mappedItems = items.map((i: any) => ({
+            menu_item_id: i.id,
+            name: i.name,
+            quantity: i.quantity,
+            unit_price: i.price
+        }));
+
+        let orderData: any = {
+            table_id: tableId,
+            items: mappedItems,
+            subtotal: total,
+            customer_name: customerName
+        };
+        
+        // Ensure restaurant_id is set
+        const firstRestaurant = await prisma.restaurants.findFirst({ select: { id: true } });
+        if (firstRestaurant) {
+            orderData.restaurant_id = firstRestaurant.id;
+        } else {
+            return res.status(400).json({ error: 'No local restaurant configured' });
+        }
+
+        const localOrder = await qrOrderBridge.createLocalQROrder(orderData);
+
+        // Notify POS in real-time
+        io.to(`restaurant:${orderData.restaurant_id}`).emit('qr_new_order', {
+            id: localOrder.id,
+            restaurant_id: localOrder.restaurant_id,
+            table_number: localOrder.tables?.name ? Number(localOrder.tables.name) : undefined,
+            table_label: localOrder.tables?.name || null,
+            items: localOrder.items,
+            subtotal: localOrder.total,
+            notes: localOrder.special_instructions || null,
+            customer_name: localOrder.customer_name,
+            submitted_at: localOrder.created_at,
+            sig_verified: true
+        });
+
+        res.json({ success: true, orderId: localOrder.id, message: 'Order successfully created' });
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/orders/qr:', e.message);
+        res.status(500).json({ error: e.message || 'Failed to create local QR order' });
+    }
+});
+
+/**
+ * GET /api/orders/qr-pending
+ * Returns the list of QR orders awaiting cashier approval from DB.
+ */
+app.get('/api/orders/qr-pending', authMiddleware, async (req, res) => {
+    try {
+        const restaurantId = req.restaurantId;
+        const pendingList = await prisma.orders.findMany({
+            where: { restaurant_id: restaurantId, type: 'QR', status: 'PENDING_APPROVAL' },
+            include: { order_items: true, tables: true },
+            orderBy: { created_at: 'asc' }
+        });
+        
+        // Map to the shape expected by the frontend (IncomingQROrder roughly)
+        const mappedList = pendingList.map(order => ({
+            id: order.id,
+            restaurant_id: order.restaurant_id,
+            table_number: order.tables?.name ? Number(order.tables.name) : undefined,
+            table_label: order.tables?.name || null,
+            items: order.order_items.map(item => ({
+                menu_item_id: item.menu_item_id,
+                name: item.item_name || 'Unknown',
+                quantity: item.quantity,
+                unit_price: Number(item.unit_price)
+            })),
+            subtotal: Number(order.total),
+            notes: (order as any).notes,
+            customer_name: order.customer_name,
+            submitted_at: order.created_at.toISOString(),
+            sig_verified: true
+        }));
+        
+        res.json({ count: mappedList.length, orders: mappedList });
+    } catch (e: any) {
+        console.error('GET /api/orders/qr-pending error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /api/orders/qr-approve
+ * Cashier approves a pending QR order.
+ * Updates the DB status to ACTIVE and associates with a table.
+ * Body: { qr_order_id: string, table_id?: string }
+ */
+app.post('/api/orders/qr-approve', authMiddleware, async (req, res) => {
+    const { qr_order_id, table_id } = req.body;
+    if (!qr_order_id) {
+        return res.status(400).json({ error: 'qr_order_id is required' });
+    }
+
+    try {
+        const restaurantId = req.restaurantId;
+        const staffId = req.staffId;
+
+        const pending = await prisma.orders.findUnique({
+            where: { id: qr_order_id },
+            include: { tables: true }
+        });
+
+        if (!pending || pending.status !== 'PENDING_APPROVAL' || pending.type !== 'QR') {
+            return res.status(404).json({ error: 'QR order not found or already processed.' });
+        }
+
+        // 1. Resolve table
+        let resolvedTableId = table_id || pending.table_id;
+
+        // 2. Update order to ACTIVE DINE_IN
+        const order = await prisma.orders.update({
+            where: { id: qr_order_id },
+            data: {
+                status: 'ACTIVE',
+                type: 'DINE_IN',
+                table_id: resolvedTableId,
+                assigned_waiter_id: staffId,
+                updated_at: new Date()
+            },
+            include: {
+                order_items: true,
+                tables: true
+            }
+        });
+
+        // Optional: Create dine_in_orders record if it didn't exist
+        let tableUpdate: any = null;
+        if (resolvedTableId) {
+            const existingDineIn = await prisma.dine_in_orders.findUnique({ where: { order_id: order.id }});
+            if (!existingDineIn) {
+                await prisma.dine_in_orders.create({
+                    data: {
+                        order_id: order.id,
+                        table_id: resolvedTableId,
+                        guest_count: 1,
+                        seated_at: new Date()
+                    }
+                });
+            }
+
+            // Mark table as occupied and associate active order id
+            tableUpdate = await prisma.tables.update({
+                where: { id: resolvedTableId },
+                data: {
+                    status: 'OCCUPIED',
+                    active_order_id: order.id
+                }
+            });
+        }
+
+        // 3. Broadcast to all POS clients (KDS + cashier screen)
+        io.to(`restaurant:${restaurantId}`).emit('db_change', {
+            table: 'orders',
+            eventType: 'UPDATE',
+            data: order
+        });
+
+        if (tableUpdate) {
+            io.to(`restaurant:${restaurantId}`).emit('db_change', {
+                table: 'tables',
+                eventType: 'UPDATE',
+                data: tableUpdate
+            });
+        }
+
+        // 4. Notify QR approval to clear customer's screen (if Supabase is connected)
+        io.to(`restaurant:${restaurantId}`).emit('qr_order_approved', {
+            qr_order_id,
+            local_order_id: order.id,
+            table_number: order.tables?.name
+        });
+
+        console.log(`[QR APPROVE] ✅ Order ${order.id} approved by ${staffId}`);
+        res.json({ success: true, order_id: order.id, message: `QR order approved. Order #${order.id.slice(-6).toUpperCase()} is now ACTIVE.` });
+
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/orders/qr-approve:', e.message);
+        res.status(500).json({ error: e.message || 'Failed to approve QR order' });
+    }
+});
+
+/**
+ * POST /api/orders/qr-reject
+ * Cashier rejects a pending QR order.
+ * Body: { qr_order_id: string, reason?: string }
+ */
+app.post('/api/orders/qr-reject', authMiddleware, async (req, res) => {
+    const { qr_order_id, reason } = req.body;
+    if (!qr_order_id) {
+        return res.status(400).json({ error: 'qr_order_id is required' });
+    }
+
+    try {
+        const restaurantId = req.restaurantId;
+        const pending = await prisma.orders.findUnique({
+            where: { id: qr_order_id },
+            include: { tables: true }
+        });
+
+        if (!pending || pending.status !== 'PENDING_APPROVAL' || pending.type !== 'QR') {
+            return res.status(404).json({ error: 'QR order not found or already processed.' });
+        }
+
+        // Mark as CANCELLED
+        await prisma.orders.update({
+            where: { id: qr_order_id },
+            data: {
+                status: 'CANCELLED',
+                cancellation_reason: reason || 'Order was declined by cashier.',
+                updated_at: new Date()
+            }
+        });
+
+        // Broadcast rejection so cashier UI updates everywhere
+        io.to(`restaurant:${restaurantId}`).emit('qr_order_rejected', {
+            qr_order_id,
+            table_number: pending.tables?.name || 'Unknown',
+            reason: reason || 'Order was declined by cashier.'
+        });
+
+        console.log(`[QR REJECT] ❌ Order ${qr_order_id} rejected.`);
+        res.json({ success: true, message: 'QR order rejected and marked as CANCELLED.' });
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/orders/qr-reject:', e.message);
+        res.status(500).json({ error: e.message || 'Failed to reject QR order' });
     }
 });

@@ -1,5 +1,16 @@
 import { prisma } from '../../shared/lib/prisma';
 import { logger, LogLevel } from '../../shared/lib/logger';
+import { getSupabaseClient } from '../../shared/lib/cloudClient';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+
+function base64url(input: string | Buffer | object): string {
+    const buf = Buffer.isBuffer(input)
+        ? input
+        : Buffer.from(typeof input === 'string' ? input : JSON.stringify(input), 'utf8');
+    return buf.toString('base64url');
+}
 
 export class SuperAdminService {
     /**
@@ -11,8 +22,9 @@ export class SuperAdminService {
         licenseType?: string;
         deviceLimit?: number;
         expiryMonths?: number;
+        hardwareFingerprint?: string;
     }) {
-        const { restaurantId, licenseType = 'STANDARD', deviceLimit = 1, expiryMonths = 12 } = data;
+        const { restaurantId, licenseType = 'STANDARD', deviceLimit = 1, expiryMonths = 12, hardwareFingerprint } = data;
 
         // 1. Generate via Cloud Client (it will use the SERVICE role on the server)
         const { generateLicenseKey: cloudGenerateKey } = await import('../../shared/lib/cloudClient');
@@ -22,7 +34,64 @@ export class SuperAdminService {
             throw new Error(`Cloud License Generation Failed: ${cloudResult.error}`);
         }
 
-        const key = cloudResult.data.key;
+        let key = cloudResult.data.key;
+
+        // 1b. If hardware fingerprint is provided, generate a signed JWT offline instead of using the plain text key.
+        if (hardwareFingerprint) {
+            try {
+                const privateKeyPath = path.join(process.cwd(), 'saas_private.pem');
+                if (!fs.existsSync(privateKeyPath)) {
+                    throw new Error('SaaS Private Key not found on server.');
+                }
+                const privateKeyPem = fs.readFileSync(privateKeyPath, 'utf8').trim();
+
+                const now = new Date();
+                const expiresAt = new Date(now);
+                expiresAt.setMonth(expiresAt.getMonth() + expiryMonths);
+
+                let restaurantName = 'SaaS Partner';
+                if (restaurantId) {
+                    const r = await prisma.restaurants.findUnique({ where: { id: restaurantId }, select: { name: true }});
+                    if (r) restaurantName = r.name;
+                }
+
+                const payload = {
+                    restaurant_id: restaurantId || 'SYSTEM',
+                    restaurant_name: restaurantName,
+                    plan: licenseType,
+                    subscription_expires_at: expiresAt.toISOString(),
+                    grace_period_days: 7,
+                    hardware_fingerprint: hardwareFingerprint,
+                    issued_at: now.toISOString()
+                };
+
+                const header = { alg: 'ES256', typ: 'LIC' };
+                const headerB64 = base64url(header);
+                const payloadB64 = base64url(payload);
+                const signingInput = `${headerB64}.${payloadB64}`;
+
+                const signer = crypto.createSign('SHA256');
+                signer.update(signingInput);
+                const signature = signer.sign(privateKeyPem);
+                const signatureB64 = signature.toString('base64url');
+
+                key = `${headerB64}.${payloadB64}.${signatureB64}`;
+
+                // Update the key in Supabase cloud tracking record
+                const cloud = getSupabaseClient();
+                const { error: updateError } = await cloud
+                    .from('license_keys')
+                    .update({ key })
+                    .eq('id', cloudResult.data.id);
+
+                if (updateError) {
+                    throw new Error(`Failed to update key in Supabase cloud: ${updateError.message}`);
+                }
+            } catch (err: any) {
+                console.error('[SUPER ADMIN] JWT generation failed:', err.message);
+                throw new Error(`JWT Generation failed: ${err.message}`);
+            }
+        }
 
         // 2. Also track in local database for offline fallback/speed
         const license = await prisma.license_keys.create({
@@ -165,35 +234,63 @@ export class SuperAdminService {
     }
 
     /**
-     * Verify or Reject a subscription payment
+     * Verify or Reject a subscription payment (stored in Supabase cloud)
      */
     async verifyPayment(paymentId: string, status: 'verified' | 'rejected', adminId?: string) {
-        const payment = await prisma.subscription_payments.findUnique({
-            where: { id: paymentId }
-        });
+        const cloud = getSupabaseClient();
 
-        if (!payment) throw new Error('Payment not found');
+        // 1. Fetch payment from cloud
+        const { data: payment, error: fetchError } = await cloud
+            .from('subscription_payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
 
-        // Update payment status
-        const updatedPayment = await prisma.subscription_payments.update({
-            where: { id: paymentId },
-            data: {
+        if (fetchError || !payment) {
+            throw new Error(`Payment not found in cloud: ${fetchError?.message || 'unknown error'}`);
+        }
+
+        // 2. Update payment status in cloud
+        const { data: updatedPayment, error: updateError } = await cloud
+            .from('subscription_payments')
+            .update({
                 status,
-                verified_at: new Date(),
+                verified_at: new Date().toISOString(),
                 verified_by: adminId || 'SYSTEM_ADMIN'
-            }
-        });
+            })
+            .eq('id', paymentId)
+            .select()
+            .single();
 
-        // If verified, update restaurant status
+        if (updateError) {
+            throw new Error(`Failed to update payment: ${updateError.message}`);
+        }
+
+        // 3. If verified, also update cloud restaurants_cloud table + local restaurants table
         if (status === 'verified') {
-            await prisma.restaurants.update({
-                where: { id: payment.restaurant_id },
-                data: {
+            const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+            // Update cloud record
+            await cloud
+                .from('restaurants_cloud')
+                .update({
                     subscription_status: 'active',
-                    // Extend subscription by 30 days from now
-                    subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-                }
-            });
+                    subscription_expires_at: expiresAt.toISOString()
+                })
+                .eq('restaurant_id', payment.restaurant_id);
+
+            // Also update local restaurant record so the POS reflects active status
+            try {
+                await prisma.restaurants.update({
+                    where: { id: payment.restaurant_id },
+                    data: {
+                        subscription_status: 'active',
+                        subscription_expires_at: expiresAt
+                    }
+                });
+            } catch (localErr: any) {
+                console.warn('[SUPER ADMIN] Could not update local restaurant status:', localErr.message);
+            }
 
             logger.log({
                 level: LogLevel.INFO,

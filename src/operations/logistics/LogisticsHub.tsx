@@ -48,16 +48,35 @@ export const LogisticsHub: React.FC = () => {
    const API = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
    /* ── derived data ── */
-   const pendingDispatch = useMemo(() =>
-      orders
-         .filter(o =>
-            o.type === 'DELIVERY' &&
-            ['ACTIVE', 'READY'].includes(o.status?.trim().toUpperCase() || '') &&
-            !o.assigned_driver_id &&
-            !dispatchingIds.includes(o.id)  // ← Optimistic: hide in-flight orders immediately
-         )
-         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
-      [orders, dispatchingIds]);
+   const pendingDispatch = useMemo(() => {
+      const filtered = orders.filter(o =>
+         o.type === 'DELIVERY' &&
+         ['ACTIVE', 'READY'].includes(o.status?.trim().toUpperCase() || '') &&
+         !o.assigned_driver_id &&
+         !dispatchingIds.includes(o.id)  // ← Optimistic: hide in-flight orders immediately
+      );
+      
+      const withStatus = filtered.map(o => {
+         const items = o.order_items || [];
+         let readiness = 'QUEUED';
+         if (items.length > 0) {
+            if (items.every((i: any) => i.item_status === 'DONE' || i.item_status === 'SERVED')) {
+               readiness = 'READY';
+            } else if (items.some((i: any) => i.item_status === 'PREPARING')) {
+               readiness = 'PREPARING';
+            } else if (items.some((i: any) => i.item_status === 'PENDING')) {
+               readiness = 'PENDING';
+            }
+         }
+         return { ...o, readiness };
+      });
+
+      return withStatus.sort((a, b) => {
+         if ((a as any).readiness === 'READY' && (b as any).readiness !== 'READY') return -1;
+         if ((a as any).readiness !== 'READY' && (b as any).readiness === 'READY') return 1;
+         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+   }, [orders, dispatchingIds]);
 
    const activeRuns = useMemo(() =>
       orders.filter(o => o.type === 'DELIVERY' && ['ACTIVE', 'READY'].includes(o.status?.trim().toUpperCase() || '') && !!o.assigned_driver_id),
@@ -487,6 +506,12 @@ export const LogisticsHub: React.FC = () => {
                                  />
                                  <span className="lh-col lh-col--order">
                                     <span className="lh-order-id">#{order.id.slice(-6).toUpperCase()}</span>
+                                    <span className={`mt-1 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest ${
+                                        (order as any).readiness === 'READY' ? 'bg-green-500/20 text-green-500' :
+                                        (order as any).readiness === 'PREPARING' ? 'bg-yellow-500/20 text-yellow-500' :
+                                        (order as any).readiness === 'PENDING' ? 'bg-orange-500/20 text-orange-500' :
+                                        'bg-slate-700 text-slate-400'
+                                    }`}>{(order as any).readiness}</span>
                                  </span>
                                  <span className="lh-col lh-col--customer">
                                     <span className="lh-customer-name">{order.customer_name || '—'}</span>

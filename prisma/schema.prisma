@@ -315,7 +315,7 @@ model ledger_entries {
 model license_keys {
   id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id   String?      @db.Uuid
-  license_key     String       @unique @db.VarChar(100)
+  license_key     String       @unique
   is_active       Boolean?     @default(false)
   activated_at    DateTime?    @db.Timestamp(6)
   expires_at      DateTime?    @db.Timestamp(6)
@@ -566,19 +566,21 @@ model payouts {
 }
 
 model printers {
-  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String      @db.Uuid
-  name          String      @db.VarChar(50)
-  ip_address    String      @db.VarChar(50)
-  port          Int         @default(9100)
-  station_id    String      @db.Uuid
-  is_active     Boolean     @default(true)
-  created_at    DateTime    @default(now()) @db.Timestamp(6)
-  updated_at    DateTime    @default(now()) @db.Timestamp(6)
-  restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  stations      stations    @relation(fields: [station_id], references: [id])
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String      @db.Uuid
+  name            String      @db.VarChar(50)
+  connection_type String      @default("NETWORK") @db.VarChar(20)
+  printer_name    String?     @db.VarChar(100)
+  ip_address      String?     @db.VarChar(50)
+  port            Int         @default(9100)
+  station_id      String      @db.Uuid
+  is_active       Boolean     @default(true)
+  created_at      DateTime    @default(now()) @db.Timestamp(6)
+  updated_at      DateTime    @default(now()) @db.Timestamp(6)
+  restaurants     restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  stations        stations    @relation(fields: [station_id], references: [id])
 
-  @@unique([restaurant_id, ip_address])
+  @@unique([restaurant_id, name])
 }
 
 model purchase_order_items {
@@ -874,16 +876,16 @@ model staff_wallet_logs {
 }
 
 model stations {
-  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  restaurant_id String        @db.Uuid
-  name          String        @db.VarChar(50)
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String               @db.Uuid
+  name               String               @db.VarChar(50)
   is_active          Boolean              @default(true)
   created_at         DateTime             @default(now())
   menu_items         menu_items[]
   order_items        order_items[]
   printers           printers[]
-  restaurants        restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   registered_devices registered_devices[]
+  restaurants        restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
   @@unique([restaurant_id, name])
 }
@@ -1070,6 +1072,7 @@ enum OrderStatus {
   DELIVERED
   SERVED
   BILL_REQUESTED
+  PENDING_APPROVAL
 }
 
 enum OrderType {
@@ -1077,6 +1080,7 @@ enum OrderType {
   TAKEAWAY
   DELIVERY
   RESERVATION
+  QR
 }
 
 enum PaymentStatus {

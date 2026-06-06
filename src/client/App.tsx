@@ -44,6 +44,8 @@ import { fetchWithAuth } from '../shared/lib/authInterceptor';
 // --- 1. CONTEXT DEFINITION ---
 import { AppContext, useAppContext } from './contexts/AppContext';
 import { CashSessionModal } from '../operations/pos/components/CashSessionModal';
+import { QRApprovalQueue } from '../operations/pos/components/QRApprovalQueue';
+import { SubscriptionGuard } from '../auth/guards/SubscriptionGuard';
 export { useAppContext };
 
 // --- 2. PROVIDER (The Logic Layer) ---
@@ -1245,6 +1247,9 @@ const AppContent = () => {
           onSuccess={fetchInitialData}
         />
       )}
+      {['CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') && (
+        <QRApprovalQueue />
+      )}
     </div>
   );
 };
@@ -1255,7 +1260,9 @@ const App = () => (
     <PreferencesProvider>
       <RestaurantProvider>
         <AppProvider>
-          <AppContent />
+          <SubscriptionGuard>
+            <AppContent />
+          </SubscriptionGuard>
         </AppProvider>
       </RestaurantProvider>
     </PreferencesProvider>

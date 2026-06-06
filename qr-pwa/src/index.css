@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', 'Outfit', system-ui, -apple-system, sans-serif;
+  
+  --color-primary: hsl(38 92% 50%); /* Amber 500 */
+  --color-primary-foreground: hsl(0 0% 0%);
+  --color-secondary: hsl(222 47% 15%); /* Slate 800 */
+  --color-secondary-foreground: hsl(214 32% 91%);
+  
+  --color-background: hsl(223 41% 7%); /* #0B0F1A */
+  --color-foreground: hsl(214 32% 91%); /* Slate 300 */
+  
+  --color-card: hsl(222 47% 11%); /* Slate 900 */
+  --color-card-foreground: hsl(214 32% 91%);
+  
+  --color-popover: hsl(222 47% 11%);
+  --color-popover-foreground: hsl(214 32% 91%);
+  
+  --color-muted: hsl(222 47% 15%);
+  --color-muted-foreground: hsl(215 20% 65%);
+  
+  --color-accent: hsl(222 47% 20%);
+  --color-accent-foreground: hsl(38 92% 50%);
+  
+  --color-destructive: hsl(0 84% 60%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  
+  --color-border: hsl(222 47% 15%);
+  --color-input: hsl(222 47% 15%);
+  --color-ring: hsl(38 92% 50%);
+  
+  --radius-lg: 1rem;
+  --radius-md: 0.75rem;
+  --radius-sm: 0.5rem;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  @apply antialiased;
+  touch-action: pan-y pinch-zoom;
+}
+
+/* Custom scrollbar styling */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Animation utilities */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

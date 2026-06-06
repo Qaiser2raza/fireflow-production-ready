@@ -877,7 +877,13 @@ const FinancialCommandCenter: React.FC = () => {
                             </div>
                             <div className="flex gap-4 pt-4">
                                 <button onClick={() => setShowOpenModal(false)} className="flex-1 py-4 bg-slate-800 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-700 transition-all">Cancel</button>
-                                <button onClick={handleOpenSession} className="flex-1 py-4 bg-white text-slate-950 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gold-500 transition-all shadow-xl shadow-white/5">Unlock Drawer</button>
+                                {['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') ? (
+                                    <div className="flex-1 py-4 text-center bg-red-500/10 text-red-400 border border-red-500/20 rounded-2xl font-bold text-xs flex items-center justify-center">
+                                        Cashier sessions are managed by the Cashier role only.
+                                    </div>
+                                ) : (
+                                    <button onClick={handleOpenSession} className="flex-1 py-4 bg-white text-slate-950 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gold-500 transition-all shadow-xl shadow-white/5">Unlock Drawer</button>
+                                )}
                             </div>
                         </div>
                     </div>

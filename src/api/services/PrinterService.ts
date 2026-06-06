@@ -1,8 +1,69 @@
 
 import net from 'net';
 import { prisma } from '../../shared/lib/prisma';
+import { exec } from 'child_process';
+import { writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 export class PrinterService {
+    /**
+     * Prints HTML to a local Windows printer using mshtml
+     */
+    static async printLocal(htmlContent: string, printerName: string): Promise<{ success: boolean; message: string }> {
+        const tempFile = join(tmpdir(), `fireflow-print-${Date.now()}.html`);
+        try {
+            writeFileSync(tempFile, htmlContent, 'utf8');
+            await new Promise<void>((resolve, reject) => {
+                exec(
+                    `rundll32.exe mshtml.dll,PrintHTML "${tempFile}" "${printerName}"`,
+                    { timeout: 10000 },
+                    (err) => (err ? reject(err) : resolve())
+                );
+            });
+            return { success: true, message: `Printed to ${printerName}` };
+        } catch (err: any) {
+            console.error('Local print error:', err);
+            return { success: false, message: err.message };
+        } finally {
+            try { unlinkSync(tempFile); } catch {}
+        }
+    }
+
+    /**
+     * Unified print method
+     */
+    static async printDocument(printerId: string, htmlContent: string): Promise<void> {
+        const printer = await prisma.printers.findUnique({ where: { id: printerId } });
+        if (!printer) throw new Error('Printer not found');
+
+        if (printer.connection_type === 'LOCAL') {
+            if (!printer.printer_name) throw new Error('Local printer name not configured');
+            const result = await this.printLocal(htmlContent, printer.printer_name);
+            if (!result.success) throw new Error(result.message);
+        } else {
+            if (!printer.ip_address) throw new Error('Network printer has no IP address configured');
+            const ip = printer.ip_address;
+            return new Promise((resolve, reject) => {
+                const socket = new net.Socket();
+                socket.connect(printer.port, ip, () => {
+                    const init = '\x1B\x40'; 
+                    const cut = '\x1D\x56\x41\x03'; 
+                    
+                    const textContent = htmlContent
+                        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                        .replace(/<[^>]+>/g, '\n')
+                        .replace(/\n\s*\n/g, '\n');
+
+                    socket.write(init + '\n' + textContent + '\n\n\n' + cut);
+                    socket.end();
+                    resolve();
+                });
+                socket.on('error', (err) => reject(err));
+            });
+        }
+    }
+
     /**
      * Checks if a printer is reachable via TCP
      */
@@ -98,4 +159,5 @@ export class PrinterService {
             }
         });
     }
+
 }

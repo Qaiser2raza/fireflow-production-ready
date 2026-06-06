@@ -62,6 +62,20 @@ export async function authMiddleware(
   next: NextFunction
 ): Promise<void> {
   try {
+    // PUBLIC: QR menu & ordering endpoints — no auth required
+    const originalUrl = req.originalUrl.split('?')[0];
+    const isPublicMenuGet = req.method === 'GET' && (
+      originalUrl.startsWith('/api/menu_items') || 
+      originalUrl.startsWith('/api/menu_categories') ||
+      originalUrl.startsWith('/api/orders/qr-status')
+    );
+    const isPublicOrderPost = req.method === 'POST' && originalUrl.startsWith('/api/orders/qr');
+    
+    if (isPublicMenuGet || isPublicOrderPost) {
+      next();
+      return;
+    }
+
     // 1. Extract token from Authorization header OR query param (for downloads)
     const authHeader = req.headers.authorization;
     let token = extractTokenFromHeaderLocal(authHeader);

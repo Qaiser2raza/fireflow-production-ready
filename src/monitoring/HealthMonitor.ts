@@ -5,6 +5,7 @@
 
 import { PrismaClient } from '@prisma/client';
 import { logger, LogLevel } from '../shared/lib/logger';
+import os from 'os';
 
 export interface HealthStatus {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -121,28 +122,37 @@ class HealthMonitor {
 
   private checkMemory(): HealthCheck {
     const usage = process.memoryUsage();
-    const heapUsedPercent = (usage.heapUsed / usage.heapTotal) * 100;
 
-    if (heapUsedPercent > 90) {
+    // System RAM is more meaningful than V8 heap ratio
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const systemMemoryPercent = ((totalMem - freeMem) / totalMem) * 100;
+
+    const rssMB = Math.round(usage.rss / 1024 / 1024);
+    const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
+    const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
+    const displayPct = systemMemoryPercent.toFixed(1);
+
+    if (systemMemoryPercent > 95) {
       return {
         status: 'critical',
-        message: `Memory critical - ${heapUsedPercent.toFixed(1)}% used`,
-        value: `${heapUsedPercent.toFixed(1)}%`
+        message: `Memory critical — System RAM: ${displayPct}% used (RSS: ${rssMB}MB, Heap: ${heapUsedMB}/${heapTotalMB}MB)`,
+        value: `${displayPct}%`
       };
     }
 
-    if (heapUsedPercent > 75) {
+    if (systemMemoryPercent > 85) {
       return {
         status: 'warning',
-        message: `Memory warning - ${heapUsedPercent.toFixed(1)}% used`,
-        value: `${heapUsedPercent.toFixed(1)}%`
+        message: `Memory warning — System RAM: ${displayPct}% used (RSS: ${rssMB}MB, Heap: ${heapUsedMB}/${heapTotalMB}MB)`,
+        value: `${displayPct}%`
       };
     }
 
     return {
       status: 'ok',
-      message: `Memory healthy - ${heapUsedPercent.toFixed(1)}% used`,
-      value: `${heapUsedPercent.toFixed(1)}%`
+      message: `Memory healthy — System RAM: ${displayPct}% used (RSS: ${rssMB}MB, Heap: ${heapUsedMB}/${heapTotalMB}MB)`,
+      value: `${displayPct}%`
     };
   }
 

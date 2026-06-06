@@ -1,4 +1,5 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
+import { fetchWithAuth } from '../lib/authInterceptor';
 import {
     X, Printer, TrendingUp, Wallet, Package, CreditCard,
     Clock, ShieldAlert, ArrowUpRight, ArrowDownLeft,
@@ -36,6 +37,24 @@ const SectionHeader: React.FC<{ icon: React.ReactNode; title: string; subtitle?:
 export const ZReportModal: React.FC<ZReportModalProps> = ({ isOpen, onClose, report }) => {
     const printRef = useRef<HTMLDivElement>(null);
     const [activeTab, setActiveTab] = useState<'overview' | 'breakdown' | 'security' | 'velocity'>('overview');
+    const [printers, setPrinters] = useState<any[]>([]);
+    const [selectedPrinterId, setSelectedPrinterId] = useState<string>('');
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchWithAuth('/api/printers')
+                .then(res => res.json())
+                .then(data => {
+                    const active = data.filter((p: any) => p.is_active);
+                    setPrinters(active);
+                    if (active.length > 0) {
+                        const localPrinter = active.find((p: any) => p.connection_type === 'LOCAL');
+                        setSelectedPrinterId(localPrinter ? localPrinter.id : active[0].id);
+                    }
+                })
+                .catch(console.error);
+        }
+    }, [isOpen]);
 
     if (!isOpen || !report) return null;
 
@@ -54,17 +73,16 @@ export const ZReportModal: React.FC<ZReportModalProps> = ({ isOpen, onClose, rep
 
     const peakHour = Object.entries(hourlyVelocity).sort(([, a]: any, [, b]: any) => Number(b.count) - Number(a.count))[0];
 
-    const handlePrint = () => {
+    const handlePrint = async () => {
         const content = printRef.current?.innerHTML;
         if (!content) return;
-        const w = window.open('', '_blank', 'width=480,height=900');
-        if (!w) return;
-        w.document.write(`<!DOCTYPE html><html><head>
+        
+        const fullHtml = `<!DOCTYPE html><html><head>
             <title>Z-Report — ${meta.id?.slice(-8).toUpperCase()}</title>
             <style>
                 * { margin:0; padding:0; box-sizing:border-box; }
-                body { font-family:'Courier New',monospace; font-size:11px; color:#000; background:#fff; padding:16px; }
-                .z-print { max-width: 380px; margin: 0 auto; }
+                body { font-family:'Courier New',monospace; font-size:11px; color:#000; background:#fff; padding:16px; width: 80mm; }
+                .z-print { width: 100%; margin: 0 auto; }
                 h1 { font-size:16px; font-weight:900; text-transform:uppercase; text-align:center; letter-spacing:-0.5px; margin-bottom:4px; }
                 .center { text-align:center; }
                 .row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px dashed #ccc; }
@@ -76,9 +94,20 @@ export const ZReportModal: React.FC<ZReportModalProps> = ({ isOpen, onClose, rep
                 .alert { border:2px solid #000; padding:6px; text-align:center; font-weight:900; text-transform:uppercase; font-size:10px; margin:8px 0; }
                 .divider { border-top:1px dashed #000; margin:8px 0; }
             </style>
-        </head><body><div class="z-print">${content}</div></body></html>`);
-        w.document.close();
-        w.print();
+        </head><body><div class="z-print">${content}</div></body></html>`;
+
+        try {
+            const token = localStorage.getItem('fireflow_token');
+            const res = await fetch('/api/print', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ printerId: selectedPrinterId, type: 'Z_REPORT', html: fullHtml })
+            });
+            if (res.ok) alert('Sent to printer ✓');
+            else alert('Print failed');
+        } catch (e: any) {
+            alert('Print error: ' + e.message);
+        }
     };
 
     return (
@@ -101,7 +130,8 @@ export const ZReportModal: React.FC<ZReportModalProps> = ({ isOpen, onClose, rep
                     <div className="flex items-center gap-3">
                         <button
                             onClick={handlePrint}
-                            className="px-4 py-2 bg-slate-800 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center gap-2"
+                            disabled={!selectedPrinterId}
+                            className="px-4 py-2 bg-slate-800 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center gap-2 disabled:opacity-50"
                         >
                             <Printer size={14} strokeWidth={3} /> Print
                         </button>
@@ -474,11 +504,22 @@ export const ZReportModal: React.FC<ZReportModalProps> = ({ isOpen, onClose, rep
                     <p className="text-[9px] text-slate-600 font-mono">
                         Generated: {new Date().toLocaleString()} &bull; Session: {meta.id?.slice(-8).toUpperCase()}
                     </p>
-                    <div className="flex gap-3">
+                    <div className="flex gap-3 items-center">
+                        {printers.length > 0 && (
+                            <select
+                                value={selectedPrinterId}
+                                onChange={(e) => setSelectedPrinterId(e.target.value)}
+                                className="bg-slate-800 border border-slate-700 text-white text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500"
+                            >
+                                {printers.map(p => (
+                                    <option key={p.id} value={p.id}>{p.name} {p.connection_type === 'LOCAL' ? '(Local)' : ''}</option>
+                                ))}
+                            </select>
+                        )}
                         <button onClick={onClose} className="px-6 py-2.5 bg-slate-800 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-700 transition-all">
                             Dismiss
                         </button>
-                        <button onClick={handlePrint} className="px-6 py-2.5 bg-white text-slate-950 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all flex items-center gap-2">
+                        <button onClick={handlePrint} disabled={!selectedPrinterId} className="px-6 py-2.5 bg-white text-slate-950 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all flex items-center gap-2 disabled:opacity-50">
                             <Printer size={14} strokeWidth={3} /> Print Physical Copy
                         </button>
                     </div>

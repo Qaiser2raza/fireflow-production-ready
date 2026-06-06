@@ -19,6 +19,11 @@ router.get('/current', async (req, res) => {
 
 // Open a new session
 router.post('/open', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    if ((req as any).role === 'MANAGER' || (req as any).role === 'ADMIN' || (req as any).role === 'SUPER_ADMIN') {
+      return res.status(403).json({ 
+        error: 'Managers cannot open cashier sessions. This action is restricted to CASHIER role only.' 
+      });
+    }
     try {
         const { restaurantId, staffId, openingFloat, expectedFloat, terminalId } = req.body;
         if (!restaurantId || !staffId) return res.status(400).json({ success: false, error: 'Missing params' });

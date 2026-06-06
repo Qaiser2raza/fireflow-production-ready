@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Zap, Building2, Phone, MapPin, Key, CheckCircle2, Loader2, AlertCircle, ChevronRight, Shield, Wifi } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Zap, Building2, Phone, MapPin, Key, CheckCircle2, Loader2, AlertCircle, ChevronRight, Shield, Wifi, Copy, Lock, Server, Globe } from 'lucide-react';
 
 type Step = 'key' | 'details' | 'activating' | 'manager-setup' | 'done';
+type ActivationMode = 'online' | 'offline';
 
 interface ActivationState {
     licenseKey: string;
@@ -20,8 +21,13 @@ interface ActivationViewProps {
     onActivationComplete: () => void;
 }
 
+const API_BASE = typeof window !== 'undefined'
+    ? (window.location.origin + '/api')
+    : 'http://localhost:3001/api';
+
 export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComplete }) => {
     const [step, setStep] = useState<Step>('key');
+    const [mode, setMode] = useState<ActivationMode>('online');
     const [state, setState] = useState<ActivationState>({
         licenseKey: '',
         restaurantName: '',
@@ -33,6 +39,64 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
     });
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+
+    // Offline mode state
+    const [hardwareFingerprint, setHardwareFingerprint] = useState<string | null>(null);
+    const [offlineLicenseToken, setOfflineLicenseToken] = useState('');
+    const [offlineActivating, setOfflineActivating] = useState(false);
+    const [offlineError, setOfflineError] = useState<string | null>(null);
+    const [offlineSuccess, setOfflineSuccess] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // Fetch hardware fingerprint from local server when offline tab is selected
+    useEffect(() => {
+        if (mode === 'offline' && !hardwareFingerprint) {
+            fetch(`${API_BASE}/licensing/fingerprint`)
+                .then(r => r.json())
+                .then(data => setHardwareFingerprint(data.fingerprint || 'Could not retrieve'))
+                .catch(() => setHardwareFingerprint('Server not reachable'));
+        }
+    }, [mode]);
+
+    const copyFingerprint = () => {
+        if (hardwareFingerprint) {
+            navigator.clipboard.writeText(hardwareFingerprint);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }
+    };
+
+    const handleOfflineActivate = async () => {
+        if (!offlineLicenseToken.trim()) {
+            setOfflineError('Please paste the license token from your SaaS provider');
+            return;
+        }
+        setOfflineActivating(true);
+        setOfflineError(null);
+        try {
+            const res = await fetch(`${API_BASE}/licensing/activate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ licenseToken: offlineLicenseToken.trim() })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                setOfflineError(data.error || 'Activation failed');
+                return;
+            }
+            setOfflineSuccess(true);
+            // Reload the app after a brief success message
+            setTimeout(() => {
+                localStorage.clear();
+                sessionStorage.clear();
+                window.location.reload();
+            }, 2500);
+        } catch (e: any) {
+            setOfflineError('Could not reach local POS server. Make sure the server is running.');
+        } finally {
+            setOfflineActivating(false);
+        }
+    };
 
     const updateState = (key: keyof ActivationState, value: string) => {
         setState(prev => ({ ...prev, [key]: value }));
@@ -151,7 +215,7 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
 
             <div className="w-full max-w-lg relative z-10">
                 {/* Logo */}
-                <div className="flex items-center gap-3 mb-10 justify-center">
+                <div className="flex items-center gap-3 mb-8 justify-center">
                     <div className="w-12 h-12 bg-gold-500/10 border border-gold-500/30 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(234,179,8,0.15)]">
                         <Zap className="text-gold-500" size={26} />
                     </div>
@@ -161,6 +225,118 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
                     </div>
                 </div>
 
+                {/* Mode Switcher Tabs */}
+                <div className="flex gap-2 mb-6 bg-slate-900/60 border border-slate-800 rounded-2xl p-1">
+                    <button
+                        onClick={() => { setMode('online'); setError(null); }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                            mode === 'online'
+                                ? 'bg-gold-500 text-slate-950 shadow-[0_0_20px_rgba(234,179,8,0.25)]'
+                                : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        <Globe size={14} />
+                        Online Activation
+                    </button>
+                    <button
+                        onClick={() => { setMode('offline'); setOfflineError(null); }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                            mode === 'offline'
+                                ? 'bg-slate-700 text-white shadow-inner'
+                                : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        <Lock size={14} />
+                        Offline License
+                    </button>
+                </div>
+
+                {/* ─── OFFLINE MODE ─── */}
+                {mode === 'offline' && !offlineSuccess && (
+                    <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-8 backdrop-blur-sm animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+                        <div>
+                            <h2 className="text-white font-serif font-bold text-2xl">Offline License Activation</h2>
+                            <p className="text-slate-500 text-sm mt-1">Send your Hardware ID to your FireFlow provider. They will generate a signed license block you paste below.</p>
+                        </div>
+
+                        {/* Hardware Fingerprint Display */}
+                        <div className="space-y-2">
+                            <label className="text-slate-400 text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                                <Server size={12} /> Your Hardware ID
+                            </label>
+                            <div className="bg-slate-950/80 border border-slate-700 rounded-2xl p-4 flex items-center gap-3">
+                                <code className="text-gold-400 font-mono text-xs flex-1 break-all leading-relaxed">
+                                    {hardwareFingerprint ?? (
+                                        <span className="text-slate-600 animate-pulse">Retrieving hardware fingerprint...</span>
+                                    )}
+                                </code>
+                                <button
+                                    onClick={copyFingerprint}
+                                    className={`shrink-0 p-2 rounded-xl transition-all ${
+                                        copied ? 'bg-green-500/20 text-green-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
+                                    }`}
+                                    title="Copy fingerprint"
+                                >
+                                    {copied ? <CheckCircle2 size={16} /> : <Copy size={16} />}
+                                </button>
+                            </div>
+                            <p className="text-slate-600 text-[10px]">Copy this ID and send it to your FireFlow SaaS provider via WhatsApp or email.</p>
+                        </div>
+
+                        {/* License Token Paste Area */}
+                        <div className="space-y-2">
+                            <label className="text-slate-400 text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                                <Key size={12} /> Paste License Token
+                            </label>
+                            <textarea
+                                rows={5}
+                                placeholder="Paste your signed license token here...
+(eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...)"
+                                value={offlineLicenseToken}
+                                onChange={e => { setOfflineLicenseToken(e.target.value); setOfflineError(null); }}
+                                className="w-full bg-slate-950/80 border border-slate-700 rounded-2xl p-4 text-gold-400 font-mono text-xs outline-none focus:border-gold-500/60 transition-all placeholder:text-slate-700 resize-none leading-relaxed"
+                            />
+                        </div>
+
+                        {offlineError && (
+                            <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+                                <AlertCircle size={16} />
+                                {offlineError}
+                            </div>
+                        )}
+
+                        <button
+                            onClick={handleOfflineActivate}
+                            disabled={offlineActivating || !offlineLicenseToken.trim()}
+                            className="w-full h-14 bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-black uppercase tracking-widest text-sm rounded-2xl flex items-center justify-center gap-2 transition-all shadow-[0_0_30px_rgba(234,179,8,0.2)]"
+                        >
+                            {offlineActivating ? (
+                                <><Loader2 size={18} className="animate-spin" /> Verifying Signature...</>
+                            ) : (
+                                <><Lock size={18} /> Activate Offline License</>
+                            )}
+                        </button>
+                    </div>
+                )}
+
+                {/* Offline Success */}
+                {mode === 'offline' && offlineSuccess && (
+                    <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-12 backdrop-blur-sm animate-in fade-in zoom-in-95 duration-500 text-center">
+                        <div className="w-24 h-24 bg-green-500/10 border border-green-500/30 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-[0_0_50px_rgba(34,197,94,0.15)]">
+                            <CheckCircle2 className="text-green-500" size={44} />
+                        </div>
+                        <h2 className="text-white font-serif font-bold text-3xl mb-2">License Activated!</h2>
+                        <p className="text-slate-400 text-sm mb-1">Your cryptographic license has been verified and saved.</p>
+                        <p className="text-slate-600 text-xs">Reloading FireFlow in a moment...</p>
+                        <div className="mt-6 flex justify-center">
+                            <Loader2 className="text-gold-500 animate-spin" size={24} />
+                        </div>
+                    </div>
+                )}
+
+                {/* ─── ONLINE MODE ─── */}
+                {mode === 'online' && (
+                <>
                 {/* Progress Dots */}
                 <div className="flex items-center justify-center gap-2 mb-8">
                     {(['key', 'details', 'activating', 'manager-setup', 'done'] as Step[]).map((s, i) => (
@@ -412,6 +588,8 @@ export const ActivationView: React.FC<ActivationViewProps> = ({ onActivationComp
                         </button>
                     </div>
                 )}
+                </>
+                )}{/* end online mode */}
             </div>
         </div>
     );

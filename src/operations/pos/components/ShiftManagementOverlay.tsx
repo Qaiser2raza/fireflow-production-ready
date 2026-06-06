@@ -136,14 +136,20 @@ export const ShiftManagementOverlay: React.FC<Props> = ({ currentUser, onSession
               </div>
             </div>
 
-            <button
-              onClick={handleOpen}
-              disabled={isProcessing}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl py-4 font-bold text-lg shadow-lg shadow-indigo-900/20 transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
-            >
-              {isProcessing ? <Loader2 className="animate-spin" /> : <LogIn size={20} />}
-              START SHIFT
-            </button>
+            {['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') ? (
+              <div className="w-full py-4 rounded-xl font-bold text-sm text-center bg-red-500/10 text-red-400 border border-red-500/20">
+                Cashier sessions are managed by the Cashier role only.
+              </div>
+            ) : (
+              <button
+                onClick={handleOpen}
+                disabled={isProcessing}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl py-4 font-bold text-lg shadow-lg shadow-indigo-900/20 transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
+              >
+                {isProcessing ? <Loader2 className="animate-spin" /> : <LogIn size={20} />}
+                START SHIFT
+              </button>
+            )}
           </div>
         </div>
       </div>

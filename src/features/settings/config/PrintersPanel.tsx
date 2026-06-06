@@ -18,6 +18,8 @@ export const PrintersPanel: React.FC = () => {
         ip_address: '',
         port: 9100,
         station_id: '',
+        connection_type: 'NETWORK',
+        printer_name: '',
         is_active: true
     });
 
@@ -129,12 +131,12 @@ export const PrintersPanel: React.FC = () => {
             <div className="flex justify-between items-center">
                 <div>
                     <h2 className="text-xl font-black text-white uppercase tracking-tighter">Hardware Configuration</h2>
-                    <p className="text-slate-500 text-xs">Manage IP Printers for Receipts and KDS Networks</p>
+                    <p className="text-slate-500 text-xs">Manage Printers for Receipts and KDS Networks</p>
                 </div>
                 <button
                     onClick={() => {
                         setEditingId(null);
-                        setFormData({ name: '', ip_address: '', port: 9100, station_id: stations[0]?.id || '', is_active: true });
+                        setFormData({ name: '', ip_address: '', port: 9100, station_id: stations[0]?.id || '', connection_type: 'NETWORK', printer_name: '', is_active: true });
                         setShowModal(true);
                     }}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-widest transition-colors flex items-center gap-2 shadow-lg shadow-indigo-900/20"
@@ -166,7 +168,7 @@ export const PrintersPanel: React.FC = () => {
                                 <div className="flex gap-2">
                                     <button onClick={() => {
                                         setEditingId(p.id);
-                                        setFormData({ name: p.name, ip_address: p.ip_address, port: p.port, station_id: p.station_id, is_active: p.is_active });
+                                        setFormData({ name: p.name, ip_address: p.ip_address || '', port: p.port || 9100, station_id: p.station_id, connection_type: p.connection_type || 'NETWORK', printer_name: p.printer_name || '', is_active: p.is_active });
                                         setShowModal(true);
                                     }} className="text-slate-500 hover:text-indigo-400"><Edit2 size={16} /></button>
                                     <button onClick={() => handleDelete(p.id)} className="text-slate-500 hover:text-red-400"><Trash2 size={16} /></button>
@@ -175,8 +177,10 @@ export const PrintersPanel: React.FC = () => {
 
                             <div className="space-y-2 mt-4">
                                 <div className="flex justify-between text-xs">
-                                    <span className="text-slate-500 uppercase font-bold tracking-widest text-[9px]">IP Endpoint</span>
-                                    <span className="text-emerald-400 font-mono">{p.ip_address}:{p.port}</span>
+                                    <span className="text-slate-500 uppercase font-bold tracking-widest text-[9px]">Endpoint</span>
+                                    <span className="text-emerald-400 font-mono">
+                                        {p.connection_type === 'LOCAL' ? p.printer_name : `${p.ip_address}:${p.port}`}
+                                    </span>
                                 </div>
                                 <div className="flex justify-between text-xs">
                                     <span className="text-slate-500 uppercase font-bold tracking-widest text-[9px]">Status</span>
@@ -226,30 +230,57 @@ export const PrintersPanel: React.FC = () => {
                                 />
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">Connection Type</label>
+                                <div className="flex gap-4">
+                                    <label className="flex items-center gap-2 text-white">
+                                        <input type="radio" value="NETWORK" checked={formData.connection_type === 'NETWORK'} onChange={(e) => setFormData({ ...formData, connection_type: e.target.value })} className="accent-indigo-500" /> Network Printer
+                                    </label>
+                                    <label className="flex items-center gap-2 text-white">
+                                        <input type="radio" value="LOCAL" checked={formData.connection_type === 'LOCAL'} onChange={(e) => setFormData({ ...formData, connection_type: e.target.value })} className="accent-indigo-500" /> Local USB Printer
+                                    </label>
+                                </div>
+                            </div>
+
+                            {formData.connection_type === 'NETWORK' ? (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">IP Address</label>
+                                        <input
+                                            required
+                                            type="text"
+                                            pattern="^([0-9]{1,3}\.){3}[0-9]{1,3}$"
+                                            value={formData.ip_address}
+                                            onChange={e => setFormData({ ...formData, ip_address: e.target.value })}
+                                            className="w-full bg-slate-800 text-white rounded-xl px-4 py-3 border border-slate-700 outline-none focus:border-indigo-500 font-mono"
+                                            placeholder="192.168.1.100"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">TCP Port</label>
+                                        <input
+                                            required
+                                            type="number"
+                                            value={formData.port}
+                                            onChange={e => setFormData({ ...formData, port: parseInt(e.target.value) })}
+                                            className="w-full bg-slate-800 text-white rounded-xl px-4 py-3 border border-slate-700 outline-none focus:border-indigo-500 font-mono"
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
                                 <div>
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">IP Address</label>
+                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">Windows Printer Name</label>
                                     <input
                                         required
                                         type="text"
-                                        pattern="^([0-9]{1,3}\.){3}[0-9]{1,3}$"
-                                        value={formData.ip_address}
-                                        onChange={e => setFormData({ ...formData, ip_address: e.target.value })}
-                                        className="w-full bg-slate-800 text-white rounded-xl px-4 py-3 border border-slate-700 outline-none focus:border-indigo-500 font-mono"
-                                        placeholder="192.168.1.100"
+                                        value={formData.printer_name}
+                                        onChange={e => setFormData({ ...formData, printer_name: e.target.value })}
+                                        className="w-full bg-slate-800 text-white rounded-xl px-4 py-3 border border-slate-700 outline-none focus:border-indigo-500"
+                                        placeholder="EPSON TM-T82"
                                     />
+                                    <p className="text-[10px] text-slate-500 mt-1">Enter the name exactly as shown in Windows Settings → Bluetooth & devices → Printers</p>
                                 </div>
-                                <div>
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">TCP Port</label>
-                                    <input
-                                        required
-                                        type="number"
-                                        value={formData.port}
-                                        onChange={e => setFormData({ ...formData, port: parseInt(e.target.value) })}
-                                        className="w-full bg-slate-800 text-white rounded-xl px-4 py-3 border border-slate-700 outline-none focus:border-indigo-500 font-mono"
-                                    />
-                                </div>
-                            </div>
+                            )}
 
                             <div>
                                 <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">Print Station Zone</label>
