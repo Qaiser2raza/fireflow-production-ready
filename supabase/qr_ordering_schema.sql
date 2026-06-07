@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS qr_orders_queue (
 CREATE INDEX IF NOT EXISTS idx_qr_orders_restaurant_status
     ON qr_orders_queue(restaurant_id, status, submitted_at DESC);
 
+-- Enable Realtime for the table so the local POS can receive notifications
+ALTER PUBLICATION supabase_realtime ADD TABLE qr_orders_queue;
+
 -- Row Level Security: only the service_role key (used by local POS server) can read/update
 ALTER TABLE qr_orders_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE qr_table_secrets ENABLE ROW LEVEL SECURITY;

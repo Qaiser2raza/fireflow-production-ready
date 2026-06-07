@@ -63,8 +63,9 @@ export const CartPage: React.FC<Props> = ({ cart, setCart }) => {
     try {
       const orderPayload = {
         restaurant_id: restaurantId,
-        table_number: 0, // Backend will resolve via table_id if needed, or we just trust the bridge
-        table_label: tableId ? `Table ID: ${tableId}` : 'Unknown Table',
+        table_number: 0,
+        // Store the raw UUID so the bridge can resolve the table directly
+        table_label: tableId || null,
         items: cartItems.map(item => ({
           menu_item_id: item.id,
           name: item.name,

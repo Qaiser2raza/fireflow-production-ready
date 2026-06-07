@@ -151,13 +151,36 @@ class QROrderBridge extends EventEmitter {
         // Use the cloud order ID if provided, otherwise generate local
         const localOrderId = orderData.id || crypto.randomUUID();
 
-        // Ensure table ID is resolved
+        // Ensure table ID is resolved — try multiple strategies:
         let resolvedTableId = orderData.table_id;
-        if (!resolvedTableId && orderData.table_number) {
+
+        // Strategy 1: table_label is a raw UUID (new PWA format)
+        if (!resolvedTableId && orderData.table_label) {
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (uuidRegex.test(orderData.table_label.trim())) {
+                resolvedTableId = orderData.table_label.trim();
+                console.log(`[QR BRIDGE] Resolved table_id from label UUID: ${resolvedTableId}`);
+            }
+        }
+
+        // Strategy 2: legacy "Table ID: <uuid>" format
+        if (!resolvedTableId && orderData.table_label) {
+            const match = orderData.table_label.match(/Table ID:\s*([0-9a-f-]{36})/i);
+            if (match) {
+                resolvedTableId = match[1];
+                console.log(`[QR BRIDGE] Resolved table_id from legacy label: ${resolvedTableId}`);
+            }
+        }
+
+        // Strategy 3: look up by numeric table_number name
+        if (!resolvedTableId && orderData.table_number && orderData.table_number > 0) {
             const table = await prisma.tables.findFirst({
                 where: { restaurant_id: this.restaurantId, name: String(orderData.table_number) }
             });
-            if (table) resolvedTableId = table.id;
+            if (table) {
+                resolvedTableId = table.id;
+                console.log(`[QR BRIDGE] Resolved table_id from table_number ${orderData.table_number}: ${resolvedTableId}`);
+            }
         }
 
         // Map items

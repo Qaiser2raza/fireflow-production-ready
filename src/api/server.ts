@@ -2951,12 +2951,18 @@ server.listen(PORT, '0.0.0.0', async () => {
             
             // Listen for incoming cloud orders
             qrOrderBridge.on('new_order', (localOrder) => {
+                // Also register the order into AppContext state so UPDATE can merge on top of it
+                io.to(`restaurant:${localOrder.restaurant_id}`).emit('db_change', {
+                    table: 'orders',
+                    eventType: 'INSERT',
+                    data: localOrder
+                });
                 io.to(`restaurant:${localOrder.restaurant_id}`).emit('qr_new_order', {
                     id: localOrder.id,
                     restaurant_id: localOrder.restaurant_id,
                     table_number: localOrder.tables?.name ? Number(localOrder.tables.name) : undefined,
                     table_label: localOrder.tables?.name || null,
-                    items: localOrder.items,
+                    items: localOrder.order_items || localOrder.items,
                     subtotal: localOrder.total,
                     notes: localOrder.special_instructions || null,
                     customer_name: localOrder.customer_name,
@@ -3041,13 +3047,20 @@ app.post('/api/orders/qr', async (req, res) => {
 
         const localOrder = await qrOrderBridge.createLocalQROrder(orderData);
 
-        // Notify POS in real-time
+        // Register the order into AppContext state so the later approval UPDATE can merge correctly
+        io.to(`restaurant:${orderData.restaurant_id}`).emit('db_change', {
+            table: 'orders',
+            eventType: 'INSERT',
+            data: localOrder
+        });
+
+        // Also notify the QR approval queue panel specifically
         io.to(`restaurant:${orderData.restaurant_id}`).emit('qr_new_order', {
             id: localOrder.id,
             restaurant_id: localOrder.restaurant_id,
             table_number: localOrder.tables?.name ? Number(localOrder.tables.name) : undefined,
             table_label: localOrder.tables?.name || null,
-            items: localOrder.items,
+            items: localOrder.order_items || localOrder.items,
             subtotal: localOrder.total,
             notes: localOrder.special_instructions || null,
             customer_name: localOrder.customer_name,
@@ -3104,7 +3117,9 @@ app.get('/api/orders/qr-pending', authMiddleware, async (req, res) => {
 /**
  * POST /api/orders/qr-approve
  * Cashier approves a pending QR order.
- * Updates the DB status to ACTIVE and associates with a table.
+ * - If the table already has an active order, the items are MERGED into it.
+ * - If not, the QR order is promoted to an ACTIVE DINE_IN order.
+ * - Items are immediately set to PREPARING so they appear on the KDS.
  * Body: { qr_order_id: string, table_id?: string }
  */
 app.post('/api/orders/qr-approve', authMiddleware, async (req, res) => {
@@ -3119,62 +3134,182 @@ app.post('/api/orders/qr-approve', authMiddleware, async (req, res) => {
 
         const pending = await prisma.orders.findUnique({
             where: { id: qr_order_id },
-            include: { tables: true }
+            include: { order_items: true, tables: true }
         });
 
         if (!pending || pending.status !== 'PENDING_APPROVAL' || pending.type !== 'QR') {
             return res.status(404).json({ error: 'QR order not found or already processed.' });
         }
 
-        // 1. Resolve table
-        let resolvedTableId = table_id || pending.table_id;
+        // 1. Resolve table_id using multiple strategies
+        let resolvedTableId: string | null = table_id || pending.table_id;
 
-        // 2. Update order to ACTIVE DINE_IN
-        const order = await prisma.orders.update({
-            where: { id: qr_order_id },
-            data: {
-                status: 'ACTIVE',
-                type: 'DINE_IN',
-                table_id: resolvedTableId,
-                assigned_waiter_id: staffId,
-                updated_at: new Date()
-            },
-            include: {
-                order_items: true,
-                tables: true
-            }
-        });
+        // Fallback: if still null, look up the original cloud order by ID and parse table_label
+        if (!resolvedTableId) {
+            try {
+                const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+                const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+                if (supabaseUrl && supabaseKey) {
+                    const { createClient } = await import('@supabase/supabase-js');
+                    const sb = createClient(supabaseUrl, supabaseKey);
+                    const { data: cloudOrder } = await sb
+                        .from('qr_orders_queue')
+                        .select('table_label')
+                        .eq('id', qr_order_id)
+                        .single();
 
-        // Optional: Create dine_in_orders record if it didn't exist
-        let tableUpdate: any = null;
-        if (resolvedTableId) {
-            const existingDineIn = await prisma.dine_in_orders.findUnique({ where: { order_id: order.id }});
-            if (!existingDineIn) {
-                await prisma.dine_in_orders.create({
-                    data: {
-                        order_id: order.id,
-                        table_id: resolvedTableId,
-                        guest_count: 1,
-                        seated_at: new Date()
+                    if (cloudOrder?.table_label) {
+                        // Strategy A: raw UUID
+                        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+                        if (uuidRegex.test(cloudOrder.table_label.trim())) {
+                            resolvedTableId = cloudOrder.table_label.trim();
+                        }
+                        // Strategy B: legacy "Table ID: <uuid>"
+                        if (!resolvedTableId) {
+                            const match = cloudOrder.table_label.match(/Table ID:\s*([0-9a-f-]{36})/i);
+                            if (match) resolvedTableId = match[1];
+                        }
+                        if (resolvedTableId) {
+                            console.log(`[QR APPROVE] Resolved table_id from cloud label: ${resolvedTableId}`);
+                        }
                     }
+                }
+            } catch (lookupErr: any) {
+                console.warn('[QR APPROVE] Cloud table_label lookup failed:', lookupErr.message);
+            }
+        }
+
+        // 2. Check if the table already has an active order (merge scenario)
+        let existingActiveOrderId: string | null = null;
+        if (resolvedTableId) {
+            const tableRow = await prisma.tables.findUnique({ where: { id: resolvedTableId } });
+            if (tableRow?.active_order_id) {
+                const activeOrder = await prisma.orders.findUnique({ where: { id: tableRow.active_order_id } });
+                if (activeOrder && activeOrder.status === 'ACTIVE') {
+                    existingActiveOrderId = activeOrder.id;
+                }
+            }
+        }
+
+        let finalOrderId: string;
+        let broadcastOrder: any;
+        let tableUpdate: any = null;
+
+        if (existingActiveOrderId) {
+            // ── MERGE: append items into the existing active ticket ─────────
+            console.log(`[QR APPROVE] 🔀 Merging QR order ${qr_order_id} into existing ticket ${existingActiveOrderId}`);
+
+            const newItems = await Promise.all(
+                pending.order_items.map(item =>
+                    prisma.order_items.create({
+                        data: {
+                            order_id: existingActiveOrderId!,
+                            menu_item_id: item.menu_item_id,
+                            quantity: item.quantity,
+                            unit_price: item.unit_price,
+                            total_price: item.total_price,
+                            item_name: item.item_name,
+                            item_status: 'PREPARING',   // ← straight to KDS
+                            special_instructions: item.special_instructions || ''
+                        }
+                    })
+                )
+            );
+
+            const existingOrder = await prisma.orders.findUnique({ where: { id: existingActiveOrderId } });
+            const mergedTotal = Number(existingOrder?.total || 0) + Number(pending.total);
+
+            broadcastOrder = await prisma.orders.update({
+                where: { id: existingActiveOrderId },
+                data: { total: mergedTotal, updated_at: new Date() },
+                include: { order_items: true, tables: true }
+            });
+
+            // Remove the temporary pending QR order
+            await prisma.order_items.deleteMany({ where: { order_id: qr_order_id } });
+            await prisma.orders.delete({ where: { id: qr_order_id } });
+
+            finalOrderId = existingActiveOrderId;
+
+            // Push each new item to KDS immediately
+            for (const item of newItems) {
+                io.to(`restaurant:${restaurantId}`).emit('db_change', {
+                    table: 'order_items',
+                    eventType: 'INSERT',
+                    data: item
                 });
             }
 
-            // Mark table as occupied and associate active order id
-            tableUpdate = await prisma.tables.update({
-                where: { id: resolvedTableId },
-                data: {
-                    status: 'OCCUPIED',
-                    active_order_id: order.id
-                }
+        } else {
+            // ── NEW TICKET: promote the QR order to ACTIVE ─────────────────
+
+            // Flip all items to PREPARING so they appear on KDS
+            await prisma.order_items.updateMany({
+                where: { order_id: qr_order_id },
+                data: { item_status: 'PREPARING' }
             });
+
+            // Generate order_number matching the normal dine-in format
+            const ts = new Date();
+            const qrOrderNumber = `ORD-${ts.getHours()}${ts.getMinutes()}${ts.getSeconds()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+
+            broadcastOrder = await prisma.orders.update({
+                where: { id: qr_order_id },
+                data: {
+                    status: 'ACTIVE',
+                    type: 'DINE_IN',
+                    table_id: resolvedTableId,
+                    assigned_waiter_id: staffId,
+                    order_number: qrOrderNumber,
+                    payment_status: 'UNPAID',
+                    last_action_by: staffId,
+                    last_action_desc: 'QR self-order approved by cashier',
+                    updated_at: new Date()
+                } as any,
+                include: { order_items: true, tables: true, dine_in_orders: true }
+            });
+
+            finalOrderId = qr_order_id;
+
+            // Create dine_in_orders record if needed
+            if (resolvedTableId) {
+                const existingDineIn = await prisma.dine_in_orders.findUnique({ where: { order_id: finalOrderId } });
+                if (!existingDineIn) {
+                    await prisma.dine_in_orders.create({
+                        data: {
+                            order_id: finalOrderId,
+                            table_id: resolvedTableId,
+                            guest_count: pending.customer_name ? 1 : 1,
+                            waiter_id: staffId,
+                            seated_at: new Date()
+                        }
+                    });
+                }
+            }
+
+            // Mark table OCCUPIED with this order
+            if (resolvedTableId) {
+                tableUpdate = await prisma.tables.update({
+                    where: { id: resolvedTableId },
+                    data: { status: 'OCCUPIED', active_order_id: finalOrderId }
+                });
+            }
+
+            // Push all items to KDS
+            for (const item of broadcastOrder.order_items) {
+                io.to(`restaurant:${restaurantId}`).emit('db_change', {
+                    table: 'order_items',
+                    eventType: 'INSERT',
+                    data: item
+                });
+            }
         }
 
-        // 3. Broadcast to all POS clients (KDS + cashier screen)
+        // 3. Broadcast order update to all POS screens / floor plan
         io.to(`restaurant:${restaurantId}`).emit('db_change', {
             table: 'orders',
             eventType: 'UPDATE',
-            data: order
+            data: broadcastOrder
         });
 
         if (tableUpdate) {
@@ -3185,15 +3320,15 @@ app.post('/api/orders/qr-approve', authMiddleware, async (req, res) => {
             });
         }
 
-        // 4. Notify QR approval to clear customer's screen (if Supabase is connected)
+        // 4. Notify customer's phone screen
         io.to(`restaurant:${restaurantId}`).emit('qr_order_approved', {
             qr_order_id,
-            local_order_id: order.id,
-            table_number: order.tables?.name
+            local_order_id: finalOrderId,
+            table_number: broadcastOrder.tables?.name
         });
 
-        console.log(`[QR APPROVE] ✅ Order ${order.id} approved by ${staffId}`);
-        res.json({ success: true, order_id: order.id, message: `QR order approved. Order #${order.id.slice(-6).toUpperCase()} is now ACTIVE.` });
+        console.log(`[QR APPROVE] ✅ Order ${finalOrderId} approved by ${staffId} (${existingActiveOrderId ? 'merged into existing ticket' : 'new ticket created'})`);
+        res.json({ success: true, order_id: finalOrderId, message: `QR order approved. Order #${finalOrderId.slice(-6).toUpperCase()} is now ACTIVE.` });
 
     } catch (e: any) {
         console.error('[ERROR] POST /api/orders/qr-approve:', e.message);
