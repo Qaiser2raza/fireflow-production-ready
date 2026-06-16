@@ -28,7 +28,6 @@ import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { authMiddleware, requireRole } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
-import { startSubscriptionChecker } from './jobs/subscriptionChecker.js';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { journalEntryService } from './services/JournalEntryService';
 import { LicenseService } from './services/licensing/LicenseService';
@@ -289,6 +288,53 @@ app.get('/api/licensing/status', async (_req, res) => {
     } catch (e: any) {
         console.error('[ERROR] GET /api/licensing/status:', e.message);
         res.status(500).json({ error: 'Failed to retrieve license status' });
+    }
+});
+
+/**
+ * POST /api/licensing/sync
+ * Sync latest license from cloud Supabase
+ */
+app.post('/api/licensing/sync', async (_req, res) => {
+    try {
+        const activeRestaurant = await prisma.restaurants.findFirst({ select: { id: true } });
+        if (!activeRestaurant) return res.status(404).json({ error: 'No local restaurant initialized' });
+
+        const { getSupabaseClient } = await import('../shared/lib/cloudClient.js');
+        const cloud = getSupabaseClient();
+        
+        const { data, error } = await cloud
+            .from('license_keys')
+            .select('key')
+            .eq('restaurant_id', activeRestaurant.id)
+            .neq('status', 'revoked')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (error || !data) {
+            return res.status(404).json({ error: 'No new license key found in cloud' });
+        }
+
+        const payload = LicenseService.verifyLicenseToken(data.key);
+        if (!payload) return res.status(400).json({ error: 'Cloud license signature invalid' });
+
+        const saved = LicenseService.saveLicense(data.key);
+        if (!saved) return res.status(500).json({ error: 'Failed to write license file' });
+
+        await prisma.restaurants.update({
+            where: { id: activeRestaurant.id },
+            data: { 
+                subscription_status: 'active',
+                subscription_plan: payload.plan,
+                subscription_expires_at: new Date(payload.subscription_expires_at)
+            }
+        });
+
+        res.json({ success: true, message: 'License synced successfully' });
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/licensing/sync:', e.message);
+        res.status(500).json({ error: 'Sync failed' });
     }
 });
 
@@ -1764,11 +1810,14 @@ app.patch('/api/menu_items', async (req, res) => {
 app.delete('/api/menu_items', async (req, res) => {
     const { id } = req.query;
     try {
+        // Fetch restaurant_id before delete (row gone after)
+        const item = await prisma.menu_items.findUnique({
+            where: { id: String(id) },
+            select: { restaurant_id: true }
+        });
         await prisma.menu_items.delete({ where: { id: String(id) } });
         io.emit('db_change', { table: 'menu_items', eventType: 'DELETE', id });
-        // For delete, re-sync by the restaurant of the deleted item if we can resolve it
-        const restaurantEnv = process.env.RESTAURANT_ID;
-        if (restaurantEnv) syncMenuToCloud(restaurantEnv).catch(console.error);
+        if (item?.restaurant_id) syncMenuToCloud(item.restaurant_id).catch(console.error);
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2930,16 +2979,6 @@ server.listen(PORT, '0.0.0.0', async () => {
         });
     }
 
-    // Start subscription checker job
-    if (config.NODE_ENV !== 'test') {
-        startSubscriptionChecker();
-        
-        logger.log({
-            level: LogLevel.INFO,
-            service: 'startup',
-            action: 'subscription_checker_started'
-        });
-    }
 
     // ─── QR Order Bridge (Async Background Sync) ──────────────────────────
     try {
@@ -3253,25 +3292,9 @@ app.post('/api/orders/qr-approve', authMiddleware, async (req, res) => {
             const ts = new Date();
             const qrOrderNumber = `ORD-${ts.getHours()}${ts.getMinutes()}${ts.getSeconds()}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
 
-            broadcastOrder = await prisma.orders.update({
-                where: { id: qr_order_id },
-                data: {
-                    status: 'ACTIVE',
-                    type: 'DINE_IN',
-                    table_id: resolvedTableId,
-                    assigned_waiter_id: staffId,
-                    order_number: qrOrderNumber,
-                    payment_status: 'UNPAID',
-                    last_action_by: staffId,
-                    last_action_desc: 'QR self-order approved by cashier',
-                    updated_at: new Date()
-                } as any,
-                include: { order_items: true, tables: true, dine_in_orders: true }
-            });
-
             finalOrderId = qr_order_id;
 
-            // Create dine_in_orders record if needed
+            // Create dine_in_orders record if needed (do this FIRST so we can include it in the broadcast payload)
             if (resolvedTableId) {
                 const existingDineIn = await prisma.dine_in_orders.findUnique({ where: { order_id: finalOrderId } });
                 if (!existingDineIn) {
@@ -3294,6 +3317,23 @@ app.post('/api/orders/qr-approve', authMiddleware, async (req, res) => {
                     data: { status: 'OCCUPIED', active_order_id: finalOrderId }
                 });
             }
+
+            // NOW update the order and fetch it WITH the new dine_in_orders relation for the broadcast
+            broadcastOrder = await prisma.orders.update({
+                where: { id: qr_order_id },
+                data: {
+                    status: 'ACTIVE',
+                    type: 'DINE_IN',
+                    table_id: resolvedTableId,
+                    assigned_waiter_id: staffId,
+                    order_number: qrOrderNumber,
+                    payment_status: 'UNPAID',
+                    last_action_by: staffId,
+                    last_action_desc: 'QR self-order approved by cashier',
+                    updated_at: new Date()
+                } as any,
+                include: { order_items: true, tables: true, dine_in_orders: true }
+            });
 
             // Push all items to KDS
             for (const item of broadcastOrder.order_items) {

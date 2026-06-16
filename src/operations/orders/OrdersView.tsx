@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAppContext } from '../../client/App';
 import {
   OrderStatus
@@ -45,6 +45,19 @@ export const OrdersView: React.FC = () => {
   const [managerPin, setManagerPin] = useState('');
   const [showPinEntry, setShowPinEntry] = useState(false);
   const [pendingAction, setPendingAction] = useState<() => void>(() => { });
+
+  useEffect(() => {
+    const handleRequestVoid = (e: any) => {
+      const { orderId } = e.detail;
+      const order = orders.find(o => o.id === orderId);
+      if (order) {
+        setCancellingOrder(order);
+        setIsVoiding(true);
+      }
+    };
+    window.addEventListener('REQUEST_VOID', handleRequestVoid);
+    return () => window.removeEventListener('REQUEST_VOID', handleRequestVoid);
+  }, [orders]);
 
   // --- LOGIC: PROGRESS CALCULATOR ---
   const getProgressStats = (status: OrderStatus) => {

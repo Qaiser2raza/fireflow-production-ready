@@ -51,19 +51,30 @@ export async function hqGetLicenses() {
     }));
 }
 
-export async function hqGenerateLicense(plan: 'BASIC' | 'STANDARD' | 'PREMIUM') {
-    const SAFE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    const block = () => Array.from({ length: 4 }, () => SAFE_CHARS.charAt(Math.floor(Math.random() * SAFE_CHARS.length))).join('');
-    const key = `FIRE-${block()}-${block()}-${block()}`;
+export async function hqGenerateLicense(data: { plan: string, restaurant_id?: string, restaurant_name?: string, hardware_fingerprint?: string }) {
+    const response = await fetch('/api/generate-license', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+    
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to generate license via HQ API');
+    }
+    
+    return await response.json();
+}
 
-    const { data, error } = await supabase
-        .from('license_keys')
-        .insert({ key, plan, status: 'unused', created_at: new Date().toISOString() })
-        .select('id, key')
+export async function hqAddRestaurant(data: any) {
+    const { error, data: resData } = await supabase
+        .from('restaurants_cloud')
+        .insert(data)
+        .select('restaurant_id')
         .single();
-
+        
     if (error) throw new Error(error.message);
-    return data;
+    return resData;
 }
 
 export async function hqRevokeLicense(id: string) {
@@ -122,6 +133,13 @@ export async function hqVerifyPayment(paymentId: string, status: 'verified' | 'r
     // If verified, activate the restaurant's subscription for 30 days
     if (status === 'verified') {
         const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        
+        const { data: rest } = await supabase
+            .from('restaurants_cloud')
+            .select('subscription_plan, name')
+            .eq('restaurant_id', payment.restaurant_id)
+            .single();
+
         await supabase
             .from('restaurants_cloud')
             .update({
@@ -129,6 +147,18 @@ export async function hqVerifyPayment(paymentId: string, status: 'verified' | 'r
                 subscription_expires_at: expiresAt,
             })
             .eq('restaurant_id', payment.restaurant_id);
+
+        if (rest) {
+            await fetch('/api/generate-license', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    plan: rest.subscription_plan, 
+                    restaurant_id: payment.restaurant_id,
+                    restaurant_name: rest.name
+                })
+            });
+        }
     }
 }
 

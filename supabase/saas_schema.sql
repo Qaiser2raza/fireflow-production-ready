@@ -158,6 +158,21 @@ CREATE POLICY "Allow reading own payments"
   USING (true);
 
 -- ============================================================
+-- HQ ADMIN POLICIES (Authenticated users get full access)
+-- ============================================================
+CREATE POLICY "Admins have full access to license_keys"
+  ON license_keys FOR ALL TO authenticated
+  USING (true) WITH CHECK (true);
+
+CREATE POLICY "Admins have full access to restaurants_cloud"
+  ON restaurants_cloud FOR ALL TO authenticated
+  USING (true) WITH CHECK (true);
+
+CREATE POLICY "Admins have full access to subscription_payments"
+  ON subscription_payments FOR ALL TO authenticated
+  USING (true) WITH CHECK (true);
+
+-- ============================================================
 -- 5. FUNCTIONS & TRIGGERS
 -- ============================================================
 

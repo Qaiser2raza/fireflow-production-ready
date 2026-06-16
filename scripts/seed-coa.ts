@@ -1,7 +1,12 @@
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-const RESTAURANT_ID = 'b1972d7d-8374-4b55-9580-95a15f18f656';
+const restaurant = await prisma.restaurants.findFirst({ select: { id: true } });
+if (!restaurant) {
+  console.error('❌ No restaurant found in DB. Run the setup wizard first.');
+  process.exit(1);
+}
+const RESTAURANT_ID = restaurant.id;
 
 const ACCOUNTS = [
   // ASSETS

@@ -91,9 +91,16 @@ router.get('/invoices', async (req: any, res) => {
  * POST /api/fbr/sync/:orderId
  * Manually sync a specific order
  */
-router.post('/sync/:orderId', requireRole('MANAGER', 'ADMIN'), async (req, res) => {
+router.post('/sync/:orderId', requireRole('MANAGER', 'ADMIN'), async (req: any, res) => {
     try {
         const result = await fbrService.syncOrder(req.params.orderId);
+        if (!result.success) {
+            const io = req.app.get('io');
+            const restaurant_id = req.user?.restaurant_id || req.restaurantId;
+            if (io && restaurant_id) {
+                io.to(`restaurant:${restaurant_id}`).emit('fbr_sync_failed', { count: 1 });
+            }
+        }
         res.json(result);
     } catch (err: any) {
         res.status(500).json({ success: false, error: err.message });
@@ -250,10 +257,18 @@ router.post('/sync-all', requireRole('MANAGER', 'ADMIN'), async (req: any, res) 
             results.push({ id: order.id, ...res });
         }
 
+        const failedCount = results.filter(r => !r.success).length;
+        if (failedCount > 0) {
+            const io = req.app.get('io');
+            if (io) {
+                io.to(`restaurant:${restaurant_id}`).emit('fbr_sync_failed', { count: failedCount });
+            }
+        }
+
         res.json({
             success: true,
             syncedCount: results.filter(r => r.success).length,
-            failedCount: results.filter(r => !r.success).length,
+            failedCount,
             results
         });
     } catch (err: any) {

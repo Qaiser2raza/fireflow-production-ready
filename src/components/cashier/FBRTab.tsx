@@ -8,10 +8,12 @@ import {
     RefreshCw,
     Loader2,
     Calendar,
-    Clock
+    Clock,
+    Ban
 } from 'lucide-react';
 import { useAppContext as useApp } from '../../client/contexts/AppContext';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
+import { socketIO } from '../../shared/lib/socketClient';
 
 const FBRTab: React.FC = () => {
     const { addNotification } = useApp();
@@ -62,6 +64,17 @@ const FBRTab: React.FC = () => {
     useEffect(() => {
         fetchData();
     }, [filters]);
+
+    useEffect(() => {
+        const handleSyncFailed = (data: any) => {
+            addNotification?.('error', `FBR sync failed for ${data.count} invoice(s) — check FBR tab`);
+            fetchData();
+        };
+        socketIO.on('fbr_sync_failed', handleSyncFailed);
+        return () => {
+            socketIO.off('fbr_sync_failed', handleSyncFailed);
+        };
+    }, []);
 
 
     const handleBatchSync = async () => {
@@ -231,13 +244,25 @@ const FBRTab: React.FC = () => {
                                             {/* Sync only — Void/Cancel is managed from the Control Hub (ORDERS tab) */}
                                             <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 {order.fbr_sync_status === 'PENDING' && (
-                                                    <button 
-                                                        onClick={() => { toggleSelection(order.id); handleBatchSync(); }}
-                                                        className="p-2 hover:bg-[#f97316]/10 text-[#f97316] rounded-lg transition-colors border border-transparent hover:border-[#f97316]/20"
-                                                        title="Sync Now"
-                                                    >
-                                                        <RefreshCw size={14} />
-                                                    </button>
+                                                    <>
+                                                        <button 
+                                                            onClick={() => {
+                                                                window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: { tab: 'ORDERS' } }));
+                                                                setTimeout(() => window.dispatchEvent(new CustomEvent('REQUEST_VOID', { detail: { orderId: order.id } })), 100);
+                                                            }}
+                                                            className="p-2 hover:bg-red-500/10 text-red-500 rounded-lg transition-colors border border-transparent hover:border-red-500/20"
+                                                            title="Request Void"
+                                                        >
+                                                            <Ban size={14} />
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => { toggleSelection(order.id); handleBatchSync(); }}
+                                                            className="p-2 hover:bg-[#f97316]/10 text-[#f97316] rounded-lg transition-colors border border-transparent hover:border-[#f97316]/20"
+                                                            title="Sync Now"
+                                                        >
+                                                            <RefreshCw size={14} />
+                                                        </button>
+                                                    </>
                                                 )}
                                             </div>
                                         </td>

@@ -197,6 +197,10 @@ export abstract class BaseOrderService implements IOrderService {
                 updated_at: new Date()
             };
 
+            if (data.status === 'VOIDED' && (currentOrder.fbr_sync_status === 'PENDING' || currentOrder.fbr_sync_status === 'FAILED')) {
+                orderUpdatePayload.fbr_sync_status = 'VOIDED';
+            }
+
             if (data.table_id) orderUpdatePayload.tables = { connect: { id: data.table_id } };
             if (customerId) orderUpdatePayload.customers = { connect: { id: customerId } };
             

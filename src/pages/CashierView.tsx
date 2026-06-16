@@ -20,10 +20,13 @@ import DaybookTab from '../components/cashier/DaybookTab';
 import { CustomerLedgerPanel } from '../features/settings/config/CustomerLedgerPanel';
 import { SupplierLedgerPanel } from '../features/settings/config/SupplierLedgerPanel';
 import { KDSView } from '../operations/kds/KDSView';
+import { fetchWithAuth } from '../shared/lib/authInterceptor';
+import { socketIO } from '../shared/lib/socketClient';
 
 const CashierView: React.FC = () => {
     const isMobile = useIsMobile();
     const [activeTab, setActiveTab] = useState<'POS' | 'ORDERS' | 'PAYMENTS' | 'KITCHEN' | 'FBR' | 'DAYBOOK' | 'PAIRING'>('POS');
+    const [failedFBRCount, setFailedFBRCount] = useState(0);
 
     // Inject Google Fonts
     useEffect(() => {
@@ -33,6 +36,34 @@ const CashierView: React.FC = () => {
         document.head.appendChild(link);
         return () => {
             document.head.removeChild(link);
+        };
+    }, []);
+
+    // Global listeners and FBR count fetching
+    useEffect(() => {
+        const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
+        fetchWithAuth(`${API_URL}/fbr/aggregate`)
+            .then(res => res.json())
+            .then(data => {
+                if (data && typeof data.failed_count === 'number') {
+                    setFailedFBRCount(data.failed_count);
+                }
+            })
+            .catch(err => console.error('Failed to fetch FBR aggregate', err));
+
+        const handleSyncFailed = (data: any) => {
+            setFailedFBRCount(prev => prev + data.count);
+        };
+        socketIO.on('fbr_sync_failed', handleSyncFailed);
+
+        const handleNavigate = (e: any) => {
+            if (e.detail?.tab) setActiveTab(e.detail.tab);
+        };
+        window.addEventListener('NAVIGATE_TAB', handleNavigate);
+
+        return () => {
+            socketIO.off('fbr_sync_failed', handleSyncFailed);
+            window.removeEventListener('NAVIGATE_TAB', handleNavigate);
         };
     }, []);
 
@@ -132,6 +163,13 @@ const CashierView: React.FC = () => {
                             {/* Active Indicator Underline */}
                             {isActive && (
                                 <div className="absolute -bottom-1 w-8 h-1 bg-[#f97316] rounded-full shadow-[0_0_10px_rgba(249,115,22,0.5)] animate-pulse" />
+                            )}
+                            
+                            {/* FBR Badge */}
+                            {tab.id === 'FBR' && failedFBRCount > 0 && (
+                                <span className="absolute top-1 right-2 w-4 h-4 bg-red-500 rounded-full text-[8px] font-black flex items-center justify-center text-white shadow shadow-red-500/50">
+                                    {failedFBRCount}
+                                </span>
                             )}
                         </button>
                     );
