@@ -3076,13 +3076,23 @@ app.post('/api/orders/qr', async (req, res) => {
             customer_name: customerName
         };
         
-        // Ensure restaurant_id is set
-        const firstRestaurant = await prisma.restaurants.findFirst({ select: { id: true } });
-        if (firstRestaurant) {
-            orderData.restaurant_id = firstRestaurant.id;
-        } else {
+        // Ensure restaurant_id is set.
+        // PRIORITY: Use the RESTAURANT_ID from .env (written by FireFlow Activation)
+        // This guarantees the order is saved under the same tenant the cashier is viewing.
+        // Fallback to findFirst() only if the env variable is not set.
+        const envRestaurantId = process.env.RESTAURANT_ID;
+        let resolvedRestaurantId: string | null = envRestaurantId || null;
+
+        if (!resolvedRestaurantId) {
+            const firstRestaurant = await prisma.restaurants.findFirst({ select: { id: true } });
+            resolvedRestaurantId = firstRestaurant?.id || null;
+        }
+
+        if (!resolvedRestaurantId) {
             return res.status(400).json({ error: 'No local restaurant configured' });
         }
+        orderData.restaurant_id = resolvedRestaurantId;
+
 
         const localOrder = await qrOrderBridge.createLocalQROrder(orderData);
 

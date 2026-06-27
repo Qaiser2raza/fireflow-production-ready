@@ -54,8 +54,10 @@ class QROrderBridge extends EventEmitter {
     private restaurantId: string | null = null;
     private syncQueue: IncomingQROrder[] = [];
     private syncInterval: NodeJS.Timeout | null = null;
+    private reconnectInterval: NodeJS.Timeout | null = null;
     private queueFilePath: string;
     private realtimeSubscription: any = null;
+    private supabaseClient: any = null;
 
     constructor() {
         super();
@@ -66,17 +68,53 @@ class QROrderBridge extends EventEmitter {
     start(restaurantId: string): void {
         this.restaurantId = restaurantId;
         
-        // Start background sync interval
+        // Start background sync interval (processes offline queue every 10s)
         if (!this.syncInterval) {
-            this.syncInterval = setInterval(() => this.processSyncQueue(), 10000); // every 10s
+            this.syncInterval = setInterval(() => this.processSyncQueue(), 10000);
         }
         
         // Subscribe to Cloud Realtime
         if (this.isConnectedToCloud()) {
             this.subscribeToCloudRealtime();
+
+            // ── Reconnect heartbeat ──────────────────────────────────────────
+            // Supabase pausing/restoring silently kills the Realtime channel.
+            // Every 60s we check the channel state and re-subscribe if dead.
+            if (!this.reconnectInterval) {
+                this.reconnectInterval = setInterval(() => this.checkAndReconnect(), 60_000);
+            }
         }
         
         console.log('[QR BRIDGE] Async cloud sync queue initialized.');
+    }
+
+    /**
+     * Checks if the current Supabase Realtime subscription is still alive.
+     * If the channel state is not SUBSCRIBED, it tears down and re-subscribes.
+     */
+    private checkAndReconnect(): void {
+        if (!this.isConnectedToCloud()) return;
+
+        const state = this.realtimeSubscription?.state ?? 'CLOSED';
+        if (state !== 'joined' && state !== 'joining') {
+            console.warn(`[QR BRIDGE] ⚠️ Realtime channel state is "${state}" — reconnecting...`);
+            this.resubscribe();
+        }
+    }
+
+    /**
+     * Tears down the existing Supabase subscription and creates a fresh one.
+     * Safe to call at any time — handles a null/dead subscription gracefully.
+     */
+    private resubscribe(): void {
+        try {
+            if (this.realtimeSubscription) {
+                this.realtimeSubscription.unsubscribe();
+                this.realtimeSubscription = null;
+            }
+        } catch (_) { /* ignore teardown errors */ }
+        this.subscribeToCloudRealtime();
+        console.log('[QR BRIDGE] 🔄 Realtime channel re-subscribed.');
     }
 
     private subscribeToCloudRealtime() {
@@ -130,6 +168,10 @@ class QROrderBridge extends EventEmitter {
         if (this.syncInterval) {
             clearInterval(this.syncInterval);
             this.syncInterval = null;
+        }
+        if (this.reconnectInterval) {
+            clearInterval(this.reconnectInterval);
+            this.reconnectInterval = null;
         }
         if (this.realtimeSubscription) {
             this.realtimeSubscription.unsubscribe();

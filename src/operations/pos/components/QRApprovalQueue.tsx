@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   QrCode, X, Check, XCircle, ChevronRight, Loader2,
   AlertTriangle, ShieldAlert, Clock, Users, Utensils,
@@ -170,55 +171,47 @@ export const QRApprovalQueue: React.FC = () => {
 
   return (
     <>
-      {/* ── Floating Trigger Button ────────────────────────────────────────── */}
+      {/* ── Top Bar Trigger Button ────────────────────────────────────────── */}
       <button
         id="qr-approval-queue-trigger"
         onClick={() => setIsOpen(v => !v)}
         className={`
-          fixed bottom-6 right-6 z-[80] flex items-center gap-2.5
-          h-14 rounded-2xl px-4 shadow-2xl transition-all duration-300
-          border backdrop-blur-sm group
+          relative flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all duration-300 border
           ${pendingCount > 0
-            ? 'bg-amber-500 hover:bg-amber-400 border-amber-400/50 text-slate-950 shadow-amber-500/30'
-            : 'bg-slate-900/90 hover:bg-slate-800 border-slate-700/60 text-slate-300 hover:text-white'
+            ? 'bg-slate-800/80 border-amber-500/30 hover:bg-slate-800 hover:border-amber-500/50 text-white shadow-[0_0_10px_rgba(245,158,11,0.1)]'
+            : 'bg-slate-900/50 hover:bg-slate-800 border-slate-700/50 text-slate-400 hover:text-white'
           }
         `}
         title="QR Self-Order Queue"
       >
-        <div className="relative">
-          <QrCode size={20} className={pendingCount > 0 ? 'text-slate-950' : ''} />
+        <div className="relative flex items-center justify-center">
+          <QrCode size={16} className={pendingCount > 0 ? 'text-amber-400' : ''} />
           {pendingCount > 0 && (
             <span className={`
-              absolute -top-2.5 -right-2.5 min-w-[18px] h-[18px] rounded-full
-              flex items-center justify-center text-[10px] font-black
-              bg-red-600 text-white border-2 border-amber-500
+              absolute -top-2 -right-2 min-w-[16px] h-[16px] rounded-full
+              flex items-center justify-center text-[9px] font-bold
+              bg-red-500 text-white shadow-sm border border-red-400/50
               ${hasNewOrder ? 'animate-bounce' : ''}
             `}>
               {pendingCount > 9 ? '9+' : pendingCount}
             </span>
           )}
         </div>
-        <div className="flex flex-col items-start leading-tight">
-          <span className="text-[11px] font-black uppercase tracking-wider">
-            {pendingCount > 0 ? `${pendingCount} QR Order${pendingCount !== 1 ? 's' : ''}` : 'QR Orders'}
-          </span>
-          {pendingCount > 0 && (
-            <span className="text-[9px] font-bold opacity-70">Awaiting approval</span>
-          )}
-        </div>
-        <ChevronDown
-          size={14}
-          className={`transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}
-        />
+        <span className="text-[10px] font-black uppercase tracking-widest hidden sm:block">
+          QR Orders
+        </span>
       </button>
 
-      {/* ── Backdrop ──────────────────────────────────────────────────────── */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-[75] bg-black/40 backdrop-blur-[2px]"
-          onClick={() => setIsOpen(false)}
-        />
-      )}
+      {/* ── Portaled Overlays ──────────────────────────────────────────────────────── */}
+      {createPortal(
+        <>
+          {/* ── Backdrop ──────────────────────────────────────────────────────── */}
+          {isOpen && (
+            <div
+              className="fixed inset-0 z-[75] bg-black/40 backdrop-blur-[2px]"
+              onClick={() => setIsOpen(false)}
+            />
+          )}
 
       {/* ── Slide-up Drawer ───────────────────────────────────────────────── */}
       <div className={`
@@ -466,6 +459,7 @@ export const QRApprovalQueue: React.FC = () => {
           </button>
         </div>
       </div>
+      </>, document.body)}
     </>
   );
 };

@@ -371,7 +371,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (table === 'orders') {
         const mapOrderLocal = (o: any) => {
-          const dineIn = o.dine_in_order || (o.dine_in_orders && o.dine_in_orders[0]);
+          // dine_in_orders can be a single object (Prisma one-to-one) OR an array.
+          // Normalize to a single object reference so downstream code is consistent.
+          const dineIn = o.dine_in_order
+            || (Array.isArray(o.dine_in_orders) ? o.dine_in_orders[0] : o.dine_in_orders)
+            || null;
           const takeaway = o.takeaway_order || (o.takeaway_orders && o.takeaway_orders[0]);
           const delivery = o.delivery_order || (o.delivery_orders && o.delivery_orders[0]);
           return {
@@ -404,17 +408,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const incoming = mapOrderLocal(data);
               // ⚠️ SAFE-MERGE: server emits partial payloads (only changed fields).
               // Never overwrite critical nested/type fields with empty/undefined values.
+
+              // dine_in_orders is a Prisma one-to-one (single object), not an array.
+              // Use a proper null-check instead of .length which is always undefined on objects.
+              const hasDineIn = incoming.dine_in_orders != null
+                && (Array.isArray(incoming.dine_in_orders)
+                  ? incoming.dine_in_orders.length > 0
+                  : true);
+
               return {
                 ...o,
                 ...incoming,
-                // Preserve type if socket payload doesn’t carry it
+                // Preserve type if socket payload doesn't carry it
                 type: incoming.type || o.type,
-                // Preserve nested arrays if socket payload has them empty/missing
+                // Always use the incoming table_id if it is explicitly set (e.g. QR→DINE_IN promotion)
+                table_id: incoming.table_id !== undefined ? incoming.table_id : o.table_id,
+                // Preserve nested arrays/objects if socket payload has them missing
                 order_items: incoming.order_items?.length > 0 ? incoming.order_items : o.order_items,
                 delivery_orders:
                   incoming.delivery_orders?.length > 0 ? incoming.delivery_orders : o.delivery_orders,
-                dine_in_orders:
-                  incoming.dine_in_orders?.length > 0 ? incoming.dine_in_orders : o.dine_in_orders,
+                dine_in_orders: hasDineIn ? incoming.dine_in_orders : o.dine_in_orders,
                 takeaway_orders:
                   incoming.takeaway_orders?.length > 0 ? incoming.takeaway_orders : o.takeaway_orders,
                 // Preserve assigned_driver_id from socket if present; otherwise keep existing
@@ -1130,7 +1143,7 @@ const AppContent = () => {
 
       <main className="flex-1 min-w-0 relative bg-slate-950 flex flex-col overflow-hidden">
         {/* Global Header - Redesigned */}
-        {activeView !== 'POS' && (
+
           <header className="bg-[#0B0F19]/98 backdrop-blur-md border-b border-slate-800/50 px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
             {/* LEFT: Branding + Clock */}
             <div className="flex items-center gap-6">
@@ -1175,6 +1188,10 @@ const AppContent = () => {
                 )}
               </button>
 
+              {['CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') && (
+                <QRApprovalQueue />
+              )}
+
               <div className="w-px h-6 bg-slate-800 mx-1"></div>
 
               <button
@@ -1187,7 +1204,7 @@ const AppContent = () => {
               </button>
             </div>
           </header>
-        )}
+
 
         {/* Role Context Bar - Hidden in POS to maximize space */}
         {activeView !== 'POS' && (
@@ -1206,7 +1223,7 @@ const AppContent = () => {
         )}
 
         {/* Main Content */}
-        <div className="flex-1 overflow-auto">
+        <div className={`flex-1 ${activeView === 'POS' ? 'overflow-hidden flex flex-col' : 'overflow-auto'}`}>
           {activeView === 'SUPER_ADMIN' ? <SuperAdminView /> :
             activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
               activeView === 'MENU' ? <MenuView /> :
@@ -1246,9 +1263,6 @@ const AppContent = () => {
           onClose={() => setShowSessionModal(false)}
           onSuccess={fetchInitialData}
         />
-      )}
-      {['CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '') && (
-        <QRApprovalQueue />
       )}
     </div>
   );
