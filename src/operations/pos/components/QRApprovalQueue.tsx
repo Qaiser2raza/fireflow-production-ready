@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   QrCode, X, Check, XCircle, ChevronRight, Loader2,
   AlertTriangle, ShieldAlert, Clock, Users, Utensils,
-  ChevronDown, StickyNote
+  StickyNote
 } from 'lucide-react';
 import { socketIO } from '../../../shared/lib/socketClient';
 import { fetchWithAuth } from '../../../shared/lib/authInterceptor';

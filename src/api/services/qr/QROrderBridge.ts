@@ -57,7 +57,6 @@ class QROrderBridge extends EventEmitter {
     private reconnectInterval: NodeJS.Timeout | null = null;
     private queueFilePath: string;
     private realtimeSubscription: any = null;
-    private supabaseClient: any = null;
 
     constructor() {
         super();
