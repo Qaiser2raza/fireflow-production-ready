@@ -193,6 +193,12 @@ These serve overlapping purposes with different data models. The intended archit
 
 ---
 
+## Control Plane
+
+FireFlow is evolving from a local-first POS to a managed SaaS platform. The target control-plane architecture is documented in `docs/MANAGED_SAAS_OPERATING_MODEL.md`.
+
+Current reality: the HQ app (`src/hq/`) provides a separate Vercel-deployed control plane with Supabase auth. It manages licenses, subscriptions, and restaurant overview. It is NOT yet a unified support/operations platform.
+
 ## Integrations
 
 | Integration | Status | Evidence |
@@ -203,3 +209,4 @@ These serve overlapping purposes with different data models. The intended archit
 | **Google Gemini** | PARTIAL | Direct frontend call in `AURAAssistant.tsx` |
 | **FBR** | PARTIAL | Invoice fields, sync logs, but no full fiscal submission |
 | **Sentry** | PARTIAL | Initialized, not fully instrumented |
+

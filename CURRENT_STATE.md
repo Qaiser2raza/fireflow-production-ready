@@ -154,6 +154,10 @@
 
 ---
 
+## Managed SaaS Model
+
+The target operating model is documented in `docs/MANAGED_SAAS_OPERATING_MODEL.md`.
+
 ## Human Decisions Required
 
 1. **Product scope priority**: Is FireFlow a local POS, hybrid SaaS, multi-product ecosystem, or all three? Which is the current primary focus?
@@ -163,3 +167,4 @@
 5. **Supabase integration**: Is the current Supabase cloud integration production-ready, or still in development?
 6. **`openapi.json`**: Should this be regenerated to match the Express API, or deleted as stale?
 7. **Branch model**: Should the project use `main` or `develop` as the primary working branch?
+
