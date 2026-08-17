@@ -8,8 +8,10 @@ It combines deterministic restaurant operations with an AI assistance layer.
 ## Product Direction
 
 - Initial focus: restaurant vertical (dine-in, takeaway, delivery, reservations)
-- Foundation: local-first POS with optional cloud SaaS features
+- Foundation: managed SaaS Business Operating System; FireFlow SaaS Management/HQ is the platform control plane above the tenant layer
+- Onboarding: FireFlow Support manages and assists initial tenant configuration
 - Expansion path: modular architecture enabling future verticals (RetailFlow) and marketplace integrations (Cravex)
+- Extensibility: modules, integrations, and custom services are configured per-tenant without forking the core
 - AI is assistive, not authoritative
 
 ## Core Business Principles
@@ -17,7 +19,7 @@ It combines deterministic restaurant operations with an AI assistance layer.
 1. Restaurant operations are deterministic and must never depend on AI for correctness.
 2. Financial integrity is non-negotiable: backend is the source of truth.
 3. Tenant data isolation is mandatory: no cross-tenant leakage.
-4. Offline-capable local operations with optional cloud sync.
+4. Platform-managed tenant operations with enforced isolation, auditability, and supportability.
 5. Audit trail for every financial and security-sensitive action.
 
 ## AI Principles
