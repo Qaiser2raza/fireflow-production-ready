@@ -1,3 +1,9 @@
+LEGACY � NOT CURRENT FIREFLOW TRUTH
+
+This document is classified as STALE.
+It claims develop is the working branch; the actual working branch is main.
+It also references outdated phase status and branch protection.
+For current truth, see AGENTS.md -> CURRENT_STATE.md.
 # Fireflow – Restaurant Management System
 
 Cross-platform desktop POS for Pakistani restaurants  
@@ -24,3 +30,4 @@ npm run dev          # frontend + backend proxy
 - Never commit `.env`, database dumps, or real restaurant data
 - See PILOT_READY.md for deployment checklist
 - Work on `develop` branch – main is protected
+

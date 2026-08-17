@@ -1,3 +1,8 @@
+LEGACY — NOT CURRENT FIREFLOW TRUTH
+
+This document is classified as CONTRADICTED.
+It documents order_intelligence fields that do not exist in the current schema.
+For current truth, see AGENTS.md -> CURRENT_STATE.md -> ARCHITECTURE.md.
 # ðŸŽ¯ Fireflow Master Blueprint v3.0: Intelligent Operations System
 ## The Definitive Build Specification
 
@@ -758,3 +763,4 @@ try {
 ---
 
 **This blueprint is a LIVING DOCUMENT. Update it with every significant change.**
+

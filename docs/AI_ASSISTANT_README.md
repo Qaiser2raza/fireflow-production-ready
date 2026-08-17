@@ -1,3 +1,8 @@
+LEGACY — NOT CURRENT FIREFLOW TRUTH
+
+This document is classified as STALE.
+It claims docs/ORDER_BOOKING_WORK_PROCESS.md is the "single source of truth," but that document is now classified as CONTRADICTED.
+For current AI guidance, see AGENTS.md -> CURRENT_STATE.md -> ARCHITECTURE.md.
 # ðŸ¤– FOR AI ASSISTANTS: Start Here
 
 **You are working on Fireflow, an intelligent restaurant POS system.**
@@ -119,3 +124,4 @@ When working with the user:
 
 **Last Updated**: February 8, 2026  
 **Next AI Agent**: Read ORDER_BOOKING_WORK_PROCESS.md before doing ANYTHING!
+

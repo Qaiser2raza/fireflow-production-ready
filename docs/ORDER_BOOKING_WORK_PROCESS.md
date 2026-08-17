@@ -1,3 +1,8 @@
+LEGACY � NOT CURRENT FIREFLOW TRUTH
+
+This document is classified as CONTRADICTED.
+Status enums documented here differ from the actual database schema in prisma/schema.prisma.
+For current truth, see AGENTS.md -> CURRENT_STATE.md -> ARCHITECTURE.md.
 # 🧠 Fireflow Complete System Specification
 ## Intelligent Operations Platform - Single Source of Truth
 
@@ -1005,3 +1010,4 @@ PENDING ───> PREPARING ───> DONE ───> SERVED
 
 **Last verified**: February 8, 2026  
 **Next review**: After Phase 2 (Intelligence) implementation
+

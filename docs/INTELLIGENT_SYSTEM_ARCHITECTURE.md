@@ -1,3 +1,8 @@
+LEGACY � NOT CURRENT FIREFLOW TRUTH
+
+This document is classified as CONTRADICTED.
+It describes ML, self-healing, and anomaly detection features that are not implemented.
+For current truth, see AGENTS.md -> CURRENT_STATE.md -> ARCHITECTURE.md.
 # 🧠 Fireflow Intelligent Operations System
 ## AI-First, Self-Healing, Decision-Assist Architecture
 
@@ -993,3 +998,4 @@ Would you like me to start implementing:
 4. **ML Prediction Service** (order completion time estimation)?
 
 This is the future-proof, unbreakable system you envisioned! 🚀
+
