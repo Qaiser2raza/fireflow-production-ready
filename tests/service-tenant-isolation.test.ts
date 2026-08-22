@@ -292,11 +292,18 @@ async function runTests() {
     console.log(`Failed: ${failed}`);
     console.log(`Total: ${passed + failed}`);
 
+    // Disconnect BOTH Prisma clients: this file's direct client and the
+    // shared singleton pulled in transitively by the services under test.
+    // Without the second, open pool sockets keep the event loop alive and
+    // the process never terminates after a passing run.
     await prisma.$disconnect();
+    const { prisma: sharedPrisma } = await import('../src/shared/lib/prisma');
+    await sharedPrisma.$disconnect();
 
     if (failed > 0) {
         process.exit(1);
     }
+    process.exit(0);
 }
 
 runTests().catch(err => {

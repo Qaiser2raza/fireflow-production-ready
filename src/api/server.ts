@@ -31,7 +31,6 @@ import platformRoutes from './routes/platformRoutes';
 import { platformAuthMiddleware, requirePlatformRole } from './middleware/platformAuthMiddleware';
 import { platformAuthService } from './services/platform/PlatformAuthService';
 import { platformJwtService } from './services/platform/PlatformJwtService';
-import { passwordResetService } from './services/platform/PasswordResetService';
 import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { refreshTokenService } from './services/auth/RefreshTokenService';
@@ -585,7 +584,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
                     entity_id: user.id,
                     details: {
                         reason: 'bcrypt_error',
-                        error: e.message,
+                        error: (e as Error).message,
                         ip_address: ipAddress
                     }
                 }
@@ -662,7 +661,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
             user.name
         );
 
-        const { token: refreshToken, familyId } = await refreshTokenService.createStaffRefreshToken(
+        const { token: refreshToken } = await refreshTokenService.createStaffRefreshToken(
             user.id,
             user.restaurant_id
         );
@@ -747,7 +746,7 @@ app.post('/api/restaurants', platformAuthMiddleware, requirePlatformRole('PLATFO
         if (!name) return res.status(400).json({ error: 'Restaurant name is required' });
         if (!owner_name || !owner_email) return res.status(400).json({ error: 'Owner name and email are required' });
 
-        const { restaurantProvisioningService } = await import('../services/onboarding/RestaurantProvisioningService');
+        const { restaurantProvisioningService } = await import('./services/onboarding/RestaurantProvisioningService');
         const result = await restaurantProvisioningService.provisionRestaurant({
             name,
             slug,
@@ -988,7 +987,6 @@ app.post('/api/auth/verify-pin', verifyPinLimiter, async (req, res) => {
         }
 
         let authenticated = false;
-        let migrationPerformed = false;
 
         if (!staff.hashed_pin) {
             await prisma.audit_logs.create({
@@ -1020,7 +1018,7 @@ app.post('/api/auth/verify-pin', verifyPinLimiter, async (req, res) => {
                     entity_id: staff.id,
                     details: {
                         reason: 'bcrypt_error',
-                        error: e.message,
+                        error: (e as Error).message,
                         context: 'verify-pin',
                         ip_address: ipAddress
                     }
@@ -1081,7 +1079,6 @@ app.post('/api/auth/verify-pin', verifyPinLimiter, async (req, res) => {
             where: { id: staff.id },
             data: { hashed_pin: hashedPin, pin: '', failed_login_count: 0, locked_until: null }
         });
-        migrationPerformed = true;
 
         if (requiredRole && staff.role !== requiredRole && staff.role !== 'SUPER_ADMIN') {
             return res.status(403).json({ error: 'Insufficient privileges for required role: ' + requiredRole });
@@ -1509,7 +1506,7 @@ app.post('/api/orders/upsert', authMiddleware, async (req, res) => {
         let result;
 
         if (data.id) {
-            result = await service.updateOrder(req.restaurantId, data.id, data);
+            result = await service.updateOrder(req.restaurantId!, data.id, data);
         } else {
             result = await service.createOrder(data);
         }
@@ -1583,7 +1580,7 @@ app.patch('/api/orders/:id', authMiddleware, async (req, res) => {
         }
 
         const service = OrderServiceFactory.getService(data.type);
-        const result = await service.updateOrder(req.restaurantId, id, data);
+        const result = await service.updateOrder(req.restaurantId!, id, data);
 
         io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
         res.json(result);
@@ -1605,7 +1602,7 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
         if (!order) return res.status(404).json({ error: 'Order not found or unauthorized' });
 
         const service = OrderServiceFactory.getService(order.type as any);
-        const success = await service.deleteOrder(req.restaurantId, id);
+        const success = await service.deleteOrder(req.restaurantId!, id);
 
         if (success) {
             io.emit('db_change', { table: 'orders', eventType: 'DELETE', id });
@@ -2166,7 +2163,7 @@ app.patch('/api/orders/:id/guest-count', async (req, res) => {
 
     try {
         const result = await updateGuestCount(
-            req.restaurantId,
+            req.restaurantId!,
             id,
             guest_count,
             staffId || 'SYSTEM',

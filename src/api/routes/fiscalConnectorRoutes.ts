@@ -18,7 +18,7 @@ router.post('/reconcile', fiscalConnectorAuthMiddleware, async (req: Authenticat
       return;
     }
 
-    if (!['ISSUED', 'FAILED'].includes(outcome)) {
+    if (outcome !== 'ISSUED' && outcome !== 'FAILED') {
       res.status(400).json({ accepted: false, fiscalDocumentId, status: 'REJECTED', message: `Invalid reconciliation outcome: ${outcome}. Must be ISSUED or FAILED.` });
       return;
     }

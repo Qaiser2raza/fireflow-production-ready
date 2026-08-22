@@ -51,7 +51,6 @@ export interface DecodedJwt {
 // ==========================================
 
 const JWT_ACCESS_EXPIRY_MINUTES = 15;
-const JWT_REFRESH_EXPIRY_DAYS = 7;
 const JWT_ALGORITHM = 'HS256';
 
 /**

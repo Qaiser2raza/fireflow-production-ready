@@ -1,4 +1,4 @@
-import { FireFlowConnector, ConnectorRequest, ConnectorResult } from './IntegrationTypes';
+import { FireFlowConnector, ConnectorRequest, ConnectorResult } from '../IntegrationTypes';
 
 export type MockConnectorMode = 'SUCCESS' | 'RETRYABLE_FAILURE' | 'PERMANENT_FAILURE' | 'UNKNOWN';
 

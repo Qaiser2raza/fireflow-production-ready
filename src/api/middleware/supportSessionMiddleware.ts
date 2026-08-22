@@ -1,11 +1,12 @@
 // src/api/middleware/supportSessionMiddleware.ts
 import { Request, Response, NextFunction } from 'express';
-import { supportSessionService, SupportSession, ALLOWED_SCOPES } from '../services/support/SupportSessionService';
+import { supportSessionService } from '../services/support/SupportSessionService';
 
 declare global {
   namespace Express {
     interface Request {
-      supportSession?: SupportSession;
+      // Typed loosely to stay compatible with the augmentation in authMiddleware.
+      supportSession?: any;
       supportScopes?: readonly string[];
     }
   }

@@ -1,6 +1,5 @@
 // src/api/services/support/SupportSessionService.ts
 import { prisma } from '../../../shared/lib/prisma';
-import { config } from '../../../config/env';
 
 export type SupportScope = 'READ' | 'CONFIG' | 'MENU' | 'ORDERS' | 'DEVICE' | 'DIAGNOSTICS';
 
@@ -91,7 +90,7 @@ export class SupportSessionService {
     return session ? session as unknown as SupportSession : null;
   }
 
-  async revokeSession(sessionId: string, platformUserId: string): Promise<SupportSession> {
+  async revokeSession(sessionId: string, _platformUserId: string): Promise<SupportSession> {
     const session = await prisma.support_sessions.update({
       where: { id: sessionId },
       data: {

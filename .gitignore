@@ -68,3 +68,12 @@ implementation_plan.md
 # ============================================================
 .kilo/
 .kilo
+
+# ============================================================
+# SIGNING MATERIAL — deployment-managed secret, never commit.
+# Private key history was exposed via commit 05b9b1d (on origin/main);
+# keypair rotated 2026-08-22 (fingerprint 2f6eaa1cd87e3f0d...).
+# Provision saas_private.pem / saas_public.pem out-of-band per deploy.
+# Sole consumer: src/api/services/SuperAdminService.ts (server-side).
+# ============================================================
+*.pem

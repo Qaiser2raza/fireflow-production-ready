@@ -65,7 +65,7 @@ router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'),
             });
         }
         
-        const session = await CashierSessionService.closeSession(req.restaurantId, sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
+        const session = await CashierSessionService.closeSession(req.restaurantId!, sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
         res.json({ success: true, session });
     } catch (e: any) {
         res.status(500).json({ success: false, error: e.message });
@@ -75,7 +75,7 @@ router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'),
 // Get summary for a specific session
 router.get('/:id/summary', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
-        const summary = await CashierSessionService.getSessionSummary(req.restaurantId, req.params.id);
+        const summary = await CashierSessionService.getSessionSummary(req.restaurantId!, req.params.id);
         res.json({ success: true, summary });
     } catch (e: any) {
         res.status(500).json({ success: false, error: e.message });
@@ -98,7 +98,7 @@ router.get('/:id/logs', authMiddleware, async (req, res) => {
 router.post('/:id/logs', authMiddleware, requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const { type, amount, description, category, referenceId } = req.body;
-        const restaurantId = req.restaurantId;
+        const restaurantId = req.restaurantId!;
         const log = await CashierShiftLogService.createLog({
             restaurantId,
             sessionId: req.params.id,
@@ -143,7 +143,6 @@ router.post('/:id/distribute-svc', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'S
     try {
         const sessionId = req.params.id;
         const { distributions, totalAmount: bodyTotal } = req.body;
-        const restaurantId = req.restaurantId;
 
         const totalAmount = bodyTotal ? Number(bodyTotal) : (distributions?.reduce((sum: number, d: any) => sum + Number(d.amount || 0), 0) || 0);
         
@@ -152,7 +151,7 @@ router.post('/:id/distribute-svc', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'S
         }
 
         const result = await CashierSessionService.distributeSVC({
-            restaurantId: req.restaurantId,
+            restaurantId: req.restaurantId!,
             sessionId,
             totalAmount,
             distributions: distributions || [],
@@ -177,7 +176,7 @@ router.post('/:id/manager-drawing', requireRole('CASHIER', 'MANAGER', 'ADMIN', '
     try {
         const sessionId = req.params.id;
         const { amount, notes } = req.body;
-        const restaurantId = req.restaurantId;
+        const restaurantId = req.restaurantId!;
 
         if (!amount || Number(amount) <= 0) {
             return res.status(400).json({ success: false, error: 'A positive amount is required' });

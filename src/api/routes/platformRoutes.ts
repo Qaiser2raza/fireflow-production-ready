@@ -1,10 +1,9 @@
 // src/api/routes/platformRoutes.ts
 import { Router } from 'express';
-import { PrismaClient, PlatformRole } from '@prisma/client';
-import { platformAuthService } from '../services/platform/PlatformAuthService';
+import { PrismaClient } from '@prisma/client';
 import { supportSessionService, ALLOWED_SCOPES } from '../services/support/SupportSessionService';
 import { platformAuthMiddleware, requirePlatformRole } from '../middleware/platformAuthMiddleware';
-import { supportSessionMiddleware, requireSupportScope } from '../middleware/supportSessionMiddleware';
+import { supportSessionMiddleware } from '../middleware/supportSessionMiddleware';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -29,7 +28,7 @@ router.get('/health', (req, res) => {
 // PLATFORM TENANTS
 // ==========================================
 
-router.get('/tenants', requirePlatformRole('PLATFORM_OWNER', 'SUPPORT_ENGINEER'), async (req, res) => {
+router.get('/tenants', requirePlatformRole('PLATFORM_OWNER', 'SUPPORT_ENGINEER'), async (_req, res) => {
   try {
     const restaurants = await prisma.restaurants.findMany({
       select: {
@@ -38,7 +37,6 @@ router.get('/tenants', requirePlatformRole('PLATFORM_OWNER', 'SUPPORT_ENGINEER')
         slug: true,
         phone: true,
         address: true,
-        city: true,
         currency: true,
         timezone: true,
         is_active: true,
@@ -78,7 +76,6 @@ router.get('/tenants/:id', requirePlatformRole('PLATFORM_OWNER', 'SUPPORT_ENGINE
         slug: true,
         phone: true,
         address: true,
-        city: true,
         currency: true,
         timezone: true,
         is_active: true,
@@ -198,12 +195,12 @@ router.patch('/tenants/:id/plan', requirePlatformRole('PLATFORM_OWNER'), async (
 // PLATFORM LICENSES
 // ==========================================
 
-router.get('/licenses', requirePlatformRole('PLATFORM_OWNER', 'SUPPORT_ENGINEER', 'SUPPORT_AGENT'), async (req, res) => {
+router.get('/licenses', requirePlatformRole('PLATFORM_OWNER', 'SUPPORT_ENGINEER', 'SUPPORT_AGENT'), async (_req, res) => {
   try {
     const licenses = await prisma.license_keys.findMany({
       include: {
         restaurants: {
-          select: { id: true, name: true, city: true, subscription_status: true },
+          select: { id: true, name: true, subscription_status: true },
         },
       },
       orderBy: { created_at: 'desc' },
@@ -237,8 +234,7 @@ router.post('/licenses/generate', requirePlatformRole('PLATFORM_OWNER', 'SUPPORT
     const license = await prisma.license_keys.create({
       data: {
         license_key: key,
-        plan,
-        status: 'unused',
+        license_type: plan,
         restaurant_id: restaurant_id || null,
       },
     });

@@ -104,6 +104,20 @@ class EnterpriseLogger {
     }
   }
 
+  /**
+   * Convenience wrapper matching pino-style call sites:
+   * `logger.error({ error: err.message }, 'What failed')`
+   */
+  error(metadata: Record<string, any>, action: string): void {
+    this.log({
+      level: LogLevel.ERROR,
+      service: 'fireflow-api',
+      action,
+      metadata,
+      error: metadata && typeof metadata.error === 'string' ? { message: metadata.error } : undefined
+    });
+  }
+
   private async flush(): Promise<void> {
     if (this.logQueue.length === 0) return;
 

@@ -199,7 +199,7 @@ router.post('/session/close', async (req, res) => {
         const validated = closeSessionSchema.omit({ staffId: true }).parse(req.body);
         const session = await accounting.closeCashSession({
             ...validated,
-            restaurantId: req.restaurantId,
+            restaurantId: req.restaurantId!,
             staffId: req.staffId! // SaaS Security
         });
         res.json({ success: true, session });

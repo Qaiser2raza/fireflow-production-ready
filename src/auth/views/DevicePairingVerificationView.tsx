@@ -662,3 +662,5 @@ export const DevicePairingVerificationView: React.FC<DevicePairingVerificationVi
         </div>
     );
 };
+
+export default DevicePairingVerificationView;

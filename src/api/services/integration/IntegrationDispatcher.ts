@@ -2,7 +2,6 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../../shared/lib/prisma';
 import { IntegrationRegistry } from './IntegrationRegistry';
 import { FireFlowConnector, ConnectorRequest, ConnectorResult, IntegrationContext } from './IntegrationTypes';
-import { logger, LogLevel } from '../../../shared/lib/logger';
 
 const MAX_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 1000;

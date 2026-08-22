@@ -7,6 +7,8 @@ const prisma = new PrismaClient();
 export interface ResetTokenResult {
   success: boolean;
   message: string;
+  /** Present only in trusted internal flows (never serialized to clients). */
+  token?: string;
 }
 
 export class PasswordResetService {
@@ -18,7 +20,7 @@ export class PasswordResetService {
   }
 
   hashToken(token: string): string {
-    return crypto.createHash('sha256').update(token).toString('hex');
+    return crypto.createHash('sha256').update(token).digest('hex');
   }
 
   async createResetToken(email: string): Promise<ResetTokenResult> {
@@ -123,7 +125,7 @@ export class PasswordResetService {
         data: { revoked_at: new Date() },
       });
 
-      const updated = await tx.platform_users.update({
+      await tx.platform_users.update({
         where: { id: user.id },
         data: {
           password_hash: newPasswordHash,

@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { platformJwtService } from './PlatformJwtService';
-import { passwordResetService } from './PasswordResetService';
+import { passwordResetService, ResetTokenResult } from './PasswordResetService';
 import { config } from '../../../config/env';
 import { prisma } from '../../../shared/lib/prisma';
 
@@ -57,15 +57,6 @@ const PASSWORD_MAX_LENGTH = 128;
 const BCRYPT_COST = 14;
 const LOCKOUT_FAILURES = 5;
 const LOCKOUT_MINUTES = 30;
-
-function timingSafeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(bufA, bufB);
-}
 
 export class PlatformAuthService {
   async hashPassword(password: string): Promise<string> {
@@ -294,7 +285,7 @@ export class PlatformAuthService {
       sessionJti
     );
 
-    const { token: refreshToken, familyId } = await this.createPlatformRefreshToken(user.id, userAgent, sessionJti);
+    const { token: refreshToken } = await this.createPlatformRefreshToken(user.id, userAgent, sessionJti);
 
     await prisma.$transaction(async (tx) => {
       await tx.platform_users.update({
@@ -486,6 +477,25 @@ export class PlatformAuthService {
     };
   }
 
+  /**
+   * Verify a platform access token (HS256, issuer/audience bound) and resolve
+   * its live session. Used by non-HTTP surfaces such as Socket.IO auth where
+   * the tenant JWT verification has already failed.
+   */
+  async verifyAccessToken(token: string): Promise<{ valid: boolean; user?: PlatformUser; error?: string }> {
+    const decoded = platformJwtService.verifyToken(token);
+    if (!decoded.valid || !decoded.payload) {
+      return { valid: false, error: decoded.error || 'Invalid platform access token' };
+    }
+
+    const user = await this.validateSession(decoded.payload.jti);
+    if (!user) {
+      return { valid: false, error: 'Platform session is invalid or expired' };
+    }
+
+    return { valid: true, user };
+  }
+
   async revokeSession(jti: string): Promise<boolean> {
     const session = await prisma.platform_sessions.findFirst({
       where: { jti },
@@ -608,7 +618,7 @@ export class PlatformAuthService {
 
     return {
       sessionJti: session.jti,
-      familyId: session.token_family_id,
+      familyId: session.token_family_id ?? '',
       userId: session.platform_user_id,
     };
   }
@@ -670,7 +680,7 @@ export class PlatformAuthService {
         },
       });
 
-      return { newToken, newSessionJti, familyId: oldSession.token_family_id };
+      return { newToken, newSessionJti, familyId: oldSession.token_family_id ?? '' };
     });
 
     return result;

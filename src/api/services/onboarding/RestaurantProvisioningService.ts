@@ -1,10 +1,7 @@
 // src/api/services/onboarding/RestaurantProvisioningService.ts
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
-import { PlatformRole, AccountStatus } from '@prisma/client';
-import { platformJwtService } from '../platform/PlatformJwtService';
 import { platformAuthService } from '../platform/PlatformAuthService';
-import { config } from '../../../config/env';
 import { prisma } from '../../../shared/lib/prisma';
 
 export interface ProvisioningResult {
@@ -48,14 +45,6 @@ export class RestaurantProvisioningService {
         if (existingSlug) {
           throw new Error('A restaurant with this slug already exists');
         }
-
-        const existingEmail = await tx.staff.findFirst({
-          where: {
-            restaurant_id: {
-              not: '00000000-0000-0000-0000-000000000000',
-            },
-          },
-        });
 
         const restaurant = await tx.restaurants.create({
           data: {
@@ -155,6 +144,7 @@ export class RestaurantProvisioningService {
             entity_id: restaurant.id,
             details: {
               name: data.name,
+              owner_email: normalizedEmail,
               subscription_plan: subscriptionPlan,
               subscription_status: subscriptionStatus,
               owner_staff_id: ownerStaff.id,
