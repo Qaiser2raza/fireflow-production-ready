@@ -109,5 +109,9 @@ async function runTest() {
 runTest()
     .catch(console.error)
     .finally(async () => {
+        // OrderServiceFactory pulls the shared Prisma singleton; disconnect
+        // BOTH clients or open pool sockets keep the event loop alive.
         await prisma.$disconnect();
+        const { prisma: sharedPrisma } = await import('../src/shared/lib/prisma');
+        await sharedPrisma.$disconnect();
     });

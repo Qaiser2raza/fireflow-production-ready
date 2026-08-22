@@ -301,7 +301,11 @@ async function runTests() {
     }
 
     await cleanup();
+    // Disconnect BOTH clients: provisioning pulls the shared singleton, and
+    // open pool sockets would otherwise keep this passing run alive.
     await prisma.$disconnect();
+    const { prisma: sharedPrisma } = await import('../src/shared/lib/prisma');
+    await sharedPrisma.$disconnect();
 
     console.log('\n--- TEST SUMMARY ---');
     console.log(`Passed: ${passed}`);
@@ -311,6 +315,7 @@ async function runTests() {
     if (failed > 0) {
         process.exit(1);
     }
+    process.exit(0);
 }
 
 function assert(testName: string, condition: boolean, expected: string, actual: string) {

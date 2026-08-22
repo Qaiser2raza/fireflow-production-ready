@@ -506,9 +506,14 @@ async function runTests() {
     console.log(`Failed: ${failed}`);
     console.log(`Total: ${passed + failed}`);
 
+    // `prisma` is the shared singleton (imported at top); disconnect it and
+    // force-exit so pool sockets cannot hold the event loop open.
+    await prisma.$disconnect();
+
     if (failed > 0) {
         process.exit(1);
     }
+    process.exit(0);
 }
 
 runTests().catch(err => {

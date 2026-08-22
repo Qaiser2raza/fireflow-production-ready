@@ -237,9 +237,15 @@ async function runTests() {
     console.log(`Failed: ${failed}`);
     console.log(`Total: ${passed + failed}`);
 
+    // The suite reaches Prisma only through services (shared singleton);
+    // resolve it here and disconnect, then force-exit both paths.
+    const { prisma } = await import('../src/shared/lib/prisma');
+    await prisma.$disconnect();
+
     if (failed > 0) {
         process.exit(1);
     }
+    process.exit(0);
 }
 
 runTests().catch(err => {
