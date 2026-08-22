@@ -24,10 +24,10 @@ export class FBRService {
     /**
      * Synchronize an order with FBR IMS
      */
-    async syncOrder(orderId: string): Promise<SyncResult> {
+    async syncOrder(orderId: string, restaurantId: string): Promise<SyncResult> {
         try {
             const order = await prisma.orders.findUnique({
-                where: { id: orderId },
+                where: { id: orderId, restaurant_id: restaurantId },
                 include: {
                     order_items: {
                         include: {

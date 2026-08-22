@@ -1,4 +1,4 @@
-﻿-- Fix printers table for LOCAL printer support
+-- Fix printers table for LOCAL printer support
 -- 1. Make ip_address nullable
 ALTER TABLE printers ALTER COLUMN ip_address DROP NOT NULL;
 

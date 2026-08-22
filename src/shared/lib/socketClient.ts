@@ -5,8 +5,12 @@
 
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_URL = (typeof window !== 'undefined' 
-    ? (window.location.hostname === 'localhost' ? 'http://localhost:3001' : window.location.origin) 
+const isLocalDev = (typeof window !== 'undefined'
+    ? /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/.test(window.location.hostname)
+    : true);
+
+const SOCKET_URL = (typeof window !== 'undefined'
+    ? (isLocalDev ? 'http://localhost:3001' : window.location.origin)
     : 'http://localhost:3001');
 
 class SocketIOClient {
@@ -17,7 +21,12 @@ class SocketIOClient {
     private socketBoundEvents: Set<string> = new Set();
 
     connect() {
-        if (this.socket) return; // Already connected
+        if (this.socket && this.socket.connected) return;
+
+        if (this.socket) {
+            this.socket.disconnect();
+            this.socket = null;
+        }
 
         const accessToken = localStorage.getItem('accessToken');
 
@@ -26,24 +35,37 @@ class SocketIOClient {
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
-            reconnectionAttempts: Infinity,
+            reconnectionAttempts: 20,
+            timeout: 10000,
             extraHeaders: accessToken ? {
                 'Authorization': `Bearer ${accessToken}`
             } : {}
         });
 
+        let lastErrorMsg = '';
+        let errCount = 0;
+
         this.socket.on('connect', () => {
             console.log('[SOCKET.IO] Connected to server');
+            errCount = 0;
+            lastErrorMsg = '';
             // Re-dispatch to all registered wrapper listeners
             this._dispatchToListeners('connect', undefined);
         });
 
-        this.socket.on('disconnect', () => {
-            console.log('[SOCKET.IO] Disconnected from server');
+        this.socket.on('disconnect', (reason) => {
+            console.log('[SOCKET.IO] Disconnected from server:', reason);
         });
 
         this.socket.on('error', (error) => {
-            console.error('[SOCKET.IO] Error:', error);
+            const msg = typeof error === 'string' ? error : (error?.message || 'unknown');
+            errCount++;
+            // Rate-limit error logging: log first 3 errors, then every 10th
+            if (errCount <= 3 || errCount % 10 === 0) {
+                console.error('[SOCKET.IO] Error:', msg, '(attempt ' + errCount + ')');
+            } else if (msg !== lastErrorMsg) {
+                lastErrorMsg = msg;
+            }
         });
 
         // The one and only raw socket binding for db_change — never removed

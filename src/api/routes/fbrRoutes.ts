@@ -93,7 +93,7 @@ router.get('/invoices', async (req: any, res) => {
  */
 router.post('/sync/:orderId', requireRole('MANAGER', 'ADMIN'), async (req: any, res) => {
     try {
-        const result = await fbrService.syncOrder(req.params.orderId);
+        const result = await fbrService.syncOrder(req.params.orderId, req.restaurantId);
         if (!result.success) {
             const io = req.app.get('io');
             const restaurant_id = req.user?.restaurant_id || req.restaurantId;
@@ -111,10 +111,21 @@ router.post('/sync/:orderId', requireRole('MANAGER', 'ADMIN'), async (req: any, 
  * POST /api/fbr/void/:orderId
  * Voids a pending FBR invoice so it's excluded from sync batches
  */
-router.post('/void/:orderId', async (req: any, res) => {
+router.post('/void/:orderId', requireRole('MANAGER', 'ADMIN'), async (req: any, res) => {
     try {
+        const order = await prisma.orders.findFirst({
+            where: {
+                id: req.params.orderId,
+                restaurant_id: req.restaurantId
+            }
+        });
+
+        if (!order) {
+            return res.status(404).json({ success: false, error: 'Order not found or unauthorized' });
+        }
+
         await prisma.orders.update({
-            where: { id: req.params.orderId },
+            where: { id: order.id },
             data: { fbr_sync_status: 'VOIDED' } as any
         });
         res.json({ success: true });
@@ -253,7 +264,7 @@ router.post('/sync-all', requireRole('MANAGER', 'ADMIN'), async (req: any, res) 
 
         const results = [];
         for (const order of pendingOrders) {
-            const res = await fbrService.syncOrder(order.id);
+            const res = await fbrService.syncOrder(order.id, order.restaurant_id);
             results.push({ id: order.id, ...res });
         }
 

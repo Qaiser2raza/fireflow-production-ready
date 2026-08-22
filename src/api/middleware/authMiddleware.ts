@@ -17,6 +17,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { jwtService } from '../services/auth/JwtService';
+import { prisma } from '../../shared/lib/prisma';
 
 // ==========================================
 // TYPE EXTENSIONS
@@ -38,6 +39,7 @@ declare global {
         role: string;
         name: string;
       };
+      supportSession?: any;       // Active support session (set by supportSessionMiddleware)
     }
   }
 }
@@ -65,7 +67,6 @@ export async function authMiddleware(
     // PUBLIC: QR menu & ordering endpoints — no auth required
     const originalUrl = req.originalUrl.split('?')[0];
     const isPublicMenuGet = req.method === 'GET' && (
-      originalUrl.startsWith('/api/menu_items') || 
       originalUrl.startsWith('/api/menu_categories') ||
       originalUrl.startsWith('/api/orders/qr-status')
     );
@@ -122,9 +123,55 @@ export async function authMiddleware(
       return;
     }
 
-    // 4. Attach to request context
+    // 4. Verify staff exists and is active
+    const staffRecord = await prisma.staff.findFirst({
+      where: {
+        id: decoded.payload.staffId,
+        restaurant_id: decoded.payload.restaurantId,
+      },
+      select: {
+        id: true,
+        status: true,
+        restaurant_id: true,
+      },
+    });
+
+    if (!staffRecord) {
+      res.status(401).json({
+        error: 'Invalid credentials',
+        code: 'STAFF_NOT_FOUND'
+      });
+      return;
+    }
+
+    if (staffRecord.status !== 'active') {
+      res.status(403).json({
+        error: 'Account is inactive',
+        code: 'STAFF_INACTIVE'
+      });
+      return;
+    }
+
+    const restaurantRecord = await prisma.restaurants.findFirst({
+      where: {
+        id: decoded.payload.restaurantId,
+      },
+      select: {
+        id: true,
+        is_active: true,
+      },
+    });
+
+    if (!restaurantRecord || !restaurantRecord.is_active) {
+      res.status(403).json({
+        error: 'Restaurant is inactive',
+        code: 'RESTAURANT_INACTIVE'
+      });
+      return;
+    }
+
+    // 5. Attach to request context
     req.staffId = decoded.payload.staffId;
-    req.restaurantId = decoded.payload.restaurantId;
     req.role = decoded.payload.role;
     req.staff = {
       id: decoded.payload.staffId,
@@ -133,17 +180,44 @@ export async function authMiddleware(
       name: decoded.payload.name
     };
 
+    // Support session bridge: if supportSessionMiddleware already set req.restaurantId,
+    // do NOT override it with the tenant JWT's restaurantId.
+    if (!req.restaurantId) {
+      req.restaurantId = decoded.payload.restaurantId;
+    }
+
     console.log(`[AUTH] ${req.method} ${req.path} - Staff: ${req.staffId} (${req.role}) @ Restaurant: ${req.restaurantId}`);
 
-    // 5. SUPER_ADMIN: Allow targeting any restaurant via x-target-restaurant header
-    if (req.role === 'SUPER_ADMIN') {
+    // 6. SUPER_ADMIN: Allow targeting any restaurant via x-target-restaurant header
+    // TRANSITIONAL: This mechanism is deprecated. Migrate to support sessions.
+    // SUPPORT BRIDGE: If a support session is active, x-target-restaurant MUST NOT override it.
+    if (req.role === 'SUPER_ADMIN' && !req.supportSession) {
       const targetRestaurant = req.headers['x-target-restaurant'] as string | undefined;
       if (targetRestaurant && targetRestaurant.length > 0) {
         req.restaurantId = targetRestaurant;
+        try {
+          await prisma.audit_logs.create({
+            data: {
+              restaurant_id: targetRestaurant,
+              staff_id: req.staffId,
+              action_type: 'SUPER_ADMIN_TARGET_RESTAURANT',
+              entity_type: 'RESTAURANT',
+              entity_id: targetRestaurant,
+              details: {
+                original_restaurant_id: decoded.payload.restaurantId,
+                target_restaurant_id: targetRestaurant,
+                path: req.originalUrl,
+                method: req.method
+              }
+            }
+          });
+        } catch (auditError) {
+          console.error('[AUTH] Audit log failed for x-target-restaurant:', auditError);
+        }
       }
     }
 
-    // 6. Continue to next handler
+    // 7. Continue to next handler
     next();
 
   } catch (error: any) {

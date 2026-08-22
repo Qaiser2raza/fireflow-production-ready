@@ -17,6 +17,7 @@
  */
 
 import crypto from 'crypto';
+import { isProduction } from '../../../config/env';
 
 // ==========================================
 // TYPE DEFINITIONS
@@ -60,6 +61,9 @@ const JWT_ALGORITHM = 'HS256';
 function getSigningKey(): string {
   const key = process.env.FIREFLOW_JWT_SECRET;
   if (!key || key.length < 32) {
+    if (isProduction()) {
+      throw new Error('FIREFLOW_JWT_SECRET must be set in production');
+    }
     console.warn(
       '⚠️  [JWT] No FIREFLOW_JWT_SECRET in environment. Using random key. ' +
       'This will invalidate all tokens on restart. Set FIREFLOW_JWT_SECRET in production.'
@@ -105,35 +109,6 @@ export class JwtService {
       iat: now,
       exp,
       jti: crypto.randomUUID() // Unique ID for potential revocation
-    };
-
-    return this.sign(payload);
-  }
-
-  /**
-   * Generate refresh token (7 day lifetime)
-   * Used to obtain new access tokens without re-authentication
-   * 
-   * WARNING: Refresh tokens should be rotated on use (implement in Phase 2c)
-   */
-  generateRefreshToken(
-    staffId: string,
-    restaurantId: string,
-    role: string,
-    name: string
-  ): string {
-    const now = Math.floor(Date.now() / 1000);
-    const exp = now + JWT_REFRESH_EXPIRY_DAYS * 24 * 60 * 60;
-
-    const payload: JwtPayload = {
-      staffId,
-      restaurantId,
-      role,
-      name,
-      type: 'refresh',
-      iat: now,
-      exp,
-      jti: crypto.randomUUID()
     };
 
     return this.sign(payload);

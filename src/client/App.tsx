@@ -14,6 +14,7 @@ declare global {
 
 // --- COMPONENT IMPORTS ---
 import { LoginView } from '../auth/views/LoginView';
+import { SessionExpiredView } from '../auth/views/SessionExpiredView';
 import { POSView } from '../operations/pos/POSView';
 import { POSViewMobile } from '../operations/pos/POSViewMobile';
 import { calculateBill, getDefaultBillConfig } from '../lib/billEngine';
@@ -284,7 +285,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('accessTokenExpiry', expiryTime.toString());
       }
 
-      localStorage.setItem('saved_pin', pin);
       setCurrentUser(user);
       if (user.role === 'SUPER_ADMIN') {
         setActiveView('SUPER_ADMIN');
@@ -322,30 +322,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem('saved_pin');
   };
 
-  // Validate token on app load
+  // AUTO-LOGIN: Run exactly once on mount using stored JWT tokens.
+  // NOTE: Plaintext PIN auto-login via saved_pin has been removed for security.
   useEffect(() => {
-      const validateToken = async () => {
-        const token = localStorage.getItem('accessToken');
-        const expiry = localStorage.getItem('accessTokenExpiry');
-        
-        if (token && expiry) {
-          if (Date.now() > parseInt(expiry)) {
-            logout();
-          }
-        }
-      };
+    const token = localStorage.getItem('accessToken');
+    const expiry = localStorage.getItem('accessTokenExpiry');
     
-    validateToken();
-  }, []);
-
-  // AUTO-LOGIN: Run exactly once on mount. Separate from the socket effect so that
-  // login() completing and changing currentUser does NOT re-trigger this effect.
-  useEffect(() => {
-    const savedPin = localStorage.getItem('saved_pin');
-    if (savedPin) {
-      login(savedPin);
+    if (token && expiry) {
+      if (Date.now() > parseInt(expiry)) {
+        logout();
+      }
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     socketIO.connect();
@@ -954,7 +942,17 @@ const AppContent = () => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const { theme, toggleTheme } = useTheme();
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      setSessionExpired(true);
+    };
+
+    window.addEventListener('session:expired', handleSessionExpired);
+    return () => window.removeEventListener('session:expired', handleSessionExpired);
+  }, []);
 
   // Live clock update
   useEffect(() => {
@@ -979,16 +977,109 @@ const AppContent = () => {
   }, []);
 
   if (showDevicePairing) {
-    const { DevicePairingVerificationView } = require('../auth/views/DevicePairingVerificationView');
+    const DevicePairingVerificationView = React.lazy(() => import('../auth/views/DevicePairingVerificationView'));
     return (
-      <DevicePairingVerificationView
-        onPairingSuccess={() => {
-          setShowDevicePairing(false);
-          // Reload to pick up auth token and proceed to login
-          window.location.reload();
-        }}
-        onCancel={() => setShowDevicePairing(false)}
-      />
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <DevicePairingVerificationView
+          onPairingSuccess={() => {
+            setShowDevicePairing(false);
+            // Reload to pick up auth token and proceed to login
+            window.location.reload();
+          }}
+          onCancel={() => setShowDevicePairing(false)}
+        />
+      </React.Suspense>
+    );
+  }
+
+  if (sessionExpired) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-slate-950 flex items-center justify-center">
+        <SessionExpiredView onBackToLogin={() => { logout(); setSessionExpired(false); }} />
+      </div>
+    );
+  }
+
+  if (!currentUser) return <LoginView onLogin={login} onStartRegistration={() => setShowDevicePairing(true)} />;
+
+  let menuItems: any[] = [];
+
+  if (currentUser.role === 'SUPER_ADMIN') {
+    menuItems = [
+      { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
+    ];
+  } else if (currentUser.role === 'CASHIER') {
+    menuItems = [
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+      { id: 'POS', icon: Grid, label: 'POS Control' },
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+      { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+      { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+      { id: 'SETTINGS', icon: Settings, label: 'System' },
+    ];
+  } else if (currentUser.role === 'SERVER' || currentUser.role === 'WAITER') {
+    menuItems = [
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+      { id: 'POS', icon: Grid, label: 'POS Control' },
+    ];
+  } else if (currentUser.role === 'CHEF') {
+    menuItems = [
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+    ];
+  } else if (currentUser.role === 'RIDER') {
+    menuItems = [
+      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+    ];
+  } else {
+    menuItems = [
+      { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
+      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+      { id: 'POS', icon: Grid, label: 'POS Control' },
+      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+      { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
+      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+      { id: 'REGISTER', icon: CreditCard, label: 'Register' },
+      { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+      { id: 'STAFF', icon: Users, label: 'Personnel' },
+      { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+      { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
+      { id: 'SETTINGS', icon: Settings, label: 'System' },
+    ];
+  }
+
+  // Command palette commands
+  const commands = [
+    // Navigation
+    { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: 'ðŸ“Š', action: () => setActiveView('DASHBOARD') },
+    { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: 'ðŸ›’', action: () => setActiveView('POS') },
+    { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: 'ðŸ‘¨â€ ðŸ ³', action: () => setActiveView('KITCHEN') },
+    { id: 'nav-orders', label: 'Go to Dine-In Order Hub', shortcut: 'G O', category: 'Navigation', icon: 'ðŸ ½ï¸ ', action: () => setActiveView('ORDER_HUB') },
+    { id: 'nav-logistics', label: 'Go to Logistics', shortcut: 'G L', category: 'Navigation', icon: 'ðŸšš', action: () => setActiveView('LOGISTICS') },
+    { id: 'nav-billing', label: 'Go to Billing', shortcut: 'G B', category: 'Navigation', icon: 'ðŸ’³', action: () => setActiveView('BILLING') },
+    { id: 'nav-settlement', label: 'Go to Settlement', shortcut: 'G $', category: 'Navigation', icon: 'ðŸ’°', action: () => setActiveView('SETTLEMENT') },
+    { id: 'nav-menu', label: 'Go to Menu', shortcut: 'G M', category: 'Navigation', icon: 'â˜•', action: () => setActiveView('MENU') },
+    { id: 'nav-settings', label: 'Go to Settings', shortcut: 'G S', category: 'Navigation', icon: 'âš™ï¸ ', action: () => setActiveView('SETTINGS') },
+    // Actions
+    { id: 'action-refresh', label: 'Refresh Data', shortcut: 'Ctrl+R', category: 'Actions', icon: 'ðŸ”„', action: () => fetchInitialData() },
+    { id: 'action-theme', label: 'Toggle Theme', shortcut: 'Ctrl+T', category: 'Actions', icon: 'ðŸŒ™', action: toggleTheme },
+    { id: 'action-logout', label: 'Logout', shortcut: 'Ctrl+Q', category: 'Actions', icon: 'ðŸšª', action: logout },
+  ];
+
+
+
+
+
+
+
+
+  if (sessionExpired) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-slate-950 flex items-center justify-center">
+        <SessionExpiredView onBackToLogin={() => { logout(); setSessionExpired(false); }} />
+      </div>
     );
   }
 

@@ -18,6 +18,7 @@ interface RestaurantWithOwner {
   city: string;
   subscription_status: 'trial' | 'active' | 'expired';
   subscription_plan: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
+  is_active: boolean;
   ownerName?: string;
   staffCount: number;
   orderCount: number;
@@ -103,6 +104,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
         city: r.address?.split(',').pop()?.trim() || 'Remote',
         subscription_status: r.subscription_status || 'trial',
         subscription_plan: r.subscription_plan || 'BASIC',
+        is_active: r.is_active ?? true,
         ownerName: r.staff?.[0]?.name || 'N/A',
         staffCount: r._count?.staff ?? 0,
         orderCount: r._count?.orders ?? 0,
@@ -325,6 +327,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                       <h3 className="text-white font-bold text-xl flex items-center gap-2">
                         {r.name}
                         <StatusBadge status={r.subscription_status} />
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black tracking-widest uppercase border ${r.is_active ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : 'text-slate-500 bg-slate-500/10 border-slate-500/20'}`}>
+                          {r.is_active ? 'ACTIVE' : 'INACTIVE'}
+                        </span>
                       </h3>
                       <div className="flex items-center gap-4 mt-1 text-slate-500 text-sm font-medium">
                         <span className="flex items-center gap-1"><Users size={14} /> {r.staffCount} Staff</span>
@@ -345,10 +350,11 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                     </button>
                     <button
                       onClick={() => handleManageRestaurant(r)}
-                      className="px-4 py-2 bg-gold-500 hover:bg-gold-600 text-black rounded-lg text-sm font-black flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(234,179,8,0.2)] hover:shadow-[0_0_20px_rgba(234,179,8,0.35)]"
-                      title="Enter restaurant mode — access full POS, Settings & Factory Reset"
+                      disabled={!r.is_active}
+                      className={`px-4 py-2 rounded-lg text-sm font-black flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(234,179,8,0.2)] hover:shadow-[0_0_20px_rgba(234,179,8,0.35)] ${r.is_active ? 'bg-gold-500 hover:bg-gold-600 text-black' : 'bg-slate-700 text-slate-400 cursor-not-allowed'}`}
+                      title={r.is_active ? 'Enter restaurant mode — access full POS, Settings & Factory Reset' : 'This restaurant is inactive'}
                     >
-                      Enter <ExternalLink size={14} />
+                      {r.is_active ? <><span>Enter</span> <ExternalLink size={14} /></> : 'Inactive'}
                     </button>
                   </div>
                 </div>

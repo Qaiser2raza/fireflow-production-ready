@@ -199,6 +199,7 @@ router.post('/session/close', async (req, res) => {
         const validated = closeSessionSchema.omit({ staffId: true }).parse(req.body);
         const session = await accounting.closeCashSession({
             ...validated,
+            restaurantId: req.restaurantId,
             staffId: req.staffId! // SaaS Security
         });
         res.json({ success: true, session });
@@ -262,7 +263,11 @@ router.get('/balance/:staffId', async (req, res) => {
  */
 router.get('/z-report/:sessionId', async (req, res) => {
     try {
-        const report = await accounting.getZReport(req.params.sessionId);
+        const sessionId = req.params.sessionId;
+        if (!sessionId) {
+            return res.status(400).json({ error: 'sessionId is required' });
+        }
+        const report = await accounting.getZReport(sessionId, req.restaurantId!);
         res.json({ success: true, report });
     } catch (e: any) {
         res.status(500).json({ error: e.message });

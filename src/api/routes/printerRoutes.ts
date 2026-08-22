@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../../shared/lib/prisma';
 import { z } from 'zod';
 import { PrinterService } from '../services/PrinterService';
+import { requireRole } from '../middleware/authMiddleware';
 
 const router = Router();
 const printerSchema = z.object({
@@ -15,7 +16,7 @@ const printerSchema = z.object({
 });
 
 // GET all printers for restaurant
-router.get('/', async (req, res) => {
+router.get('/', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const restaurant_id = req.restaurantId!;
         const printers = await prisma.printers.findMany({
@@ -23,14 +24,18 @@ router.get('/', async (req, res) => {
             include: { stations: true },
             orderBy: { created_at: 'desc' }
         });
-        res.json(printers);
+        const sanitized = printers.map(p => {
+            const { ip_address, ...rest } = p as any;
+            return rest;
+        });
+        res.json(sanitized);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
 });
 
 // POST create printer
-router.post('/', async (req, res) => {
+router.post('/', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const restaurant_id = req.restaurantId!;
         const data = printerSchema.parse(req.body);
@@ -51,7 +56,7 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH update printer
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const { id } = req.params;
         const restaurant_id = req.restaurantId!;
@@ -70,7 +75,7 @@ router.patch('/:id', async (req, res) => {
 });
 
 // DELETE printer
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const { id } = req.params;
         const restaurant_id = req.restaurantId!;
@@ -163,7 +168,7 @@ router.post('/print-table-qr', async (req, res) => {
             <p>Enjoy your meal!</p>
         </body></html>`;
 
-        await PrinterService.printDocument(printer.id, htmlContent);
+        await PrinterService.printDocument(printer.id, restaurant_id, htmlContent);
 
         res.json({ success: true, message: 'Table QR printed successfully' });
     } catch (e: any) {

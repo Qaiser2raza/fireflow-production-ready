@@ -314,7 +314,7 @@ router.post('/orders/:orderId/mark-delivered', async (req, res) => {
             }
 
             // 3. FINANCIAL RECORDING: Revenue recognized at delivery
-            await accounting.recordOrderSale(orderId, tx);
+            await accounting.recordOrderSale(orderId, order.restaurant_id, tx);
 
             // Create audit log
             await tx.audit_logs.create({

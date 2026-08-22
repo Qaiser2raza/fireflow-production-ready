@@ -7,36 +7,47 @@ const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api'
 /**
  * Refresh access token using refresh token
  */
+let refreshPromise: Promise<string | null> | null = null;
+
 async function refreshAccessToken(): Promise<string | null> {
-  try {
-    const refreshToken = localStorage.getItem('refreshToken');
-
-    if (!refreshToken) {
-      console.log('[Auth] No refresh token available');
-      return null;
-    }
-
-    const response = await fetch(`${API_URL}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken })
-    });
-
-    if (!response.ok) {
-      console.error('[Auth] Refresh token invalid or expired');
-      return null;
-    }
-
-    const data = await response.json();
-    localStorage.setItem('accessToken', data.access_token);
-    const expiryTime = Date.now() + (data.expires_in * 1000);
-    localStorage.setItem('accessTokenExpiry', expiryTime.toString());
-    console.log('[Auth] Token refreshed successfully');
-    return data.access_token;
-  } catch (err) {
-    console.error('[Auth] Refresh failed:', err);
-    return null;
+  if (refreshPromise) {
+    return refreshPromise;
   }
+
+  refreshPromise = (async () => {
+    try {
+      const refreshToken = localStorage.getItem('refreshToken');
+
+      if (!refreshToken) {
+        return null;
+      }
+
+      const response = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken })
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const data = await response.json();
+      localStorage.setItem('accessToken', data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem('refreshToken', data.refresh_token);
+      }
+      const expiryTime = Date.now() + (data.expires_in * 1000);
+      localStorage.setItem('accessTokenExpiry', expiryTime.toString());
+      return data.access_token;
+    } catch (err) {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
 }
 
 /**

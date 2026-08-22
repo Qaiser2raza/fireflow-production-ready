@@ -117,7 +117,7 @@ export abstract class BaseOrderService implements IOrderService {
             } : undefined);
 
             // 5. Return full order with items for frontend sync
-            return await tx.orders.findUnique({
+            const fullOrder = await tx.orders.findUnique({
                 where: { id: order.id },
                 include: {
                     order_items: {
@@ -131,19 +131,89 @@ export abstract class BaseOrderService implements IOrderService {
                     reservation_orders: true
                 }
             }) as orders;
+
+            // 6. Write outbox event for ORDER_CREATED (minimal business payload)
+            await tx.outbox.create({
+                data: {
+                    restaurant_id: data.restaurant_id,
+                    event_type: 'ORDER_CREATED',
+                    aggregate_type: 'orders',
+                    aggregate_id: order.id,
+                    payload: {
+                        orderId: order.id,
+                        orderNumber: order.order_number,
+                        restaurantId: data.restaurant_id,
+                        tableId: order.table_id,
+                        type: order.type,
+                        status: order.status,
+                        total: order.total,
+                        occurredAt: order.created_at.toISOString()
+                    }
+                }
+            });
+
+            return fullOrder;
         }, { timeout: 20000, maxWait: 20000 });
     }
 
     // Inside BaseOrderService.ts
-    async updateOrder(id: string, data: UpdateOrderDTO): Promise<orders> {
+    async updateOrder(restaurantId: string, id: string, data: UpdateOrderDTO): Promise<orders> {
         return await prisma.$transaction(async (tx) => {
-            // 1. Fetch current state
+            // 1. Fetch current state with tenant verification
             const currentOrder = await tx.orders.findUnique({
                 where: { id },
                 include: { dine_in_orders: true }
             });
 
             if (!currentOrder) throw new Error('Order not found');
+            if (currentOrder.restaurant_id !== restaurantId) {
+                throw new Error('Access denied: Order does not belong to this restaurant');
+            }
+
+            if ((data as any).refund_transaction_id || (data as any).void_notes) {
+                throw new Error('Refund state cannot be set through generic order update');
+            }
+
+            const isVoidOrCancel = data.status === 'CANCELLED' || data.status === 'VOIDED';
+            if (isVoidOrCancel) {
+                const hasFireBatches = await tx.fire_batches.count({ where: { order_id: id } }) > 0;
+                const isPaid = currentOrder.payment_status === 'PAID';
+
+                if (data.status === 'CANCELLED') {
+                    if (hasFireBatches) {
+                        throw new Error('Cannot cancel: order has been sent to kitchen');
+                    }
+                    if (isPaid) {
+                        throw new Error('Cannot cancel: order is already paid');
+                    }
+                }
+
+                if (data.status === 'VOIDED') {
+                    if (!hasFireBatches) {
+                        throw new Error('Cannot void: order has not been sent to kitchen');
+                    }
+                    if (isPaid) {
+                        throw new Error('Cannot void: order is already paid');
+                    }
+                }
+
+                await tx.audit_logs.create({
+                    data: {
+                        restaurant_id: currentOrder.restaurant_id,
+                        action_type: data.status === 'CANCELLED' ? 'ORDER_CANCELLED' : 'ORDER_VOIDED',
+                        entity_type: 'ORDER',
+                        entity_id: id,
+                        staff_id: (data as any).authorized_by || (data as any).manager_id || null,
+                        details: {
+                            order_number: currentOrder.order_number,
+                            previous_status: currentOrder.status,
+                            new_status: data.status,
+                            has_fire_batches: hasFireBatches,
+                            payment_status: currentOrder.payment_status
+                        }
+                    }
+                });
+            }
 
             // 2. Handle Order Type Transition Cleanup
             if (currentOrder.type !== data.type) {
@@ -402,9 +472,9 @@ export abstract class BaseOrderService implements IOrderService {
         return (map[status] || status) as any;
     }
 
-    async getOrderDetails(id: string): Promise<orders | null> {
+    async getOrderDetails(id: string, restaurantId: string): Promise<orders | null> {
         const order = await prisma.orders.findUnique({
-            where: { id },
+            where: { id, restaurant_id: restaurantId },
             include: {
                 order_items: {
                     include: {
@@ -491,6 +561,19 @@ export abstract class BaseOrderService implements IOrderService {
         
         // Step 2 - Apply discount → taxable_amount
         const discountAmount = Number(overrideBreakdown?.discount ?? order.discount ?? 0);
+        if (discountAmount < 0) {
+            throw new Error('Invalid discount: negative values are not allowed');
+        }
+        if (discountAmount > subtotal) {
+            throw new Error('Invalid discount: discount cannot exceed subtotal');
+        }
+
+        const maxDiscountRate = Number(config.discount_max) / 100;
+        const maxAllowedDiscount = subtotal * maxDiscountRate;
+        if (discountAmount > maxAllowedDiscount) {
+            throw new Error(`Invalid discount: exceeds maximum allowed discount of ${config.discount_max}%`);
+        }
+
         const taxable_amount = Math.max(0, subtotal - discountAmount);
 
         // Step 3 - Tax
@@ -596,9 +679,9 @@ export abstract class BaseOrderService implements IOrderService {
         });
     }
 
-    async fireOrderToKitchen(orderId: string, io: any, metadata?: { staffId: string; sessionId?: string }): Promise<orders> {
+    async fireOrderToKitchen(orderId: string, restaurantId: string, io: any, metadata?: { staffId: string; sessionId?: string }): Promise<orders> {
         // 1. Validation before Firing
-        const currentOrder = await this.getOrderDetails(orderId);
+        const currentOrder = await this.getOrderDetails(orderId, restaurantId);
         if (!currentOrder) throw new Error('Order not found');
 
         const deliveryData = (currentOrder as any).delivery_orders?.[0] || {};
@@ -783,13 +866,16 @@ export abstract class BaseOrderService implements IOrderService {
         });
     }
 
-    async deleteOrder(id: string): Promise<boolean> {
+    async deleteOrder(restaurantId: string, id: string): Promise<boolean> {
         return await prisma.$transaction(async (tx) => {
             const order = await tx.orders.findUnique({
                 where: { id }
             });
 
             if (!order) return false;
+            if (order.restaurant_id !== restaurantId) {
+                throw new Error('Access denied: Order does not belong to this restaurant');
+            }
 
             // 1. Rollback table status if it was DINE_IN
             if (order.type === 'DINE_IN' && order.table_id) {

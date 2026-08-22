@@ -1,15 +1,104 @@
-name: CI – Build & Type Check
+name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
 
 jobs:
-  build:
+  test:
+    name: Test Suite
     runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: admin123
+          POSTGRES_DB: fireflow_test_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready -U postgres
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 20
-    - run: npm ci
-    - run: npx tsc --noEmit          # type check
-    - run: npm run build --if-present # build check
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Run typecheck
+        run: npm run build:backend
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U postgres; then
+              echo "PostgreSQL is ready"
+              exit 0
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready in time"
+          exit 1
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: postgresql://postgres:admin123@localhost:5432/fireflow_test_ci?schema=public
+        run: npx prisma migrate deploy
+
+      - name: Run Mission 009 tests
+        env:
+          DATABASE_URL: postgresql://postgres:admin123@localhost:5432/fireflow_test_ci?schema=public
+        run: npx tsx tests/mission-009-outbox-runtime.test.ts
+
+      - name: Run Mission 010 tests
+        env:
+          DATABASE_URL: postgresql://postgres:admin123@localhost:5432/fireflow_test_ci?schema=public
+        run: npx tsx tests/mission-010-integration-runtime.test.ts
+
+      - name: Run Mission 011 tests
+        env:
+          DATABASE_URL: postgresql://postgres:admin123@localhost:5432/fireflow_test_ci?schema=public
+        run: npx tsx tests/mission-011-payment-lifecycle.test.ts
+
+      - name: Run Mission 012 tests
+        env:
+          DATABASE_URL: postgresql://postgres:admin123@localhost:5432/fireflow_test_ci?schema=public
+        run: npx tsx tests/mission-012-generic-fiscal-document-boundary.test.ts
+
+      - name: Run Mission 013 tests
+        env:
+          DATABASE_URL: postgresql://postgres:admin123@localhost:5432/fireflow_test_ci?schema=public
+        run: npx tsx tests/mission-013-first-regional-fiscal-connector.test.ts
+
+      - name: Run Mission 014A tests
+        env:
+          DATABASE_URL: postgresql://postgres:admin123@localhost:5432/fireflow_test_ci?schema=public
+        run: npx tsx tests/mission-014A-pos-security.test.ts
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            tests/
+            *.log
+          retention-days: 7

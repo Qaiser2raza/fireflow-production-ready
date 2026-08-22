@@ -144,8 +144,8 @@ export async function verifyPairingCode(
   expiresAt: string;
 }> {
   // Fetch code record (with expiry + attempt check)
-  const rawPairingCode = await prisma.pairing_codes.findUnique({
-    where: { id: codeId }
+  const rawPairingCode = await prisma.pairing_codes.findFirst({
+    where: { id: codeId, restaurant_id: restaurantId }
   });
 
   if (!rawPairingCode) {

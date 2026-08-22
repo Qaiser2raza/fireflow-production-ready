@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import { CashierSessionService } from '../services/finance/CashierSessionService.js';
 import { CashierShiftLogService } from '../services/finance/CashierShiftLogService.js';
-import { requireRole } from '../middleware/authMiddleware.js';
+import { authMiddleware, requireRole } from '../middleware/authMiddleware.js';
 
 const router = Router();
 // Get current active session for a staff member
-router.get('/current', async (req, res) => {
+router.get('/current', authMiddleware, async (req, res) => {
     try {
-        const { restaurantId, staffId } = req.query;
+        const { staffId } = req.query;
+        const restaurantId = req.restaurantId;
         if (!restaurantId || !staffId) return res.status(400).json({ success: false, error: 'Missing params' });
         
         const result = await CashierSessionService.getActiveSession(restaurantId as string, staffId as string);
@@ -18,14 +19,15 @@ router.get('/current', async (req, res) => {
 });
 
 // Open a new session
-router.post('/open', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/open', authMiddleware, requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     if ((req as any).role === 'MANAGER' || (req as any).role === 'ADMIN' || (req as any).role === 'SUPER_ADMIN') {
       return res.status(403).json({ 
         error: 'Managers cannot open cashier sessions. This action is restricted to CASHIER role only.' 
       });
     }
     try {
-        const { restaurantId, staffId, openingFloat, expectedFloat, terminalId } = req.body;
+        const { staffId, openingFloat, expectedFloat, terminalId } = req.body;
+        const restaurantId = req.restaurantId;
         if (!restaurantId || !staffId) return res.status(400).json({ success: false, error: 'Missing params' });
         
         const session = await CashierSessionService.openSession(restaurantId, staffId, Number(openingFloat || 0), Number(expectedFloat || 0), terminalId);
@@ -63,7 +65,7 @@ router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'),
             });
         }
         
-        const session = await CashierSessionService.closeSession(sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
+        const session = await CashierSessionService.closeSession(req.restaurantId, sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
         res.json({ success: true, session });
     } catch (e: any) {
         res.status(500).json({ success: false, error: e.message });
@@ -73,7 +75,7 @@ router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'),
 // Get summary for a specific session
 router.get('/:id/summary', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
-        const summary = await CashierSessionService.getSessionSummary(req.params.id);
+        const summary = await CashierSessionService.getSessionSummary(req.restaurantId, req.params.id);
         res.json({ success: true, summary });
     } catch (e: any) {
         res.status(500).json({ success: false, error: e.message });
@@ -83,7 +85,7 @@ router.get('/:id/summary', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADM
 // --- Suspense / Shift Log Endpoints ---
 
 // Get all logs for a specific session
-router.get('/:id/logs', async (req, res) => {
+router.get('/:id/logs', authMiddleware, async (req, res) => {
     try {
         const logs = await CashierShiftLogService.getLogsForSession(req.params.id);
         res.json({ success: true, logs });
@@ -93,9 +95,10 @@ router.get('/:id/logs', async (req, res) => {
 });
 
 // Create a new pending log (Cashier action)
-router.post('/:id/logs', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/:id/logs', authMiddleware, requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
-        const { restaurantId, type, amount, description, category, referenceId } = req.body;
+        const { type, amount, description, category, referenceId } = req.body;
+        const restaurantId = req.restaurantId;
         const log = await CashierShiftLogService.createLog({
             restaurantId,
             sessionId: req.params.id,
@@ -139,7 +142,8 @@ router.post('/logs/:logId/resolve', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN
 router.post('/:id/distribute-svc', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const sessionId = req.params.id;
-        const { distributions, totalAmount: bodyTotal, restaurantId } = req.body;
+        const { distributions, totalAmount: bodyTotal } = req.body;
+        const restaurantId = req.restaurantId;
 
         const totalAmount = bodyTotal ? Number(bodyTotal) : (distributions?.reduce((sum: number, d: any) => sum + Number(d.amount || 0), 0) || 0);
         
@@ -148,7 +152,7 @@ router.post('/:id/distribute-svc', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'S
         }
 
         const result = await CashierSessionService.distributeSVC({
-            restaurantId: restaurantId || req.restaurantId!,
+            restaurantId: req.restaurantId,
             sessionId,
             totalAmount,
             distributions: distributions || [],
@@ -172,14 +176,15 @@ router.post('/:id/distribute-svc', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'S
 router.post('/:id/manager-drawing', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
         const sessionId = req.params.id;
-        const { amount, notes, restaurantId } = req.body;
+        const { amount, notes } = req.body;
+        const restaurantId = req.restaurantId;
 
         if (!amount || Number(amount) <= 0) {
             return res.status(400).json({ success: false, error: 'A positive amount is required' });
         }
 
         const result = await CashierSessionService.recordManagerDrawing({
-            restaurantId: restaurantId || req.restaurantId!,
+            restaurantId,
             sessionId,
             amount: Number(amount),
             notes,

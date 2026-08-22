@@ -1,6 +1,5 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
 import { X, Send, Loader2, Bot, Terminal } from 'lucide-react';
 import { Order, Table, MenuItem, Server } from '../../shared/types';
 
@@ -35,32 +34,12 @@ export const FIREFLOWAI: React.FC<AURAAssistantProps> = ({ onClose, context }) =
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const systemPrompt = `
-        You are FIREFLOW AI, the intelligence core of a high-performance restaurant system.
-        Current Restaurant Context:
-        - Active Orders: ${context.orders.length}
-        - Total Tables: ${context.tables.length}
-        - Occupied Tables: ${context.tables.filter(t => t.status === 'OCCUPIED').length}
-        - Menu Items: ${context.menuItems.length}
-        - User: ${context.currentUser?.name} (Role: ${context.currentUser?.role})
-
-        Instructions:
-        1. Be concise, precise, and professional.
-        2. Provide actionable insights. 
-        3. If asked about revenue, analyze the ${context.orders.length} active orders and their totals.
-        4. Refer to yourself as FIREFLOW AI.
-      `;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: userMsg,
-        config: { systemInstruction: systemPrompt }
-      });
-
-      setMessages(prev => [...prev, { role: 'ai', content: response.text || "Error processing intelligence stream." }]);
+      setMessages(prev => [...prev, { 
+        role: 'ai', 
+        content: 'FIREFLOW AI is currently unavailable. Server-side intelligence tools are being prepared and will be available in a future update.' 
+      }]);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'ai', content: "FIREFLOW AI communication relay failed. Check connectivity." }]);
+      setMessages(prev => [...prev, { role: 'ai', content: 'FIREFLOW AI communication relay failed. Check connectivity.' }]);
     } finally {
       setIsLoading(false);
     }

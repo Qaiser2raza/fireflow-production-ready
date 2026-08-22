@@ -43,7 +43,7 @@ export class AccountingService {
      * Records a sale in the ledger (Double-Entry).
      * Impacts: Credit Revenue, Debit Asset (Cash Drawer or Rider).
      */
-    async recordOrderSale(orderId: string, tx?: any, paymentOverride?: { amount: number, paymentMethod: string }) {
+    async recordOrderSale(orderId: string, restaurantId: string, tx?: any, paymentOverride?: { amount: number, paymentMethod: string }) {
         const db = tx || prisma;
 
         // 0. Check if revenue already recorded for this order (Idempotency)
@@ -58,9 +58,9 @@ export class AccountingService {
 
         if (existingRevenue) return;
 
-        // Fetch full order details
+        // Fetch full order details — scoped to tenant
         const order = await db.orders.findUnique({
-            where: { id: orderId }
+            where: { id: orderId, restaurant_id: restaurantId }
         });
 
         if (!order) return;
@@ -199,7 +199,7 @@ export class AccountingService {
         }
 
         // ── Double-Entry: Post to Chart of Accounts journal ──────────────
-        await journalEntryService.recordOrderSaleJournal(orderId, db, paymentOverride);
+        await journalEntryService.recordOrderSaleJournal(orderId, order.restaurant_id, db, paymentOverride);
     }
 
     /**
@@ -725,6 +725,7 @@ export class AccountingService {
 
     async closeCashSession(data: {
         sessionId: string;
+        restaurantId: string;
         staffId: string;
         actualBalance: number | Decimal;
         notes?: string;
@@ -735,6 +736,10 @@ export class AccountingService {
 
         if (!session || session.status === 'CLOSED') {
             throw new Error('Valid open session required for closing');
+        }
+
+        if (session.restaurant_id !== data.restaurantId) {
+            throw new Error('Session does not belong to this restaurant');
         }
 
         const actual = new Decimal(data.actualBalance.toString());
@@ -1078,12 +1083,16 @@ export class AccountingService {
      * GENERATE FULL Z-REPORT (End of Day Summary)
      * Full audit-grade report with staff, tax, voids, velocity, and payout breakdown.
      */
-    async getZReport(sessionId: string) {
+    async getZReport(sessionId: string, restaurantId: string) {
         const session = await prisma.cashier_sessions.findUnique({
             where: { id: sessionId }
         });
 
         if (!session) throw new Error('Session not found');
+
+        if (session.restaurant_id !== restaurantId) {
+            throw new Error('Session does not belong to this restaurant');
+        }
 
         const startTime = session.opened_at;
         const endTime = session.closed_at || new Date();

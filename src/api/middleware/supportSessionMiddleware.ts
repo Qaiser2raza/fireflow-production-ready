@@ -39,6 +39,7 @@ export async function supportSessionMiddleware(
 
     req.supportSession = session;
     req.supportScopes = session.scope;
+    req.restaurantId = session.restaurant_id;
 
     next();
   } catch (error: any) {

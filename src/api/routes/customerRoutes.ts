@@ -511,7 +511,7 @@ router.post('/customers/:id/charge', async (req, res) => {
                 transaction_ref: `KHATA-${Date.now()}`
             }
         });
-        await accounting.recordOrderSale(orderId);
+        await accounting.recordOrderSale(orderId, req.restaurantId!);
     } else {
         await accounting.recordManualCharge({
             restaurantId: req.restaurantId!,

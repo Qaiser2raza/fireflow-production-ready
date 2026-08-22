@@ -90,7 +90,7 @@ export class CashierSessionService {
         });
     }
 
-    static async closeSession(sessionId: string, actualCash: number, withdrawnAmount: number, closedBy: string, notes?: string) {
+    static async closeSession(restaurantId: string, sessionId: string, actualCash: number, withdrawnAmount: number, closedBy: string, notes?: string) {
         const { journalEntryService } = await import('../JournalEntryService.js');
         const session = await prisma.cashier_sessions.findUnique({
             where: { id: sessionId }
@@ -98,6 +98,10 @@ export class CashierSessionService {
 
         if (!session || session.status === 'CLOSED') {
             throw new Error('Invalid or already closed session.');
+        }
+
+        if (session.restaurant_id !== restaurantId) {
+            throw new Error('Access denied: Session does not belong to this restaurant');
         }
 
         const cashAccount = await prisma.chart_of_accounts.findFirst({
@@ -166,7 +170,7 @@ export class CashierSessionService {
         return updated;
     }
 
-    static async getSessionSummary(sessionId: string) {
+    static async getSessionSummary(restaurantId: string, sessionId: string) {
         const session = await prisma.cashier_sessions.findUnique({
             where: { id: sessionId },
             include: { 
@@ -176,6 +180,9 @@ export class CashierSessionService {
         });
 
         if (!session) throw new Error('Session not found');
+        if (session.restaurant_id !== restaurantId) {
+            throw new Error('Access denied: Session does not belong to this restaurant');
+        }
 
         // Use a direct query filtered by session_id — this guarantees ALL order types
         // (DINE_IN, TAKEAWAY, DELIVERY settled via settle route) are captured,
@@ -312,6 +319,14 @@ export class CashierSessionService {
         });
         if (existing) throw new Error('SVC already distributed for this session.');
 
+        // Verify session ownership
+        const session = await prisma.cashier_sessions.findUnique({
+            where: { id: params.sessionId }
+        });
+        if (!session || session.restaurant_id !== params.restaurantId) {
+            throw new Error('Access denied: Session does not belong to this restaurant');
+        }
+
         await journalEntryService.recordSVCDistributionJournal({
             restaurantId: params.restaurantId,
             sessionId: params.sessionId,
@@ -339,6 +354,14 @@ export class CashierSessionService {
     }) {
         const { journalEntryService } = await import('../JournalEntryService.js');
         const refId = `DRAWING-${params.sessionId}-${Date.now()}`;
+
+        // Verify session ownership
+        const session = await prisma.cashier_sessions.findUnique({
+            where: { id: params.sessionId }
+        });
+        if (!session || session.restaurant_id !== params.restaurantId) {
+            throw new Error('Access denied: Session does not belong to this restaurant');
+        }
 
         await journalEntryService.recordManagerDrawingJournal({
             restaurantId: params.restaurantId,

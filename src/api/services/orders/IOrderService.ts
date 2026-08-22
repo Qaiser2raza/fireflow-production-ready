@@ -15,10 +15,10 @@ export type UpdateOrderDTO = Partial<CreateOrderDTO> & {
 };
 export interface IOrderService {
     createOrder(data: CreateOrderDTO): Promise<orders>;
-    updateOrder(id: string, data: UpdateOrderDTO): Promise<orders>;
-    getOrderDetails(id: string): Promise<orders | null>;
+    updateOrder(restaurantId: string, id: string, data: UpdateOrderDTO): Promise<orders>;
+    getOrderDetails(id: string, restaurantId: string): Promise<orders | null>;
     validateOrder(data: CreateOrderDTO, context?: 'DRAFT' | 'FIRE'): { valid: boolean; errors: string[] };
-    fireOrderToKitchen(orderId: string, io: any, metadata?: { staffId: string; sessionId?: string }): Promise<orders>;
+    fireOrderToKitchen(orderId: string, restaurantId: string, io: any, metadata?: { staffId: string; sessionId?: string }): Promise<orders>;
     recallOrderBatch(orderId: string, io: any, metadata: { staffId: string; sessionId?: string }): Promise<orders>;
-    deleteOrder(id: string): Promise<boolean>;
+    deleteOrder(restaurantId: string, id: string): Promise<boolean>;
 }

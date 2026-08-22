@@ -33,8 +33,10 @@ export class PrinterService {
     /**
      * Unified print method
      */
-    static async printDocument(printerId: string, htmlContent: string): Promise<void> {
-        const printer = await prisma.printers.findUnique({ where: { id: printerId } });
+    static async printDocument(printerId: string, restaurantId: string, htmlContent: string): Promise<void> {
+        const printer = await prisma.printers.findFirst({
+            where: { id: printerId, restaurant_id: restaurantId }
+        });
         if (!printer) throw new Error('Printer not found');
 
         if (printer.connection_type === 'LOCAL') {

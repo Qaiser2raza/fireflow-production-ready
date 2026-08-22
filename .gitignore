@@ -57,7 +57,14 @@ tmp/
 # Scratch & Reports
 scratch_*.ts
 scratch_*.js
+scratch/
 *.mjs
 reconciliation_audit_report.md
 403_error_investigation_report.md
 implementation_plan.md
+
+# ============================================================
+# LOCAL AGENT / WORKSPACE STATE (never commit)
+# ============================================================
+.kilo/
+.kilo

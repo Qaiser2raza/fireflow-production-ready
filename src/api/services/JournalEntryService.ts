@@ -165,6 +165,7 @@ export class JournalEntryService {
      */
     async recordOrderSaleJournal(
         orderId: string,
+        expectedRestaurantId: string,
         tx: any,
         paymentOverride?: { amount: number | Decimal, paymentMethod: string }
     ) {
@@ -177,7 +178,7 @@ export class JournalEntryService {
         if (existing) return;
 
         const order = await db.orders.findUnique({
-            where: { id: orderId },
+            where: { id: orderId, restaurant_id: expectedRestaurantId },
             include: { transactions: true }
         });
         if (!order) return;
@@ -702,7 +703,7 @@ export class JournalEntryService {
      * CR  2000  Tax Payable           tax   (if applicable)
      * CR  2010  Service Charge        sc    (if applicable)
      */
-    async recordCreditSaleJournal(orderId: string, customerId: string, tx: any) {
+    async recordCreditSaleJournal(orderId: string, customerId: string, expectedRestaurantId: string, tx: any) {
         const db = tx;
 
         // Idempotency
@@ -711,7 +712,7 @@ export class JournalEntryService {
         });
         if (existing) return;
 
-        const order = await db.orders.findUnique({ where: { id: orderId } });
+        const order = await db.orders.findUnique({ where: { id: orderId, restaurant_id: expectedRestaurantId } });
         if (!order) return;
 
         const restaurantId = order.restaurant_id;

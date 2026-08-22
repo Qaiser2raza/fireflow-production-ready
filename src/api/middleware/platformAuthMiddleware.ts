@@ -1,5 +1,6 @@
 // src/api/middleware/platformAuthMiddleware.ts
 import { Request, Response, NextFunction } from 'express';
+import { platformJwtService } from '../services/platform/PlatformJwtService';
 import { platformAuthService, PlatformUser } from '../services/platform/PlatformAuthService';
 
 declare global {
@@ -18,45 +19,51 @@ export async function platformAuthMiddleware(
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({
-        error: 'Missing platform authorization',
-        detail: 'Expected: Authorization: Bearer <supabase-access-token>'
-      });
+      res.status(401).json({ error: 'Invalid platform credentials' });
       return;
     }
 
     const token = authHeader.split(' ')[1];
     if (!token) {
-      res.status(401).json({
-        error: 'Invalid platform authorization header',
-        detail: 'Bearer token is empty'
-      });
+      res.status(401).json({ error: 'Invalid platform credentials' });
       return;
     }
 
-    const result = await platformAuthService.verifyAccessToken(token);
+    let platformUser: PlatformUser | null = null;
 
-    if (!result.valid || !result.user) {
-      res.status(401).json({
-        error: 'Invalid platform credentials',
-        detail: result.error || 'Token verification failed'
-      });
+    const fireflowResult = platformJwtService.verifyToken(token);
+    if (fireflowResult.valid && fireflowResult.payload) {
+      const sessionUser = await platformAuthService.validateSession(fireflowResult.payload.jti);
+      if (sessionUser) {
+        platformUser = sessionUser;
+      }
+    }
+
+    if (!platformUser) {
+      const supabaseVerified = await platformAuthService.verifySupabaseToken(token);
+      if (supabaseVerified && supabaseVerified.sub) {
+        const mappedUser = await platformAuthService.getUserBySupabaseId(supabaseVerified.sub);
+        if (mappedUser) {
+          platformUser = mappedUser;
+        }
+      }
+    }
+
+    if (!platformUser) {
+      res.status(401).json({ error: 'Invalid platform credentials' });
       return;
     }
 
-    req.platformUser = result.user;
+    req.platformUser = platformUser;
 
     console.log(
-      `[PLATFORM_AUTH] ${req.method} ${req.path} - Platform User: ${result.user.id} (${result.user.role})`
+      `[PLATFORM_AUTH] ${req.method} ${req.path} - Platform User: ${platformUser.id} (${platformUser.role})`
     );
 
     next();
   } catch (error: any) {
     console.error('[PLATFORM_AUTH] Middleware error:', error.message);
-    res.status(500).json({
-      error: 'Platform authentication service error',
-      detail: 'An unexpected error occurred during platform authentication'
-    });
+    res.status(500).json({ error: 'Platform authentication service error' });
   }
 }
 
@@ -75,7 +82,7 @@ export function requirePlatformRole(...allowedRoles: PlatformUser['role'][]) {
       res.status(403).json({
         error: 'Insufficient platform permissions',
         required_role: allowedRoles,
-        current_role: req.platformUser.role
+        current_role: req.platformUser.role,
       });
       return;
     }

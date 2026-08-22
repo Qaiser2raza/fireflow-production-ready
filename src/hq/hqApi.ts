@@ -52,20 +52,22 @@ export async function hqGetLicenses() {
 }
 
 export async function hqGenerateLicense(data: { plan: string, restaurant_id?: string, restaurant_name?: string, hardware_fingerprint?: string }) {
-    const response = await fetch('/api/generate-license', {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (sessionData?.session?.access_token) {
+        headers['Authorization'] = 'Bearer ' + sessionData.session.access_token;
+    }
+    const response = await fetch('/api/platform/licenses/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(data)
     });
-    
     if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         throw new Error(err.error || 'Failed to generate license via HQ API');
     }
-    
     return await response.json();
 }
-
 export async function hqAddRestaurant(data: any) {
     const { error, data: resData } = await supabase
         .from('restaurants_cloud')
@@ -149,11 +151,16 @@ export async function hqVerifyPayment(paymentId: string, status: 'verified' | 'r
             .eq('restaurant_id', payment.restaurant_id);
 
         if (rest) {
-            await fetch('/api/generate-license', {
+            const { data: verifySession } = await supabase.auth.getSession();
+            const verifyHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (verifySession?.session?.access_token) {
+                verifyHeaders['Authorization'] = 'Bearer ' + verifySession.session.access_token;
+            }
+            await fetch('/api/platform/licenses/generate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    plan: rest.subscription_plan, 
+                headers: verifyHeaders,
+                body: JSON.stringify({
+                    plan: rest.subscription_plan,
                     restaurant_id: payment.restaurant_id,
                     restaurant_name: rest.name
                 })
@@ -182,3 +189,4 @@ export async function hqGetOverview() {
 
     return { total, active, trial, expired, pendingPayments, unusedLicenses, restaurants, licenses, payments };
 }
+

@@ -51,9 +51,9 @@ export class OrderWorkflowService {
     userRole: string
   ): Promise<FireResult> {
     return await prisma.$transaction(async (tx) => {
-      // 1. Validate order exists
-      const order = await tx.orders.findUnique({
-        where: { id: orderId },
+      // 1. Validate order exists and belongs to tenant
+      const order = await tx.orders.findFirst({
+        where: { id: orderId, restaurant_id: restaurantId },
         include: {
           restaurants: true,
           order_items: {
@@ -75,16 +75,7 @@ export class OrderWorkflowService {
         };
       }
 
-      // 3. Check tenant isolation
-      if (order.restaurant_id !== restaurantId) {
-        throw { 
-          statusCode: 403, 
-          code: 'TENANT_MISMATCH', 
-          message: 'Order does not belong to this restaurant' 
-        };
-      }
-
-      // 4. Check there are DRAFT items
+      // 3. Check there are DRAFT items
       const draftItems = order.order_items;
       if (draftItems.length === 0) {
         throw { 

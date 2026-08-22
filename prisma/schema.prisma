@@ -518,6 +518,8 @@ model orders {
   reservation_orders                     reservation_orders?
   takeaway_orders                        takeaway_orders?
   transactions                           transactions[]
+  payments                               payments[]
+  fiscal_documents                       fiscal_documents[]
 
   @@index([assigned_driver_id])
   @@index([assigned_waiter_id])
@@ -752,6 +754,12 @@ model restaurants {
   tables                  tables[]
   transactions            transactions[]
   vendors                 vendors[]
+  integrations            integrations[]
+  integration_deliveries  integration_deliveries[]
+  payments                payments[]
+  payment_attempts        payment_attempts[]
+  fiscal_documents        fiscal_documents[]
+  fiscal_attempts         fiscal_attempts[]
 
   @@index([slug])
 }
@@ -834,10 +842,12 @@ model staff {
   created_at                                              DateTime             @default(now())
   total_deliveries                                        Int?                 @default(0)
   hashed_pin                                              String?
-  average_delivery_time_minutes                           Int?
+  average_delivery_time_minutes                           Int?                 @default(0)
   current_lat                                             Decimal?             @db.Decimal(10, 8)
   current_lng                                             Decimal?             @db.Decimal(11, 8)
   is_available                                            Boolean?             @default(true)
+  locked_until                                            DateTime?
+  failed_login_count                                     Int?                 @default(0)
   approval_logs_approval_logs_approved_by_user_idTostaff  approval_logs[]      @relation("approval_logs_approved_by_user_idTostaff")
   approval_logs_approval_logs_requested_by_user_idTostaff approval_logs[]      @relation("approval_logs_requested_by_user_idTostaff")
   audit_logs                                              audit_logs[]
@@ -858,10 +868,30 @@ model staff {
   security_events                                         security_events[]
   restaurants                                             restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   staff_wallet_logs                                       staff_wallet_logs[]
+  refresh_tokens                                         refresh_tokens[]
 
   @@unique([restaurant_id, name, role])
   @@index([pin])
   @@index([restaurant_id])
+}
+
+model refresh_tokens {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token_family_id    String    @db.VarChar(36)
+  token_hash         String    @db.VarChar(64)
+  staff_id           String    @db.Uuid
+  restaurant_id      String    @db.Uuid
+  expires_at         DateTime  @db.Timestamp(6)
+  revoked_at         DateTime? @db.Timestamp(6)
+  replaced_by_hash   String?   @db.VarChar(64)
+  created_at         DateTime  @default(now()) @db.Timestamp(6)
+
+  staff              staff     @relation(fields: [staff_id], references: [id], onDelete: Cascade)
+
+  @@index([token_family_id])
+  @@index([staff_id])
+  @@index([expires_at])
+  @@index([revoked_at])
 }
 
 model staff_wallet_logs {
@@ -888,6 +918,8 @@ model stations {
   printers           printers[]
   registered_devices registered_devices[]
   restaurants        restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  integrations       integrations[]
+  integration_deliveries integration_deliveries[]
 
   @@unique([restaurant_id, name])
 }
@@ -1092,6 +1124,23 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum PaymentAggregateStatus {
+  PENDING
+  PAID
+  FAILED
+  UNKNOWN
+}
+
+enum PaymentAttemptStatus {
+  PENDING
+  PROCESSING
+  ACCEPTED
+  COMPLETED
+  RETRYABLE_FAILURE
+  UNKNOWN
+  DEAD_LETTER
+}
+
 enum SkipReason {
   CUSTOMER_CANCELLED
   WRONG_ITEM
@@ -1140,5 +1189,290 @@ model support_sessions {
   @@index([platform_user_id])
   @@index([restaurant_id])
   @@index([status])
+}
+
+model outbox {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id     String    @db.Uuid
+  event_type        String    @db.VarChar(50)
+  aggregate_type    String    @db.VarChar(50)
+  aggregate_id      String    @db.Uuid
+  payload           Json
+  status            String    @default("PENDING") @db.VarChar(20)
+  attempt_count     Int       @default(0)
+  available_at      DateTime  @default(now()) @db.Timestamp(6)
+  last_error        String?
+  lock_owner        String?   @db.VarChar(100)
+  lock_expires_at   DateTime? @db.Timestamp(6)
+  occurred_at       DateTime  @default(now()) @db.Timestamp(6)
+  processed_at      DateTime? @db.Timestamp(6)
+  processed_by      String?   @db.VarChar(100)
+  created_at        DateTime  @default(now()) @db.Timestamp(6)
+
+  @@index([status, available_at, lock_expires_at])
+  @@index([restaurant_id])
+  @@index([event_type])
+  @@unique([aggregate_type, aggregate_id, event_type], name: "outbox_idempotency_key")
+  integration_deliveries integration_deliveries[]
+}
+
+enum IntegrationStatus {
+  ENABLED
+  DISABLED
+}
+
+enum DeliveryStatus {
+  PENDING
+  PROCESSING
+  ACCEPTED
+  COMPLETED
+  RETRYABLE_FAILURE
+  UNKNOWN
+  DEAD_LETTER
+}
+
+model integrations {
+  id                     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id          String             @db.Uuid
+  location_id            String?            @db.Uuid
+  connector_type         String             @db.VarChar(50)
+  connector_version      String?            @db.VarChar(50)
+  status                 IntegrationStatus  @default(ENABLED)
+  configuration_reference String?           @db.VarChar(255)
+  created_at             DateTime           @default(now()) @db.Timestamp(6)
+  updated_at             DateTime           @default(now()) @db.Timestamp(6)
+
+  restaurants            restaurants        @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  stations               stations?          @relation(fields: [location_id], references: [id], onDelete: SetNull)
+  integration_deliveries integration_deliveries[]
+
+  @@index([restaurant_id])
+  @@index([restaurant_id, status])
+  @@unique([restaurant_id, location_id, connector_type])
+}
+
+model integration_deliveries {
+  id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  integration_id        String             @db.Uuid
+  restaurant_id         String             @db.Uuid
+  location_id           String?            @db.Uuid
+  outbox_id             String             @db.Uuid
+  event_type            String             @db.VarChar(50)
+  event_version         Int                @default(1)
+  idempotency_key       String             @db.VarChar(100)
+  correlation_id        String             @db.VarChar(100)
+  status                DeliveryStatus     @default(PENDING)
+  attempt_count         Int                @default(0)
+  available_at          DateTime           @default(now()) @db.Timestamp(6)
+  last_error            String?
+  external_reference    String?            @db.VarChar(255)
+  created_at            DateTime           @default(now()) @db.Timestamp(6)
+  updated_at            DateTime           @default(now()) @db.Timestamp(6)
+  completed_at          DateTime?          @db.Timestamp(6)
+  lock_owner            String?            @db.VarChar(100)
+  lock_expires_at       DateTime?          @db.Timestamp(6)
+
+  integrations          integrations       @relation(fields: [integration_id], references: [id], onDelete: Cascade)
+  outbox                outbox              @relation(fields: [outbox_id], references: [id], onDelete: Cascade)
+  restaurants           restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  stations              stations?           @relation(fields: [location_id], references: [id], onDelete: SetNull)
+
+  @@index([integration_id])
+  @@index([restaurant_id, status])
+  @@index([status, available_at, lock_expires_at])
+  @@unique([integration_id, outbox_id])
+  @@unique([integration_id, idempotency_key])
+}
+
+model payments {
+  id                     String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id          String                @db.Uuid
+  order_id               String                @db.Uuid
+  amount                 Decimal               @db.Decimal(10, 2)
+  currency               String                @default("PKR") @db.VarChar(3)
+  status                  PaymentAggregateStatus @default(PENDING)
+  provider               String                @db.VarChar(50)
+  external_reference     String?               @db.VarChar(255)
+  created_at             DateTime              @default(now()) @db.Timestamp(6)
+  updated_at             DateTime              @default(now()) @db.Timestamp(6)
+
+  restaurants            restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  orders                 orders                @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  payment_attempts       payment_attempts[]
+
+  @@index([restaurant_id])
+  @@index([order_id])
+  @@index([restaurant_id, order_id])
+}
+
+model payment_attempts {
+  id                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payment_id              String                @db.Uuid
+  restaurant_id           String                @db.Uuid
+  provider                String                @db.VarChar(50)
+  request_idempotency_key String                @db.VarChar(100)
+  provider_idempotency_key String               @db.VarChar(100)
+  correlation_id          String                @db.VarChar(100)
+  status                  PaymentAttemptStatus  @default(PENDING)
+  external_reference      String?               @db.VarChar(255)
+  last_error              String?
+  created_at              DateTime              @default(now()) @db.Timestamp(6)
+  updated_at              DateTime              @default(now()) @db.Timestamp(6)
+  completed_at            DateTime?             @db.Timestamp(6)
+
+  payments                payments              @relation(fields: [payment_id], references: [id], onDelete: Cascade)
+  restaurants             restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([payment_id])
+  @@index([restaurant_id])
+  @@index([status])
+  @@unique([provider, provider_idempotency_key])
+  @@unique([provider, external_reference])
+}
+
+enum FiscalDocumentStatus {
+  PENDING
+  ISSUED
+  FAILED
+  UNKNOWN
+}
+
+enum FiscalAttemptStatus {
+  PENDING
+  PROCESSING
+  ACCEPTED
+  COMPLETED
+  RETRYABLE_FAILURE
+  UNKNOWN
+  DEAD_LETTER
+}
+
+model fiscal_documents {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id     String               @db.Uuid
+  order_id          String               @db.Uuid
+  document_type     String               @db.VarChar(50)
+  currency          String               @default("PKR") @db.VarChar(3)
+  subtotal          Decimal               @db.Decimal(10, 2)
+  tax_total         Decimal               @db.Decimal(10, 2)
+  grand_total       Decimal               @db.Decimal(10, 2)
+  status            FiscalDocumentStatus  @default(PENDING)
+  provider_type     String               @db.VarChar(50)
+  provider_reference String?              @db.VarChar(255)
+  issued_at         DateTime?             @db.Timestamp(6)
+  correlation_id    String               @db.VarChar(100)
+  created_at        DateTime             @default(now()) @db.Timestamp(6)
+  updated_at        DateTime             @default(now()) @db.Timestamp(6)
+
+  restaurants       restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  orders            orders                @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  fiscal_attempts   fiscal_attempts[]
+
+  @@index([restaurant_id])
+  @@index([order_id])
+  @@index([restaurant_id, order_id])
+  @@unique([restaurant_id, order_id, document_type])
+}
+
+model fiscal_attempts {
+  id                  String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fiscal_document_id  String              @db.Uuid
+  restaurant_id       String              @db.Uuid
+  provider_type       String              @db.VarChar(50)
+  status              FiscalAttemptStatus  @default(PENDING)
+  idempotency_key     String              @db.VarChar(100)
+  external_reference  String?             @db.VarChar(255)
+  last_error          String?
+  correlation_id      String              @db.VarChar(100)
+  created_at          DateTime            @default(now()) @db.Timestamp(6)
+  updated_at          DateTime            @default(now()) @db.Timestamp(6)
+  completed_at        DateTime?           @db.Timestamp(6)
+
+  fiscal_documents    fiscal_documents    @relation(fields: [fiscal_document_id], references: [id], onDelete: Cascade)
+  restaurants         restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([fiscal_document_id])
+  @@index([restaurant_id])
+  @@index([status])
+  @@unique([provider_type, idempotency_key])
+}
+
+enum PlatformRole {
+  PLATFORM_OWNER
+  SUPPORT_ENGINEER
+  SUPPORT_AGENT
+}
+
+enum AccountStatus {
+  ACTIVE
+  LOCKED
+  SUSPENDED
+}
+
+model platform_users {
+  id                      String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                   String           @db.VarChar(255)
+  supabase_id             String?          @unique @db.VarChar(255)
+  email_verified          Boolean          @default(false)
+  password_hash           String           @db.VarChar(255)
+  name                    String           @db.VarChar(255)
+  role                    PlatformRole
+  status                  AccountStatus    @default(ACTIVE)
+  locked_until            DateTime?
+  failed_login_count      Int              @default(0)
+  must_change_password    Boolean          @default(false)
+  last_login              DateTime?
+  created_at              DateTime         @default(now()) @db.Timestamp(6)
+  updated_at              DateTime         @default(now()) @db.Timestamp(6)
+  password_reset_tokens   password_reset_tokens[]
+  platform_sessions       platform_sessions[]
+  platform_password_history platform_password_history[]
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+}
+
+model password_reset_tokens {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform_user_id String           @db.Uuid
+  token_hash       String           @db.VarChar(64)
+  expires_at       DateTime         @db.Timestamp(6)
+  used_at          DateTime?        @db.Timestamp(6)
+  created_at       DateTime         @default(now()) @db.Timestamp(6)
+  platform_user    platform_users   @relation(fields: [platform_user_id], references: [id], onDelete: Cascade)
+
+  @@index([platform_user_id])
+  @@index([token_hash])
+  @@index([expires_at])
+}
+
+model platform_sessions {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform_user_id String           @db.Uuid
+  jti              String           @unique @db.VarChar(36)
+  refresh_token_hash String?        @db.VarChar(64)
+  token_family_id  String?          @db.VarChar(36)
+  replaced_by_jti  String?          @db.VarChar(36)
+  expires_at       DateTime         @db.Timestamp(6)
+  revoked_at       DateTime?        @db.Timestamp(6)
+  created_at       DateTime         @default(now()) @db.Timestamp(6)
+  user_agent       String?          @db.VarChar(255)
+  platform_user    platform_users   @relation(fields: [platform_user_id], references: [id], onDelete: Cascade)
+
+  @@index([platform_user_id])
+  @@index([jti])
+  @@index([expires_at])
+  @@index([revoked_at])
+}
+
+model platform_password_history {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform_user_id String           @db.Uuid
+  password_hash    String           @db.VarChar(255)
+  created_at       DateTime         @default(now()) @db.Timestamp(6)
+  platform_user    platform_users   @relation(fields: [platform_user_id], references: [id], onDelete: Cascade)
+
+  @@index([platform_user_id])
 }
 

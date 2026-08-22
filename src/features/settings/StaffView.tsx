@@ -20,6 +20,7 @@ export const StaffView: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -31,13 +32,18 @@ export const StaffView: React.FC = () => {
 
   // Filter Logic
   const filteredStaff = useMemo(() => {
-    let all = servers.filter((s: any) => (s.status?.toLowerCase() === 'active') || !s.status);
+    let all = servers;
+    if (!showInactive) {
+      all = all.filter((s: any) => (s.status?.toLowerCase() === 'active') || !s.status);
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       all = all.filter((s: any) => s.name.toLowerCase().includes(q) || s.role.toLowerCase().includes(q));
     }
     return all;
-  }, [servers, searchQuery]);
+  }, [servers, searchQuery, showInactive]);
+
+  const activeCount = servers.filter((s: any) => (s.status?.toLowerCase() === 'active') || !s.status).length;
 
   // Actions
   const handleOpenModal = (staff?: any) => {
@@ -105,6 +111,16 @@ export const StaffView: React.FC = () => {
     }
   };
 
+  const toggleStaffStatus = async (staff: any) => {
+    const newStatus = staff.status?.toLowerCase() === 'active' ? 'inactive' : 'active';
+    await fetchWithAuth(`${API_URL}/staff`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: staff.id, status: newStatus })
+    });
+    if (fetchInitialData) fetchInitialData();
+  };
+
   return (
     <div className="h-full flex flex-col bg-[#020617] overflow-hidden">
 
@@ -114,7 +130,7 @@ export const StaffView: React.FC = () => {
           <h1 className="text-3xl font-serif font-bold text-white mb-2">Personnel Roster</h1>
           <div className="flex items-center gap-2 text-slate-400 text-sm">
             <Shield size={16} className="text-gold-500" />
-            <span>Active Agents: <strong className="text-white">{filteredStaff.length}</strong></span>
+            <span><strong className="text-white">{activeCount}</strong> active / <strong className="text-white">{servers.length}</strong> total</span>
           </div>
         </div>
 
@@ -129,6 +145,13 @@ export const StaffView: React.FC = () => {
               className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-white focus:border-gold-500 outline-none transition-all placeholder:text-slate-600 shadow-inner"
             />
           </div>
+          <Button 
+            onClick={() => setShowInactive(!showInactive)} 
+            variant={showInactive ? 'primary' : 'ghost'}
+            className="text-xs"
+          >
+            {showInactive ? 'Hide Inactive' : 'Show Inactive'}
+          </Button>
           <Button onClick={() => handleOpenModal()} icon={<Plus size={18} />}>Recruit</Button>
         </div>
       </div>
@@ -137,7 +160,7 @@ export const StaffView: React.FC = () => {
       <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
           {filteredStaff.map((staff: any) => (
-            <StaffCard key={staff.id} staff={staff} onEdit={handleOpenModal} onDelete={handleDelete} />
+            <StaffCard key={staff.id} staff={staff} onEdit={handleOpenModal} onDelete={handleDelete} onToggleStatus={toggleStaffStatus} />
           ))}
 
           {filteredStaff.length === 0 && (
@@ -233,7 +256,7 @@ export const StaffView: React.FC = () => {
 
 // --- NEW CARD COMPONENT ---
 
-const StaffCard = ({ staff, onEdit, onDelete }: any) => {
+const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus }: any) => {
   const getRoleStyle = (role: string) => {
     switch (role) {
       case 'SUPER_ADMIN':
@@ -271,14 +294,19 @@ const StaffCard = ({ staff, onEdit, onDelete }: any) => {
           </div>
           {/* Status Dot */}
           <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-slate-900 flex items-center justify-center">
-            <div className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse"></div>
+            <div className={`w-2.5 h-2.5 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)] ${staff.status?.toLowerCase() === 'inactive' ? 'bg-slate-500' : 'bg-green-500 animate-pulse'}`}></div>
           </div>
         </div>
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <div className={`text-[10px] font-black uppercase tracking-widest mb-1 ${style.color}`}>
-            {staff.role.replace('_', ' ')}
+          <div className="flex items-center gap-2 mb-1">
+            <div className={`text-[10px] font-black uppercase tracking-widest ${style.color}`}>
+              {staff.role.replace('_', ' ')}
+            </div>
+            <span className={`px-1.5 py-0.5 rounded text-[8px] font-black tracking-wider uppercase border ${staff.status?.toLowerCase() === 'inactive' ? 'text-slate-500 bg-slate-500/10 border-slate-500/20' : 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'}`}>
+              {staff.status?.toLowerCase() === 'inactive' ? 'Inactive' : 'Active'}
+            </span>
           </div>
           <div className="text-white font-bold text-lg truncate leading-tight mb-2">
             {staff.name}
@@ -303,15 +331,26 @@ const StaffCard = ({ staff, onEdit, onDelete }: any) => {
         </button>
 
         {staff.role !== 'SUPER_ADMIN' && (
-          <button
-            onClick={() => onDelete(staff.id)}
-            className="flex flex-col items-center gap-1 text-white hover:scale-110 transition-transform"
-          >
-            <div className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center shadow-lg">
-              <Trash2 size={18} />
-            </div>
-            <span className="text-[10px] font-bold uppercase tracking-widest">Delete</span>
-          </button>
+          <>
+            <button
+              onClick={() => onToggleStatus(staff)}
+              className="flex flex-col items-center gap-1 text-white hover:scale-110 transition-transform"
+            >
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-lg ${staff.status?.toLowerCase() === 'inactive' ? 'bg-emerald-600' : 'bg-amber-600'}`}>
+                {staff.status?.toLowerCase() === 'inactive' ? <User size={18} /> : <User size={18} />}
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-widest">{staff.status?.toLowerCase() === 'inactive' ? 'Activate' : 'Deactivate'}</span>
+            </button>
+            <button
+              onClick={() => onDelete(staff.id)}
+              className="flex flex-col items-center gap-1 text-white hover:scale-110 transition-transform"
+            >
+              <div className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center shadow-lg">
+                <Trash2 size={18} />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-widest">Delete</span>
+            </button>
+          </>
         )}
       </div>
     </Card>

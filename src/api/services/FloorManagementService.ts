@@ -190,6 +190,7 @@ export async function seatPartyWithCapacityCheck(
 }
 
 export async function updateGuestCount(
+    restaurantId: string,
     orderId: string,
     newGuestCount: number,
     staffId: string,
@@ -197,7 +198,7 @@ export async function updateGuestCount(
     allowOverCapacity: boolean = true
 ) {
     const order = await prisma.orders.findUnique({
-        where: { id: orderId },
+        where: { id: orderId, restaurant_id: restaurantId },
         include: {
             tables: true,
             dine_in_orders: true
@@ -223,7 +224,7 @@ export async function updateGuestCount(
 
     const result = await prisma.$transaction(async (tx) => {
         const updatedOrder = await tx.orders.update({
-            where: { id: orderId },
+            where: { id: orderId, restaurant_id: restaurantId },
             data: {
                 guest_count: newGuestCount,
                 last_action_by: staffId,
