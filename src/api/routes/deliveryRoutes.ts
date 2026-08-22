@@ -46,8 +46,8 @@ router.post('/riders/shift/open', async (req, res) => {
 
         const io = req.app.get('io');
         if (io) {
-            io.emit('db_change', { table: 'rider_shifts', eventType: 'INSERT', data: shift });
-            io.emit('db_change', { table: 'staff', eventType: 'UPDATE', id: validated.riderId });
+            io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'rider_shifts', eventType: 'INSERT', data: shift });
+            io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'staff', eventType: 'UPDATE', id: validated.riderId });
         }
 
         res.json({ success: true, shift });
@@ -66,7 +66,7 @@ router.post('/riders/shift/close', async (req, res) => {
 
         const io = req.app.get('io');
         if (io) {
-            io.emit('db_change', { table: 'rider_shifts', eventType: 'UPDATE', data: shift });
+            io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'rider_shifts', eventType: 'UPDATE', data: shift });
 
             // Emit updated staff (shift is now null for this rider)
             const freshStaff = await prisma.staff.findUnique({
@@ -75,7 +75,7 @@ router.post('/riders/shift/close', async (req, res) => {
             });
             if (freshStaff) {
                 const { pin, ...sanitized } = freshStaff;
-                io.emit('db_change', {
+                io.to(`restaurant:${restaurantId}`).emit('db_change', {
                     table: 'staff',
                     eventType: 'UPDATE',
                     data: { ...sanitized, active_shift: freshStaff.rider_shifts?.[0] || null }
@@ -83,7 +83,7 @@ router.post('/riders/shift/close', async (req, res) => {
             }
 
             // Signal a full order list refresh — auto-settled DELIVERED→CLOSED orders need to appear
-            io.emit('db_change', { table: 'orders', eventType: 'BATCH_UPDATE', data: { restaurantId } });
+            io.to(`restaurant:${restaurantId}`).emit('db_change', { table: 'orders', eventType: 'BATCH_UPDATE', data: { restaurantId } });
         }
 
         res.json({ success: true, shift });
@@ -240,8 +240,8 @@ router.post('/orders/:orderId/assign-driver', async (req, res) => {
         // 7. Emit Socket Update
         const io = req.app.get('io');
         if (io) {
-            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
-            io.emit('db_change', { table: 'staff', eventType: 'UPDATE', id: driverId });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'staff', eventType: 'UPDATE', id: driverId });
         }
 
         res.json({
@@ -340,7 +340,7 @@ router.post('/orders/:orderId/mark-delivered', async (req, res) => {
                 where: { id: orderId },
                 include: { order_items: true, delivery_orders: true }
             });
-            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: fullOrder || result, id: orderId });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: fullOrder || result, id: orderId });
         }
 
         res.json({
@@ -417,7 +417,7 @@ router.post('/orders/:orderId/mark-failed', async (req, res) => {
         // Emit Socket Update
         const io = req.app.get('io');
         if (io) {
-            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
         }
 
         res.json({
@@ -488,14 +488,14 @@ router.post('/orders/:orderId/settle', async (req, res) => {
 
         const io = req.app.get('io');
         if (io) {
-            io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id: orderId });
             const freshStaff = await prisma.staff.findUnique({
                 where: { id: result.assigned_driver_id! },
                 include: { rider_shifts: { where: { status: 'OPEN' }, take: 1 } }
             });
             if (freshStaff) {
                 const { pin, ...sanitized } = freshStaff;
-                io.emit('db_change', {
+                io.to(`restaurant:${restaurantId}`).emit('db_change', {
                     table: 'staff',
                     eventType: 'UPDATE',
                     data: { ...sanitized, active_shift: freshStaff.rider_shifts?.[0] || null }
@@ -570,7 +570,7 @@ router.post('/riders/shift/deposit', async (req, res) => {
             });
             if (freshStaff) {
                 const { pin, ...sanitized } = freshStaff;
-                io.emit('db_change', {
+                io.to(`restaurant:${restaurantId}`).emit('db_change', {
                     table: 'staff',
                     eventType: 'UPDATE',
                     data: { ...sanitized, active_shift: freshStaff.rider_shifts?.[0] || null }

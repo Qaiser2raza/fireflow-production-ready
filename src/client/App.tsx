@@ -263,7 +263,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin })
+        body: JSON.stringify({ pin, restaurant_id: localStorage.getItem('restaurant_id') || undefined })
       });
 
       if (!res.ok) throw new Error('Invalid PIN');

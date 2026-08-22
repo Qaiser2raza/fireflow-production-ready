@@ -86,7 +86,7 @@ router.post(
           }
         });
         if (fullOrder) {
-          io.emit('db_change', {
+          io.to(`restaurant:${restaurantId ?? req.restaurantId}`).emit('db_change', {
             table: 'orders',
             eventType: 'UPDATE',
             data: fullOrder
@@ -166,7 +166,7 @@ router.post(
           }
         });
         if (fullOrder) {
-          io.emit('db_change', {
+          io.to(`restaurant:${restaurantId ?? req.restaurantId}`).emit('db_change', {
             table: 'orders',
             eventType: 'UPDATE',
             data: fullOrder
@@ -269,7 +269,7 @@ router.patch(
           }
         });
         if (fullOrder) {
-          io.emit('db_change', {
+          io.to(`restaurant:${restaurantId ?? req.restaurantId}`).emit('db_change', {
             table: 'orders',
             eventType: 'UPDATE',
             data: fullOrder

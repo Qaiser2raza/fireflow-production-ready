@@ -177,13 +177,23 @@ if (config.NODE_ENV === 'production') {
 
 // --- Socket.IO Connection Handler ---
 io.on('connection', async (socket) => {
-    const authHeader = socket.handshake.headers?.authorization || socket.handshake.auth?.token;
+    // Mission 016B (F-SEC-3): identify sockets from BOTH transport forms —
+    // an `Authorization: Bearer <jwt>` header or a bare JWT in the handshake
+    // auth payload. Previously the bare-handshake form failed the Bearer
+    // prefix check and EVERY socket was silently treated as 'none'.
+    const rawAuthHeader = socket.handshake.headers?.authorization;
+    const handshakeToken = socket.handshake.auth?.token;
+    const bearerFromHeader = typeof rawAuthHeader === 'string' && rawAuthHeader.startsWith('Bearer ')
+        ? rawAuthHeader.slice('Bearer '.length)
+        : undefined;
+    const normalizedHandshake = typeof handshakeToken === 'string' && handshakeToken.startsWith('Bearer ')
+        ? handshakeToken.slice('Bearer '.length)
+        : handshakeToken;
+    const token = bearerFromHeader || (typeof normalizedHandshake === 'string' ? normalizedHandshake : undefined);
     let socketUser: { staffId?: string; restaurantId?: string; platformUser?: any; supportSession?: any } = {};
     let socketAuthType: 'tenant' | 'platform' | 'support' | 'none' = 'none';
 
-    if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split(' ')[1];
-        if (token) {
+    if (token && typeof token === 'string') {
             try {
                 const decoded = jwtService.verifyToken(token);
                 if (decoded.valid && decoded.payload) {
@@ -201,7 +211,6 @@ io.on('connection', async (socket) => {
                     socketAuthType = 'platform';
                 }
             }
-        }
     }
 
     socket.data.user = socketUser;
@@ -456,7 +465,7 @@ app.post('/api/licensing/sync', async (_req, res) => {
 
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5, // 5 attempts per window per IP
+    max: Number(process.env.LOGIN_RATE_LIMIT_MAX) || 5, // attempts per window per IP
     keyGenerator: (req) => {
         const ip = req.ip || req.connection.remoteAddress || 'unknown';
         return `login:${ip}`;
@@ -469,7 +478,7 @@ const loginLimiter = rateLimit({
 
 const verifyPinLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5, // 5 attempts per window per IP
+    max: Number(process.env.VERIFY_PIN_RATE_LIMIT_MAX) || 5, // attempts per window per IP
     keyGenerator: (req) => {
         const ip = req.ip || req.connection.remoteAddress || 'unknown';
         return `verify-pin:${ip}`;
@@ -496,36 +505,84 @@ const verifyPinLimiter = rateLimit({
  * }
  */
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
-    const { pin } = req.body;
+    const { pin, restaurant_id, staff_name } = req.body;
     const startTime = Date.now();
     const ipAddress = req.ip || req.connection.remoteAddress || 'unknown';
 
+    // Mission 016B (F-SEC-1/F-SEC-2): tenant context is REQUIRED and every
+    // identity lookup is scoped to it. The plaintext `pin` column is never
+    // read; authentication verifies exclusively against stored bcrypt hashes.
     if (!pin || typeof pin !== 'string' || !/^\d{6}$/.test(pin)) {
+        return res.status(400).json({ error: 'Invalid credentials' });
+    }
+    if (!restaurant_id || typeof restaurant_id !== 'string') {
         logger.log({
             level: LogLevel.WARN,
             service: 'auth',
-            action: 'login_invalid_pin_format',
-            metadata: { pin_format: typeof pin }
+            action: 'login_missing_tenant_context',
+            metadata: { ip_address: ipAddress }
         });
         return res.status(400).json({ error: 'Invalid credentials' });
     }
 
     try {
-        let user = await prisma.staff.findFirst({
+        const tenantRow = await prisma.restaurants.findUnique({
+            where: { id: restaurant_id },
+            select: { id: true, is_active: true }
+        });
+
+        // Identical response for unknown and inactive tenants: no existence oracle.
+        // Audit rows use a null tenant FK when the tenant itself is unknown.
+        if (!tenantRow || !tenantRow.is_active) {
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: null,
+                    action_type: 'STAFF_LOGIN_FAILED',
+                    entity_type: 'RESTAURANT',
+                    entity_id: null,
+                    details: {
+                        reason: !tenantRow ? 'tenant_unknown' : 'tenant_inactive',
+                        attempted_tenant_id: restaurant_id,
+                        ip_address: ipAddress
+                    }
+                }
+            });
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const nameFilter = typeof staff_name === 'string' && staff_name.trim().length > 0 ? staff_name.trim() : undefined;
+
+        const candidates = await prisma.staff.findMany({
             where: {
-                pin: pin,
-                restaurant_id: req.body.restaurant_id || undefined
+                restaurant_id: restaurant_id,
+                status: 'active',
+                hashed_pin: { not: null },
+                ...(nameFilter ? { name: nameFilter } : {})
+            },
+            select: {
+                id: true,
+                name: true,
+                role: true,
+                status: true,
+                restaurant_id: true,
+                hashed_pin: true,
+                failed_login_count: true,
+                locked_until: true
             }
         });
 
-        if (!user) {
+        const now = Date.now();
+        const eligible = candidates.filter(c => !c.locked_until || c.locked_until.getTime() <= now);
+
+        if (eligible.length === 0) {
             await prisma.audit_logs.create({
                 data: {
-                    restaurant_id: req.body.restaurant_id || null,
+                    restaurant_id: restaurant_id,
                     action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
+                    entity_type: 'RESTAURANT',
+                    entity_id: restaurant_id,
                     details: {
-                        reason: 'invalid_pin',
+                        reason: 'no_eligible_staff',
                         ip_address: ipAddress
                     }
                 }
@@ -533,125 +590,103 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        const now = new Date();
-        if (user.locked_until && now < user.locked_until) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: user.restaurant_id,
-                    staff_id: user.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: user.id,
-                    details: {
-                        reason: 'account_locked',
-                        locked_until: user.locked_until.toISOString(),
-                        ip_address: ipAddress
-                    }
+        let user: (typeof eligible)[number] | null = null;
+        for (const candidate of eligible) {
+            try {
+                if (candidate.hashed_pin && await bcrypt.compare(pin, candidate.hashed_pin)) {
+                    user = candidate;
+                    break;
                 }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        let authenticated = false;
-        let migrationPerformed = false;
-
-        if (!user.hashed_pin) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: user.restaurant_id,
-                    staff_id: user.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: user.id,
-                    details: {
-                        reason: 'no_hashed_pin',
-                        ip_address: ipAddress
-                    }
-                }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        try {
-            authenticated = await bcrypt.compare(pin, user.hashed_pin);
-        } catch (e) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: user.restaurant_id,
-                    staff_id: user.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: user.id,
-                    details: {
-                        reason: 'bcrypt_error',
-                        error: (e as Error).message,
-                        ip_address: ipAddress
-                    }
-                }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        if (!authenticated) {
-            const newFailedCount = (user.failed_login_count || 0) + 1;
-            const updateData: any = { failed_login_count: newFailedCount };
-            
-            if (newFailedCount >= 5) {
-                updateData.locked_until = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes
+            } catch (e) {
                 await prisma.audit_logs.create({
                     data: {
-                        restaurant_id: user.restaurant_id,
-                        staff_id: user.id,
-                        action_type: 'STAFF_LOCKED',
+                        restaurant_id: restaurant_id,
+                        staff_id: candidate.id,
+                        action_type: 'STAFF_LOGIN_FAILED',
                         entity_type: 'STAFF',
-                        entity_id: user.id,
+                        entity_id: candidate.id,
                         details: {
+                            reason: 'bcrypt_error',
+                            error: (e as Error).message,
+                            ip_address: ipAddress
+                        }
+                    }
+                });
+            }
+        }
+
+        if (!user) {
+            // Failure accounting: per-staff lockout requires an unambiguous
+            // target. With a single eligible candidate we preserve the existing
+            // counter/lockout behavior; with several we record the event without
+            // punishing unrelated accounts.
+            if (eligible.length === 1) {
+                const c = eligible[0];
+                const newFailedCount = (c.failed_login_count || 0) + 1;
+                const updateData: any = { failed_login_count: newFailedCount };
+
+                if (newFailedCount >= 5) {
+                    updateData.locked_until = new Date(now + 30 * 60 * 1000); // 30 minutes
+                    await prisma.audit_logs.create({
+                        data: {
+                            restaurant_id: restaurant_id,
+                            staff_id: c.id,
+                            action_type: 'STAFF_LOCKED',
+                            entity_type: 'STAFF',
+                            entity_id: c.id,
+                            details: {
+                                failed_count: newFailedCount,
+                                locked_until: updateData.locked_until.toISOString(),
+                                ip_address: ipAddress
+                            }
+                        }
+                    });
+                }
+
+                await prisma.staff.update({ where: { id: c.id }, data: updateData });
+
+                await prisma.audit_logs.create({
+                    data: {
+                        restaurant_id: restaurant_id,
+                        staff_id: c.id,
+                        action_type: 'STAFF_LOGIN_FAILED',
+                        entity_type: 'STAFF',
+                        entity_id: c.id,
+                        details: {
+                            reason: 'invalid_pin',
                             failed_count: newFailedCount,
-                            locked_until: updateData.locked_until.toISOString(),
+                            ip_address: ipAddress
+                        }
+                    }
+                });
+            } else {
+                await prisma.audit_logs.create({
+                    data: {
+                        restaurant_id: restaurant_id,
+                        action_type: 'STAFF_LOGIN_FAILED',
+                        entity_type: 'RESTAURANT',
+                        entity_id: restaurant_id,
+                        details: {
+                            reason: 'invalid_pin_multi_candidate',
+                            candidates: eligible.length,
                             ip_address: ipAddress
                         }
                     }
                 });
             }
 
-            await prisma.staff.update({
-                where: { id: user.id },
-                data: updateData
-            });
-
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: user.restaurant_id,
-                    staff_id: user.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: user.id,
-                    details: {
-                        reason: 'invalid_pin',
-                        failed_count: newFailedCount,
-                        ip_address: ipAddress
-                    }
-                }
-            });
-
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        const hashedPin = await bcrypt.hash(pin, 12);
+        const lastLoginAt = new Date();
         await prisma.staff.update({
             where: { id: user.id },
-            data: { hashed_pin: hashedPin, pin: '', failed_login_count: 0, locked_until: null }
+            data: { last_login: lastLoginAt, failed_login_count: 0, locked_until: null }
         });
-        migrationPerformed = true;
 
         const restaurant = await prisma.restaurants.findUnique({
             where: { id: user.restaurant_id },
             select: { id: true, name: true, slug: true, logo_url: true as any }
-        });
-
-        const updatedUser = await prisma.staff.update({
-            where: { id: user.id },
-            data: { last_login: new Date() }
         });
 
         const accessToken = jwtService.generateAccessToken(
@@ -675,8 +710,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
                     entity_type: 'STAFF',
                     entity_id: user.id,
                     details: {
-                        ...(migrationPerformed ? { pin_migrated_to_hash: true } : {}),
-                        timestamp: new Date().toISOString(),
+                        timestamp: lastLoginAt.toISOString(),
                     }
                 }
             });
@@ -690,16 +724,16 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
             duration_ms: duration,
             staff_id: user.id,
             restaurant_id: user.restaurant_id,
-            metadata: { role: user.role, migration_performed: migrationPerformed }
+            metadata: { role: user.role }
         });
 
         const sanitizedUser = {
-            id: updatedUser.id,
-            name: updatedUser.name,
-            role: updatedUser.role,
-            restaurant_id: updatedUser.restaurant_id,
-            status: updatedUser.status,
-            last_login: updatedUser.last_login
+            id: user.id,
+            name: user.name,
+            role: user.role,
+            restaurant_id: user.restaurant_id,
+            status: user.status,
+            last_login: lastLoginAt
         };
 
         res.json({
@@ -934,155 +968,145 @@ app.delete('/api/restaurants/:id', platformAuthMiddleware, requirePlatformRole('
  * POST /api/auth/verify-pin
  * Verify a PIN for specific action authorization (Manager PIN override)
  */
-app.post('/api/auth/verify-pin', verifyPinLimiter, async (req, res) => {
-    const { pin, requiredRole } = req.body;
+app.post('/api/auth/verify-pin', verifyPinLimiter, authMiddleware, async (req, res) => {
+    const { pin, requiredRole, staff_name } = req.body;
     const ipAddress = req.ip || req.connection.remoteAddress || 'unknown';
+    const restaurantId = req.restaurantId;
 
     if (!pin || typeof pin !== 'string' || !/^\d{6}$/.test(pin)) {
         return res.status(400).json({ error: 'Invalid credentials' });
     }
 
+    // Mission 016B (F-SEC-1): manager overrides are tenant-bound. The tenant
+    // comes exclusively from the authenticated context; candidates are matched
+    // by bcrypt against stored hashes — the plaintext column is never read.
+    if (!restaurantId) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
     try {
-        const staff = await prisma.staff.findFirst({
+        const nameFilter = typeof staff_name === 'string' && staff_name.trim().length > 0 ? staff_name.trim() : undefined;
+
+        const candidates = await prisma.staff.findMany({
             where: {
-                pin: pin,
-                status: 'active'
+                restaurant_id: restaurantId,
+                status: 'active',
+                hashed_pin: { not: null },
+                ...(nameFilter ? { name: nameFilter } : {})
+            },
+            select: {
+                id: true,
+                name: true,
+                role: true,
+                restaurant_id: true,
+                hashed_pin: true,
+                failed_login_count: true,
+                locked_until: true
             }
         });
 
-        if (!staff) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: null,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    details: {
-                        reason: 'invalid_pin',
-                        context: 'verify-pin',
-                        ip_address: ipAddress
-                    }
-                }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
         const now = new Date();
-        if (staff.locked_until && now < staff.locked_until) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: staff.restaurant_id,
-                    staff_id: staff.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: staff.id,
-                    details: {
-                        reason: 'account_locked',
-                        locked_until: staff.locked_until.toISOString(),
-                        context: 'verify-pin',
-                        ip_address: ipAddress
-                    }
+        const eligible = candidates.filter(c => !c.locked_until || c.locked_until <= now);
+
+        let staff: (typeof eligible)[number] | null = null;
+        for (const candidate of eligible) {
+            try {
+                if (candidate.hashed_pin && await bcrypt.compare(pin, candidate.hashed_pin)) {
+                    staff = candidate;
+                    break;
                 }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        let authenticated = false;
-
-        if (!staff.hashed_pin) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: staff.restaurant_id,
-                    staff_id: staff.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: staff.id,
-                    details: {
-                        reason: 'no_hashed_pin',
-                        context: 'verify-pin',
-                        ip_address: ipAddress
-                    }
-                }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        try {
-            authenticated = await bcrypt.compare(pin, staff.hashed_pin);
-        } catch (e) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: staff.restaurant_id,
-                    staff_id: staff.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: staff.id,
-                    details: {
-                        reason: 'bcrypt_error',
-                        error: (e as Error).message,
-                        context: 'verify-pin',
-                        ip_address: ipAddress
-                    }
-                }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        if (!authenticated) {
-            const newFailedCount = (staff.failed_login_count || 0) + 1;
-            const updateData: any = { failed_login_count: newFailedCount };
-            
-            if (newFailedCount >= 5) {
-                updateData.locked_until = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes
+            } catch (e) {
                 await prisma.audit_logs.create({
                     data: {
-                        restaurant_id: staff.restaurant_id,
-                        staff_id: staff.id,
-                        action_type: 'STAFF_LOCKED',
+                        restaurant_id: restaurantId,
+                        staff_id: candidate.id,
+                        action_type: 'STAFF_LOGIN_FAILED',
                         entity_type: 'STAFF',
-                        entity_id: staff.id,
+                        entity_id: candidate.id,
                         details: {
-                            failed_count: newFailedCount,
-                            locked_until: updateData.locked_until.toISOString(),
+                            reason: 'bcrypt_error',
                             context: 'verify-pin',
+                            error: (e as Error).message,
+                            ip_address: ipAddress
+                        }
+                    }
+                });
+            }
+        }
+
+        if (!staff) {
+            if (eligible.length === 1) {
+                const c = eligible[0];
+                const newFailedCount = (c.failed_login_count || 0) + 1;
+                const updateData: any = { failed_login_count: newFailedCount };
+
+                if (newFailedCount >= 5) {
+                    updateData.locked_until = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+                    await prisma.audit_logs.create({
+                        data: {
+                            restaurant_id: restaurantId,
+                            staff_id: c.id,
+                            action_type: 'STAFF_LOCKED',
+                            entity_type: 'STAFF',
+                            entity_id: c.id,
+                            details: {
+                                failed_count: newFailedCount,
+                                locked_until: updateData.locked_until.toISOString(),
+                                context: 'verify-pin',
+                                ip_address: ipAddress
+                            }
+                        }
+                    });
+                }
+
+                await prisma.staff.update({
+                    where: { id: c.id },
+                    data: updateData
+                });
+
+                await prisma.audit_logs.create({
+                    data: {
+                        restaurant_id: restaurantId,
+                        staff_id: c.id,
+                        action_type: 'STAFF_LOGIN_FAILED',
+                        entity_type: 'STAFF',
+                        entity_id: c.id,
+                        details: {
+                            reason: 'invalid_pin',
+                            failed_count: newFailedCount,
+                            context: 'verify-pin',
+                            ip_address: ipAddress
+                        }
+                    }
+                });
+            } else {
+                await prisma.audit_logs.create({
+                    data: {
+                        restaurant_id: restaurantId,
+                        action_type: 'STAFF_LOGIN_FAILED',
+                        entity_type: 'RESTAURANT',
+                        entity_id: restaurantId,
+                        details: {
+                            reason: 'invalid_pin_multi_candidate',
+                            context: 'verify-pin',
+                            candidates: eligible.length,
                             ip_address: ipAddress
                         }
                     }
                 });
             }
 
-            await prisma.staff.update({
-                where: { id: staff.id },
-                data: updateData
-            });
-
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: staff.restaurant_id,
-                    staff_id: staff.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: staff.id,
-                    details: {
-                        reason: 'invalid_pin',
-                        failed_count: newFailedCount,
-                        context: 'verify-pin',
-                        ip_address: ipAddress
-                    }
-                }
-            });
-
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-
-        const hashedPin = await bcrypt.hash(pin, 12);
-        await prisma.staff.update({
-            where: { id: staff.id },
-            data: { hashed_pin: hashedPin, pin: '', failed_login_count: 0, locked_until: null }
-        });
 
         if (requiredRole && staff.role !== requiredRole && staff.role !== 'SUPER_ADMIN') {
             return res.status(403).json({ error: 'Insufficient privileges for required role: ' + requiredRole });
         }
+
+        await prisma.staff.update({
+            where: { id: staff.id },
+            data: { failed_login_count: 0, locked_until: null }
+        });
 
         res.json({
             success: true,
@@ -1238,6 +1262,18 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
     }
 
     try {
+        // Mission 016B (F-SEC-4): logout is authoritative server-side. Revoke
+        // the caller's active refresh-token family regardless of what the
+        // client sends; an explicitly supplied refresh_token is revoked too.
+        const activeSession = await prisma.refresh_tokens.findFirst({
+            where: { staff_id: staffId, revoked_at: null, expires_at: { gt: new Date() } },
+            orderBy: { created_at: 'desc' },
+            select: { token_family_id: true },
+        });
+        let familyRevokedCount = 0;
+        if (activeSession?.token_family_id) {
+            familyRevokedCount = await refreshTokenService.revokeStaffRefreshTokenFamily(activeSession.token_family_id, staffId);
+        }
         if (refresh_token) {
             await refreshTokenService.revokeStaffRefreshToken(refresh_token);
         }
@@ -1252,6 +1288,7 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
                 details: {
                     timestamp: new Date().toISOString(),
                     refresh_token_revoked: !!refresh_token,
+                    family_revoked_sessions: familyRevokedCount,
                 }
             }
         });
@@ -1413,7 +1450,7 @@ app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, re
             enableTableMerging: Boolean(enableTableMerging)
         };
 
-        io.emit('config:updated', { restaurantId, config });
+        io.to(`restaurant:${req.restaurantId}`).emit('config:updated', { restaurantId, config });
 
         res.json({
             success: true,
@@ -1522,7 +1559,7 @@ app.post('/api/orders/upsert', authMiddleware, async (req, res) => {
             });
         }
 
-        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
         res.json(result);
     } catch (e: any) {
         console.error("Order Upsert Error:", e);
@@ -1582,7 +1619,7 @@ app.patch('/api/orders/:id', authMiddleware, async (req, res) => {
         const service = OrderServiceFactory.getService(data.type);
         const result = await service.updateOrder(req.restaurantId!, id, data);
 
-        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result });
         res.json(result);
     } catch (e: any) {
         console.error("PATCH /api/orders error:", e);
@@ -1605,10 +1642,10 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
         const success = await service.deleteOrder(req.restaurantId!, id);
 
         if (success) {
-            io.emit('db_change', { table: 'orders', eventType: 'DELETE', id });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id });
             // If it was a DINE_IN order, also notify about table change
             if (order.type === 'DINE_IN' && order.table_id) {
-                io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: order.table_id, data: { status: 'AVAILABLE', active_order_id: null } });
+                io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: order.table_id, data: { status: 'AVAILABLE', active_order_id: null } });
             }
             res.json({ success: true });
         } else {
@@ -1730,10 +1767,10 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             return updatedOrder;
         });
 
-        io.emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id });
-        io.emit('db_change', { table: 'transactions', eventType: 'INSERT' });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'transactions', eventType: 'INSERT' });
         if (result.type === 'DINE_IN' && result.table_id) {
-            io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: result.table_id, data: { id: result.table_id, status: 'DIRTY', active_order_id: null } });
+            io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: result.table_id, data: { id: result.table_id, status: 'DIRTY', active_order_id: null } });
         }
 
         res.json({ success: true, order: result });
@@ -2494,7 +2531,7 @@ app.post('/api/menu_items', authMiddleware, async (req, res) => {
         }
 
         const item = await prisma.menu_items.create({ data: createData });
-        io.emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: item });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_items', eventType: 'INSERT', data: item });
         if (item.restaurant_id) syncMenuToCloud(item.restaurant_id).catch(console.error);
         res.json(item);
     } catch (e: any) {
@@ -2532,7 +2569,7 @@ app.patch('/api/menu_items', authMiddleware, async (req, res) => {
             where: { id }, 
             data: updateData
         });
-        io.emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: item });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_items', eventType: 'UPDATE', data: item });
         if (item.restaurant_id) syncMenuToCloud(item.restaurant_id).catch(console.error);
         res.json(item);
     } catch (e: any) {
@@ -2551,7 +2588,7 @@ app.delete('/api/menu_items', authMiddleware, async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized to delete this menu item' });
         }
         await prisma.menu_items.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'menu_items', eventType: 'DELETE', id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_items', eventType: 'DELETE', id });
         if (item?.restaurant_id) syncMenuToCloud(item.restaurant_id).catch(console.error);
         res.json({ success: true });
     } catch (e: any) {
@@ -2583,7 +2620,7 @@ app.post('/api/menu_categories', authMiddleware, async (req, res) => {
         const cat = await prisma.menu_categories.create({ 
             data: { ...req.body, restaurant_id: req.restaurantId } 
         });
-        io.emit('db_change', { table: 'menu_categories', eventType: 'INSERT', data: cat });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_categories', eventType: 'INSERT', data: cat });
         syncMenuToCloud(cat.restaurant_id).catch(console.error);
         res.json(cat);
     } catch (e: any) {
@@ -2599,7 +2636,7 @@ app.patch('/api/menu_categories', authMiddleware, async (req, res) => {
             where: { id: String(id) }, 
             data: { ...data, restaurant_id: req.restaurantId } 
         });
-        io.emit('db_change', { table: 'menu_categories', eventType: 'UPDATE', data: cat });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_categories', eventType: 'UPDATE', data: cat });
         syncMenuToCloud(cat.restaurant_id).catch(console.error);
         res.json(cat);
     } catch (e: any) {
@@ -2611,7 +2648,7 @@ app.delete('/api/menu_categories', authMiddleware, async (req, res) => {
     const { id } = req.query;
     try {
         await prisma.menu_categories.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'menu_categories', eventType: 'DELETE', id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_categories', eventType: 'DELETE', id });
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2864,7 +2901,7 @@ app.post('/api/customers', authMiddleware, async (req, res) => {
                 restaurant_id: req.restaurantId
             }
         });
-        io.emit('db_change', { table: 'customers', eventType: 'INSERT', data: customer });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'customers', eventType: 'INSERT', data: customer });
         res.json(customer);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2875,7 +2912,7 @@ app.patch('/api/customers', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const customer = await prisma.customers.update({ where: { id }, data });
-        io.emit('db_change', { table: 'customers', eventType: 'UPDATE', data: customer });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'customers', eventType: 'UPDATE', data: customer });
         res.json(customer);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2892,7 +2929,7 @@ app.post('/api/vendors', authMiddleware, async (req, res) => {
                 restaurant_id: req.restaurantId
             }
         });
-        io.emit('db_change', { table: 'vendors', eventType: 'INSERT', data: vendor });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'vendors', eventType: 'INSERT', data: vendor });
         res.json(vendor);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2903,7 +2940,7 @@ app.patch('/api/vendors', async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const vendor = await prisma.vendors.update({ where: { id }, data });
-        io.emit('db_change', { table: 'vendors', eventType: 'UPDATE', data: vendor });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'vendors', eventType: 'UPDATE', data: vendor });
         res.json(vendor);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2930,7 +2967,7 @@ app.post('/api/stations', authMiddleware, async (req, res) => {
         const station = await prisma.stations.create({ 
             data: { ...req.body, restaurant_id: req.restaurantId } 
         });
-        io.emit('db_change', { table: 'stations', eventType: 'INSERT', data: station });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'stations', eventType: 'INSERT', data: station });
         res.json(station);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2941,7 +2978,7 @@ app.patch('/api/stations', authMiddleware, async (req, res) => {
     const { id, ...data } = req.body;
     try {
         const station = await prisma.stations.update({ where: { id }, data: { ...data, restaurant_id: req.restaurantId } });
-        io.emit('db_change', { table: 'stations', eventType: 'UPDATE', data: station });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'stations', eventType: 'UPDATE', data: station });
         res.json(station);
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -2952,7 +2989,7 @@ app.delete('/api/stations', authMiddleware, async (req, res) => {
     const { id } = req.query;
     try {
         await prisma.stations.delete({ where: { id: String(id) } });
-        io.emit('db_change', { table: 'stations', eventType: 'DELETE', id });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'stations', eventType: 'DELETE', id });
         res.json({ success: true });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
@@ -3172,9 +3209,9 @@ app.post('/api/system/reset-environment', authMiddleware, requireRole('SUPER_ADM
         console.log('âœ… RESET COMPLETE');
 
         // Broadcast to all clients
-        io.emit('db_change', { table: 'orders', eventType: 'DELETE', id: 'ALL' });
-        io.emit('db_change', { table: 'tables', eventType: 'UPDATE', id: 'ALL' });
-        io.emit('db_change', { table: 'transactions', eventType: 'DELETE', id: 'ALL' });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id: 'ALL' });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'tables', eventType: 'UPDATE', id: 'ALL' });
+        io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'transactions', eventType: 'DELETE', id: 'ALL' });
 
         res.json({ success: true, message: "Environment reset successfully. Database is now clean." });
     } catch (e: any) {

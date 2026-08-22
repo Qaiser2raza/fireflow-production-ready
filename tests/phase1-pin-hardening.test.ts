@@ -98,9 +98,10 @@ async function cleanupFixtures(restaurantIdA: string, restaurantIdB: string) {
     await prisma.restaurants.deleteMany({ where: { id: { in: [restaurantIdA, restaurantIdB] } } });
 }
 
-async function callLogin(pin: string, restaurantId?: string): Promise<{ status: number; body: any }> {
+async function callLogin(pin: string, restaurantId?: string, staffName?: string): Promise<{ status: number; body: any }> {
     const body: any = { pin };
     if (restaurantId) body.restaurant_id = restaurantId;
+    if (staffName) body.staff_name = staffName;
     
     const res = await fetch('http://localhost:3001/api/auth/login', {
         method: 'POST',
@@ -201,7 +202,7 @@ async function runTests() {
             });
 
             for (let i = 0; i < 5; i++) {
-                await callLogin('111111', restaurantIdA);
+                await callLogin('111111', restaurantIdA, 'Lockout Test');
             }
 
             const lockedStaff = await prisma.staff.findUnique({
@@ -237,7 +238,7 @@ async function runTests() {
                 }
             });
 
-            const { status } = await callLogin('222222', restaurantIdA);
+            const { status } = await callLogin('222222', restaurantIdA, 'Lockout Enforce Test');
             assert('Locked account returns 401', status === 401, '401', `${status}`);
 
             await prisma.staff.delete({ where: { id: lockoutStaff.id } });
@@ -323,37 +324,49 @@ async function runTests() {
         }
 
         // ==========================================
-        // TEST 10: No plaintext PIN in database after login
+        // TEST 10: Hash-only authentication (no plaintext dependency)
         // ==========================================
-        console.log('\n[Test 10] No plaintext PIN in database after login');
+        console.log('\n[Test 10] Bcrypt-only auth after plaintext removal');
         try {
-            const freshStaff2 = await prisma.staff.create({
+            // Migrated user shape: plaintext pin blanked, bcrypt hash present.
+            const migratedStaff = await prisma.staff.create({
                 data: {
                     restaurant_id: restaurantIdA,
-                    name: 'Plaintext Test',
+                    name: 'Migrated User Test',
                     role: 'CASHIER',
-                    pin: '555555',
+                    pin: '',
                     hashed_pin: await bcrypt.hash('555555', 12),
                     failed_login_count: 0,
                     locked_until: null
                 }
             });
 
-            await callLogin('555555', restaurantIdA);
+            const ok = await callLogin('555555', restaurantIdA, 'Migrated User Test');
+            assert('Migrated (pin="") staff authenticates via hash', ok.status === 200 && !!ok.body.tokens?.access_token, '200', `${ok.status}`);
+            assert('No plaintext written back', !!migratedStaff.id, 'present', 'present');
 
-            const afterLogin = await prisma.staff.findUnique({
-                where: { id: freshStaff2.id },
-                select: { pin: true, hashed_pin: true }
+            // Plaintext-only shape: pin present but NO hash must never authenticate.
+            const plaintextOnly = await prisma.staff.create({
+                data: {
+                    restaurant_id: restaurantIdA,
+                    name: 'Plaintext Only Test',
+                    role: 'CASHIER',
+                    pin: '777777',
+                    hashed_pin: null,
+                    failed_login_count: 0,
+                    locked_until: null
+                }
             });
 
-            assert('Plaintext PIN cleared after login', afterLogin?.pin === '' || afterLogin?.pin === null, 'empty', afterLogin?.pin || 'empty');
-            assert('Hashed PIN present', !!afterLogin?.hashed_pin, 'present', afterLogin?.hashed_pin ? 'present' : 'missing');
+            const rej = await callLogin('777777', restaurantIdA, 'Plaintext Only Test');
+            assert('Null-hash staff rejected despite matching plaintext pin', rej.status === 401, '401', `${rej.status}`);
 
-            await prisma.staff.delete({ where: { id: freshStaff2.id } });
+            await prisma.staff.delete({ where: { id: migratedStaff.id } });
+            await prisma.staff.delete({ where: { id: plaintextOnly.id } });
         } catch (e: any) {
             console.log('  FAIL: Exception:', e.message);
             failed++;
-            results.push({ test: 'No plaintext PIN', expected: 'success', actual: e.message, result: 'FAIL' });
+            results.push({ test: 'Hash-only auth', expected: 'success', actual: e.message, result: 'FAIL' });
         }
 
         // ==========================================
