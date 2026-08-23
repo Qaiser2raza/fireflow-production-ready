@@ -1,0 +1,33 @@
+---
+status: CANONICAL
+audience:
+  - engineering
+  - Kilo Code
+owner: FireFlow team
+last_reviewed: 2026-08-23
+source: CTO directive 2026-08-23 + verified incidents
+sensitivity: internal
+---
+
+# FireFlow Technical Debt Register
+
+Known debt is recorded here, not silently forgotten. Add entries with classification; never fix opportunistically outside an authorized mission.
+
+| ID | Item | Classification | Origin | Target |
+|---|---|---|---|---|
+| TD-1 | Occupied-port guard in `scripts/release-gate.cjs`: fail fast when :3001 is already listening before boot. Two false-negative gate runs caused by stale non-test servers (PID 4108 on 2026-08-23; orphaned node child surviving `Stop-Process` on `npx.cmd` same day). Windows cleanup must kill the full process tree (`taskkill /T /F`). | hygiene · test-infra reliability | Phase 0 / Slice B verification | hygiene backlog |
+| TD-2 | `/api/super-admin/*` mount still allows tenant `MANAGER` role on licenses/payments routes (only provisioning is SUPER_ADMIN-restricted per D-4). Review the whole surface. | security review (low urgency — Vault UI only) | Phase 1 design D-4/FU-3 | separate hygiene pass |
+| TD-3 | Payment dual-reality findings from M017 audit (F-01: `PaymentDispatcher.startAttempt` has zero production callers; payments table unwritten by production code). | documented finding | docs/MISSION_017_WORKFLOW_AUDIT.md | Mission 017 execution (Payments & Order Completion coherence) |
+| TD-4 | Inventory domain inert: zero API references to `inventory_items` / `recipe_items`. | documented finding | docs/MISSION_017_WORKFLOW_AUDIT.md (F-02) | deferred mission |
+| TD-5 | Missing browser automation: no browser-capable runner; manual founder UI passes remain UX-only judgments. Plan §8 requires browser-smoke scenarios per new surface. | verification gap | master plan §9 / verification requirements | with first user-facing phase (Slice C or Phase 2) |
+| TD-6 | CI/deployment gaps: no hosted CI running the release gate on push. | process gap | master plan §8 | infra mission |
+| TD-7 | Supabase owner lookup via bounded `listUsers` scan (pilot-scale). Replace with dedicated lookup endpoint when fleet grows. | accepted pilot limitation | Phase 1 slice B | HQ-API phase |
+| TD-8 | Production entitlement isolation: license binding assumes one licensed restaurant per node; multi-tenant nodes out of scope for pilot. CTO-approved pilot boundary (D-3). | approved boundary | Phase 1 condition 7 / FU-1 | Phase 5 enrollment |
+| TD-9 | Remaining test-suite teardown patterns use ad-hoc delete chains instead of a shared fixture helper. | maintainability | Phase 1 suites | hygiene backlog |
+| TD-10 | Legacy scratch scripts and modified files in working tree unrelated to missions (`scripts/check-db.ts` deletion, `migrate-pins-to-bcrypt.ts`, enum-check scripts, `opencode.json`) — classify, keep, or remove deliberately. | housekeeping | standing observation | hygiene backlog |
+
+## Rules
+
+1. New debt discovered during a task gets a row here before task close.
+2. Debt fixed under an authorized mission gets its row marked resolved with evidence link.
+3. This register is `CANONICAL`; changes belong in commit messages referencing the originating task.

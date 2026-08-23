@@ -1,15 +1,19 @@
 # FireFlow — Agent Context
 
-## Purpose
+Primary instruction file for Kilo Code agents. Keep this file short; details live in linked documents.
 
-This file orients AI agents on the canonical truths of the FireFlow project.
-It is the single entry point for understanding what FireFlow is, what it does, and how it is built.
+## Read before every task
 
-For detailed state, see `CURRENT_STATE.md`.
-For architecture details, see `ARCHITECTURE.md`.
-For product principles, see `PROJECT_CONSTITUTION.md`.
+1. Read this file completely.
+2. Read `docs/AI/README.md` (documentation index + authority order).
+3. Read `docs/AI/ENGINEERING_INSTRUCTIONS.md` (full engineering instructions, invariants, verification and commit discipline).
+4. Read the active mission or phase document.
+5. Read relevant canonical architecture and security documents.
+6. Read `docs/technical-debt/REGISTER.md`, if present.
+7. Check recent commits and working-tree status.
+8. Treat archived, superseded, and draft documents as non-authoritative unless explicitly instructed otherwise.
 
----
+If any required file is missing, unclear, or contradictory, stop and report that before changing code.
 
 ## Source Priority
 
@@ -20,60 +24,58 @@ When information conflicts, use this order:
 3. Accepted architectural decisions (`docs/adr/`)
 4. Current domain specifications (`ARCHITECTURE.md`, `CURRENT_STATE.md`)
 5. Existing canonical documentation
-6. Historical/legacy documents (`docs/legacy/`)
+6. Historical/legacy documents (`docs/legacy/`, archived/superseded material)
 
-Never silently resolve a serious contradiction.
-If something cannot be established, mark it UNKNOWN and report it.
-
----
+Never silently resolve a serious contradiction. If something cannot be established, mark it UNKNOWN and report it.
 
 ## Product Truth
 
-FireFlow is an AI-native Business Operating System initially focused on the restaurant vertical.
+FireFlow is an AI-native Business Operating System initially focused on the restaurant vertical. The existing restaurant operational system (POS, orders, kitchen display, inventory, accounting, delivery, tenant management) is the foundation; AI is an assistance layer over deterministic business systems. FireFlow owns restaurant operations end to end.
 
-The existing restaurant operational system is FireFlow's foundation:
-POS, orders, kitchen display, inventory, accounting, delivery, tenant management, and website/ordering capabilities.
+Cravex is a separate commerce system integrating only through authenticated contracts. Regional compliance providers (FBR, ZATCA, ETA) enter through generic fiscal contracts — provider specifics live in connectors. AI is accessed only through a FireFlow-owned gateway: no raw DB access, no cross-tenant reads, no direct approval of accounting/payment/refund/void actions.
 
-AI is an intelligence/assistance layer over deterministic business systems.
-AI must NOT become the authority for financial integrity, permissions, security, or other deterministic business rules.
+The system must remain modular and provider-independent. No Cravex, FBR, AI, DSH, DeepSeek, Qwen, Google, or other provider may become a core dependency.
 
-The system should remain modular and provider-independent.
+## Non-negotiable invariants (summary)
 
----
+1. **Tenant isolation**: no request, event, worker, adapter, socket, or AI tool crosses tenant boundaries; tenant context comes from trusted authentication/server state, never client hints.
+2. **Backend financial authority**: backend decides all money math; frontend may preview only.
+3. **Hybrid awareness**: operational data on local PostgreSQL via Express API; SaaS data (licenses, subscriptions, payments) via Supabase cloud through `cloudClient.ts`.
+4. **No destructive refactors**: `src/api/server.ts` changes only for genuine bug fixes.
+5. **Immutability**: posted accounting records are immutable.
+6. **Unknown is not failure**: external timeouts are never proof of failure; unknown outcomes stay reconcilable.
+7. **Events are business facts**, not provider commands.
+8. **Secrecy**: secrets, private keys, plaintext PINs, tokens, and production personal data never enter logs, events, training data, or documentation.
+9. **Script-first verification**: one-shot `scratch/*.cjs` evidence helpers; tracked `scripts/release-gate.cjs` gates every push.
+10. **Branding**: "Fireflow Restaurant" for tenants; "Powered by Fireflow" as SaaS badge.
 
-## Critical Rules
+## Mission and scope discipline
 
-1. **Hybrid Awareness**: Operational data (orders, kitchen, inventory) runs on local PostgreSQL via Express API. SaaS data (licenses, subscriptions, payments) uses Supabase cloud via `cloudClient.ts`.
-2. **Branding**: Maintain "Fireflow Restaurant" for tenants; "Powered by Fireflow" is the SaaS provider badge.
-3. **No destructive refactors**: `src/api/server.ts` is the core local operations entry point. Do not touch it unless fixing bugs.
-4. **Financial Authority**: Backend is the source of truth for all financial calculations, order totals, tax, and service charge. Frontend may preview but never override.
-5. **Tenant Isolation**: Every data mutation must enforce `restaurant_id` from authenticated context, never from client input.
-6. **AI Boundaries**: AI may recommend, summarize, and assist. AI may never approve financial transactions, override permissions, or bypass security controls.
-7. **Documentation**: Do not delete or move legacy documents. Add classification notes instead.
+Smallest safe change, inside the active mission, after identifying the relevant transaction boundary and invariant. No broad refactors, no drive-by redesigns of nearby domains. Out-of-scope issues get documented and classified in the technical-debt register, not fixed opportunistically.
 
----
+Workflow: Inspect -> Understand -> Identify invariant -> Make smallest change -> Test -> Review -> Commit.
 
 ## What NOT to Assume
 
-- Do not assume old `.md` files in `docs/` are current. Many are historical.
-- Do not assume `ORDER_BOOKING_WORK_PROCESS.md` or `MASTER_BLUEPRINT_V3.md` reflect current schema.
-- Do not assume `openapi.json` matches the current Express API.
-- Do not assume the `develop` branch exists or is the working branch.
-- Do not assume AI features described in architecture docs are implemented.
-- Do not assume all routes in `src/api/server.ts` are authenticated.
-
----
+- Old `.md` files in `docs/` are often historical; check status metadata.
+- `ORDER_BOOKING_WORK_PROCESS.md` / `MASTER_BLUEPRINT_V3.md` do not reflect current schema.
+- `openapi.json` may lag the Express API.
+- A `develop` branch may not exist.
+- AI features described in architecture docs may be unimplemented.
+- Not all routes in `src/api/server.ts` are authenticated.
 
 ## Documentation Hierarchy
 
-1. `PROJECT_CONSTITUTION.md` — Product identity & principles
-2. `CURRENT_STATE.md` — Verified repository reality
-3. `ARCHITECTURE.md` — Architecture as built
-4. `docs/adr/` — Accepted architectural decisions
-5. `docs/` — Current documentation
-6. `docs/legacy/` — Historical/contradicted documents
+1. `PROJECT_CONSTITUTION.md` — product identity & principles
+2. `CURRENT_STATE.md` — verified repository reality
+3. `ARCHITECTURE.md` — architecture as built
+4. `docs/AI/ENGINEERING_INSTRUCTIONS.md` — engineering process & invariants
+5. `docs/adr/` — accepted architectural decisions
+6. `docs/` — current documentation (`CANONICAL` defines behavior)
+7. `docs/work-in-progress/`, drafts — non-authoritative
+8. `docs/legacy/`, archived — historical
 
----
+Do not delete or move legacy documents. Add classification notes instead. Do not rewrite historical mission reports.
 
 ## Quick Reference
 
@@ -85,12 +87,12 @@ The system should remain modular and provider-independent.
 | Auth middleware | `src/api/middleware/authMiddleware.ts` |
 | Order abstraction | `src/api/services/orders/` |
 | Accounting | `src/api/services/AccountingService.ts`, `JournalEntryService.ts` |
+| Provisioning / owner invites | `src/api/services/onboarding/`, `src/api/routes/superAdminRoutes.ts` |
+| Supabase admin ports | `src/api/services/platform/SupabaseAdminService.ts` |
 | Socket client | `src/shared/lib/socketClient.ts` |
 | Types | `src/shared/types.ts` |
 | Env config | `src/config/env.ts` |
 | Electron | `electron-main.cjs`, `electron/main.ts` |
 | AI assistant | `src/operations/dashboard/AURAAssistant.tsx` |
 
----
-
-Last updated: 2026-08-16
+Last updated: 2026-08-23
