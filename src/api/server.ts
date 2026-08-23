@@ -3227,6 +3227,46 @@ app.post('/api/system/reset-environment', authMiddleware, requireRole('SUPER_ADM
 });
 // (Moved higher up)
 
+/**
+ * GET /api/orders/qr-pending
+ * Returns the list of QR orders awaiting cashier approval from DB.
+ * NOTE: must stay registered ABOVE GET /api/orders/:id or the :id route shadows it.
+ */
+app.get('/api/orders/qr-pending', authMiddleware, async (req, res) => {
+    try {
+        const restaurantId = req.restaurantId;
+        const pendingList = await prisma.orders.findMany({
+            where: { restaurant_id: restaurantId, type: 'QR', status: 'PENDING_APPROVAL' },
+            include: { order_items: true, tables: true },
+            orderBy: { created_at: 'asc' }
+        });
+
+        // Map to the shape expected by the frontend (IncomingQROrder roughly)
+        const mappedList = pendingList.map(order => ({
+            id: order.id,
+            restaurant_id: order.restaurant_id,
+            table_number: order.tables?.name ? Number(order.tables.name) : undefined,
+            table_label: order.tables?.name || null,
+            items: order.order_items.map(item => ({
+                menu_item_id: item.menu_item_id,
+                name: item.item_name || 'Unknown',
+                quantity: item.quantity,
+                unit_price: Number(item.unit_price)
+            })),
+            subtotal: Number(order.total),
+            notes: (order as any).notes,
+            customer_name: order.customer_name,
+            submitted_at: order.created_at.toISOString(),
+            sig_verified: true
+        }));
+
+        res.json({ count: mappedList.length, orders: mappedList });
+    } catch (e: any) {
+        console.error('GET /api/orders/qr-pending error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Route to fetch specific order with all its relational extensions
 app.get('/api/orders/:id', authMiddleware, async (req, res) => {
     try {
@@ -3934,45 +3974,6 @@ app.post('/api/orders/qr', async (req, res) => {
     } catch (e: any) {
         console.error('[ERROR] POST /api/orders/qr:', e.message);
         res.status(500).json({ error: e.message || 'Failed to create local QR order' });
-    }
-});
-
-/**
- * GET /api/orders/qr-pending
- * Returns the list of QR orders awaiting cashier approval from DB.
- */
-app.get('/api/orders/qr-pending', authMiddleware, async (req, res) => {
-    try {
-        const restaurantId = req.restaurantId;
-        const pendingList = await prisma.orders.findMany({
-            where: { restaurant_id: restaurantId, type: 'QR', status: 'PENDING_APPROVAL' },
-            include: { order_items: true, tables: true },
-            orderBy: { created_at: 'asc' }
-        });
-        
-        // Map to the shape expected by the frontend (IncomingQROrder roughly)
-        const mappedList = pendingList.map(order => ({
-            id: order.id,
-            restaurant_id: order.restaurant_id,
-            table_number: order.tables?.name ? Number(order.tables.name) : undefined,
-            table_label: order.tables?.name || null,
-            items: order.order_items.map(item => ({
-                menu_item_id: item.menu_item_id,
-                name: item.item_name || 'Unknown',
-                quantity: item.quantity,
-                unit_price: Number(item.unit_price)
-            })),
-            subtotal: Number(order.total),
-            notes: (order as any).notes,
-            customer_name: order.customer_name,
-            submitted_at: order.created_at.toISOString(),
-            sig_verified: true
-        }));
-        
-        res.json({ count: mappedList.length, orders: mappedList });
-    } catch (e: any) {
-        console.error('GET /api/orders/qr-pending error:', e);
-        res.status(500).json({ error: e.message });
     }
 });
 

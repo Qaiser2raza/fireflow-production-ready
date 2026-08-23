@@ -5,11 +5,10 @@ import { QRCodeSVG } from 'qrcode.react';
 
 interface LoginViewProps {
   onLogin: (pin: string) => Promise<boolean | void> | void;
-  onStartRegistration?: () => void;
   restaurantName?: string;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartRegistration, restaurantName }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -195,17 +194,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onStartRegistrati
           >
             {isProcessing ? 'Verifying...' : <span className="flex items-center gap-2">Authenticate <ArrowRight size={16} /></span>}
           </button>
-
-          {onStartRegistration && (
-            <button
-              onClick={onStartRegistration}
-              className="w-full py-2 mt-2 rounded-xl font-bold uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-gold-400"
-            >
-              <Smartphone size={14} />
-              Register New Restaurant
-            </button>
-          )}
-
 
           <button
             onClick={() => { setShowConnectModal(true); fetchConnectivity(); }}

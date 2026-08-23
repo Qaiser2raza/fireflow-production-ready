@@ -1000,7 +1000,7 @@ const AppContent = () => {
     );
   }
 
-  if (!currentUser) return <LoginView onLogin={login} onStartRegistration={() => setShowDevicePairing(true)} />;
+  if (!currentUser) return <LoginView onLogin={login} />;
 
   let menuItems: any[] = [];
 
