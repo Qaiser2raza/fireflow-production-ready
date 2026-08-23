@@ -3,10 +3,12 @@ import {
   Building2, Users, CreditCard, Zap, Search, Trash2,
   CheckCircle2, XCircle, Banknote, Loader2,
   Copy, Shield,
-  ExternalLink
+  ExternalLink, Plus, RefreshCw
 } from 'lucide-react';
 import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 import { LicenseKey } from '../../shared/lib/cloudClient';
+import { ProvisionRestaurantModal } from './ProvisionRestaurantModal';
+import { inviteStateMeta } from './provisionHelpers';
 
 // ==========================================
 // TYPES
@@ -23,6 +25,18 @@ interface RestaurantWithOwner {
   staffCount: number;
   orderCount: number;
   createdAt: string;
+}
+
+interface OwnerInviteRow {
+  invite_id: string;
+  restaurant_id: string;
+  restaurant_name: string | null;
+  email: string;
+  state: string;
+  attempt_count: number;
+  last_error: string | null;
+  invited_at: string | null;
+  updated_at: string;
 }
 
 // ==========================================
@@ -55,6 +69,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
   // License management state
   const [licenses, setLicenses] = useState<LicenseKey[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
+  const [invites, setInvites] = useState<OwnerInviteRow[]>([]);
+  const [showProvision, setShowProvision] = useState(false);
+  const [retryingInvite, setRetryingInvite] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE'>('BASIC');
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const [hardwareId, setHardwareId] = useState('');
@@ -80,6 +97,28 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
       setPayments(data || []);
     } catch (err) {
       console.error('Failed to fetch payments:', err);
+    }
+  };
+
+  const fetchInvites = async () => {
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/super-admin/owner-invites`);
+      const data = await res.json();
+      setInvites(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to fetch owner invites:', err);
+    }
+  };
+
+  const retryInvite = async (inviteId: string) => {
+    setRetryingInvite(inviteId);
+    try {
+      await fetchWithAuth(`${API_BASE}/super-admin/owner-invites/${inviteId}/retry`, { method: 'POST' });
+      await fetchInvites();
+    } catch (err) {
+      console.error('Failed to retry owner invite:', err);
+    } finally {
+      setRetryingInvite(null);
     }
   };
 
@@ -114,6 +153,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
       setRestaurants(formatted);
       await fetchLicenses();
       await fetchPayments();
+      await fetchInvites();
     } catch (error) {
       console.error('Failed to load HQ data:', error);
     } finally {
@@ -314,6 +354,13 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                   className="w-full bg-slate-900/80 border border-slate-800 rounded-xl pl-12 pr-4 py-4 text-white outline-none focus:border-gold-500/50 transition-all placeholder:text-slate-600"
                 />
               </div>
+              <button
+                onClick={() => setShowProvision(true)}
+                className="px-5 py-4 rounded-xl text-sm font-black bg-gold-500 hover:bg-gold-600 text-black transition-all shadow-[0_0_20px_rgba(234,179,8,0.25)] flex items-center gap-2 shrink-0"
+                title="Provision a new restaurant tenant, manager PIN and owner invitation"
+              >
+                <Plus size={16} /> Create Restaurant
+              </button>
             </div>
 
             <div className="grid grid-cols-1 gap-4">
@@ -330,6 +377,17 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                         <span className={`px-2 py-0.5 rounded text-[9px] font-black tracking-widest uppercase border ${r.is_active ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : 'text-slate-500 bg-slate-500/10 border-slate-500/20'}`}>
                           {r.is_active ? 'ACTIVE' : 'INACTIVE'}
                         </span>
+                        {(() => {
+                          const invite = invites.find(i => i.restaurant_id === r.id);
+                          if (!invite) return null;
+                          const meta = inviteStateMeta(invite.state);
+                          return (
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-black tracking-widest uppercase border ${meta.className}`}
+                              title={`Owner invite ${invite.state}${invite.last_error ? ` — ${invite.last_error}` : ''}`}>
+                              OWNER: {meta.label}
+                            </span>
+                          );
+                        })()}
                       </h3>
                       <div className="flex items-center gap-4 mt-1 text-slate-500 text-sm font-medium">
                         <span className="flex items-center gap-1"><Users size={14} /> {r.staffCount} Staff</span>
@@ -340,6 +398,22 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {(() => {
+                      const invite = invites.find(i => i.restaurant_id === r.id);
+                      if (!invite) return null;
+                      const meta = inviteStateMeta(invite.state);
+                      if (!meta.retryable) return null;
+                      return (
+                        <button
+                          onClick={() => retryInvite(invite.invite_id)}
+                          disabled={retryingInvite === invite.invite_id}
+                          className="p-3 text-sky-400/70 hover:text-sky-400 hover:bg-sky-500/10 rounded-xl border border-transparent hover:border-sky-500/20 transition-all"
+                          title="Retry owner invitation (manual recovery)"
+                        >
+                          {retryingInvite === invite.invite_id ? <Loader2 size={20} className="animate-spin" /> : <RefreshCw size={20} />}
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={() => handleDeleteRestaurant(r)}
                       disabled={isDeleting === r.id}
@@ -595,6 +669,13 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
           </div>
         </div>
       )}
+
+      {/* Provision Restaurant Modal (Phase 1 Slice C) */}
+      <ProvisionRestaurantModal
+        open={showProvision}
+        onClose={() => setShowProvision(false)}
+        onProvisioned={() => { void fetchData(); }}
+      />
     </div>
   );
 };
