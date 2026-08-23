@@ -715,6 +715,7 @@ model restaurants {
   fbr_ntn                 String?
   fbr_pos_id              String?
   logo_url                String?
+  cloud_synced_at         DateTime?               @db.Timestamp(6)
   subscription_expires_at DateTime?               @db.Timestamp(6)
   trial_ends_at           DateTime?               @db.Timestamp(6)
   approval_logs           approval_logs[]
@@ -734,6 +735,7 @@ model restaurants {
   menu_items              menu_items[]
   order_type_defaults     order_type_defaults[]
   orders                  orders[]
+  owner_invites           owner_invites[]
   pairing_codes           pairing_codes[]
   parked_orders           parked_orders[]
   payouts                 payouts[]
@@ -847,7 +849,9 @@ model staff {
   current_lng                                             Decimal?             @db.Decimal(11, 8)
   is_available                                            Boolean?             @default(true)
   locked_until                                            DateTime?
-  failed_login_count                                     Int?                 @default(0)
+  failed_login_count                                      Int?              @default(0)
+  must_change_pin                                         Boolean           @default(false)
+  pin_expires_at                                          DateTime?
   approval_logs_approval_logs_approved_by_user_idTostaff  approval_logs[]      @relation("approval_logs_approved_by_user_idTostaff")
   approval_logs_approval_logs_requested_by_user_idTostaff approval_logs[]      @relation("approval_logs_requested_by_user_idTostaff")
   audit_logs                                              audit_logs[]
@@ -1409,7 +1413,27 @@ enum AccountStatus {
   SUSPENDED
 }
 
+model owner_invites {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String    @db.Uuid
+  email           String    @db.VarChar(255)
+  supabase_user_id String?  @db.VarChar(255)
+  state           String    @default("INVITE_PENDING") @db.VarChar(30)
+  attempt_count   Int       @default(0)
+  last_error      String?   @db.VarChar(255)
+  invited_at      DateTime? @db.Timestamp(6)
+  created_at      DateTime  @default(now()) @db.Timestamp(6)
+  updated_at      DateTime  @default(now()) @db.Timestamp(6)
+
+  restaurants     restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@unique([restaurant_id, email])
+  @@index([state])
+  @@index([restaurant_id])
+}
+
 model platform_users {
+
   id                      String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email                   String           @db.VarChar(255)
   supabase_id             String?          @unique @db.VarChar(255)

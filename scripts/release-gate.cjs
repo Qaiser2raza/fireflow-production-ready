@@ -61,6 +61,8 @@ async function main() {
     const suites = [
         'mission-016b boundary regression      ', 'npx tsx tests/mission-016b-boundary.test.ts',
         'phase1 PIN hardening                  ', 'npx tsx tests/phase1-pin-hardening.test.ts',
+        'phase1 provisioning                   ', 'npx tsx tests/phase1-provisioning.test.ts',
+        'phase1 invite dispatcher              ', 'npx tsx tests/phase1-invite-dispatcher.test.ts',
         'refresh-token rotation                ', 'npx tsx tests/refresh-token-rotation.test.ts',
         'platform auth                         ', 'npx tsx tests/platform-auth.test.ts',
         'service tenant isolation              ', 'npx tsx tests/service-tenant-isolation.test.ts',

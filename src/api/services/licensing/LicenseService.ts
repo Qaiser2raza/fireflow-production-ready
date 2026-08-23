@@ -236,9 +236,55 @@ export class LicenseService {
   }
 
   /**
-   * Securely saves an activation key to the local file system
+   * Phase 1 (provisioning condition 4): license-file-only evaluation for
+   * contexts with NO reliable tenant identity. Verifies everything that does
+   * not require binding to a restaurant row: file presence, cryptographic
+   * signature, hardware fingerprint, expiration. Tenant-ownership and DB
+   * clock-monotonicity checks are skipped here by definition — any caller
+   * WITH an authenticated restaurant context must use evaluateLocalLicenseStatus.
    */
-  static saveLicense(tokenString: string): boolean {
+  static async evaluateUnboundLicenseStatus(): Promise<LicenseVerificationResult> {
+    try {
+      if (!fs.existsSync(LICENSE_PATH)) {
+        return { status: 'unlicensed', payload: null, error: 'License file not found on disk' };
+      }
+
+      const tokenString = fs.readFileSync(LICENSE_PATH, 'utf8').trim();
+      const payload = this.verifyLicenseToken(tokenString);
+      if (!payload) {
+        return { status: 'tampered', payload: null, error: 'Cryptographic signature is invalid' };
+      }
+
+      const currentFingerprint = this.getHardwareFingerprint();
+      if (payload.hardware_fingerprint && payload.hardware_fingerprint !== currentFingerprint) {
+        console.warn(`[LICENSE SERVICE] Hardware fingerprint mismatch! License belongs to: ${payload.hardware_fingerprint}, active system: ${currentFingerprint}`);
+        return { status: 'tampered', payload, error: 'License hardware fingerprint does not match host hardware' };
+      }
+
+      const systemTime = new Date();
+      const expiryTime = new Date(payload.subscription_expires_at);
+      const gracePeriodMs = (payload.grace_period_days || 0) * 24 * 60 * 60 * 1000;
+
+      if (systemTime.getTime() > expiryTime.getTime() + gracePeriodMs) {
+        const daysExpired = Math.floor((systemTime.getTime() - expiryTime.getTime()) / (24 * 60 * 60 * 1000));
+        return {
+          status: 'expired',
+          payload,
+          error: `Subscription expired ${daysExpired} days ago (Expiration Date: ${expiryTime.toLocaleDateString()})`
+        };
+      }
+
+      const daysRemaining = Math.max(0, Math.floor((expiryTime.getTime() - systemTime.getTime()) / (24 * 60 * 60 * 1000)));
+      return { status: 'active', payload, error: null, daysRemaining };
+    } catch (error: any) {
+      console.error('[LICENSE SERVICE] Fatal error during unbound license evaluation:', error);
+      return { status: 'tampered', payload: null, error: error.message || 'Fatal verification error' };
+    }
+  }
+
+  /**
+   * Securely saves an activation key to the local file system
+   */  static saveLicense(tokenString: string): boolean {
     try {
       fs.writeFileSync(LICENSE_PATH, tokenString.trim(), 'utf8');
       console.log('[LICENSE SERVICE] License activated and written to disk:', LICENSE_PATH);

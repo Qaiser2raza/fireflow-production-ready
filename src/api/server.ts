@@ -157,6 +157,14 @@ integrationRegistry.register(fiscalHttpConnector);
 const fiscalDeliveryService = FiscalDeliveryService.getInstance();
 fiscalDeliveryService.start();
 
+// Phase 1 slice B: owner-invite + cloud-mirror dispatcher.
+// Idle unless Supabase credentials exist; disabled in test mode so the
+// release gate never issues real provider calls (tests drive it directly).
+if (config.NODE_ENV !== 'test') {
+    const { ownerInviteDispatcher } = await import('./services/onboarding/OwnerInviteDispatcher');
+    ownerInviteDispatcher.start();
+}
+
 // Initialize health monitor
 const healthMonitor = HealthMonitor.initialize(prisma);
 
@@ -361,41 +369,60 @@ app.post('/api/licensing/activate', async (req, res) => {
 /**
  * GET /api/licensing/status
  * Returns full status of local cryptographic license.
+ * Phase 1 (condition 4): tenant-scoped evaluation. Authenticated requests bind
+ * strictly to req.restaurantId; unauthenticated requests fall back to a
+ * single-restaurant node only. On zero/ambiguous rows NO unordered findFirst
+ * binding happens — payload-only evaluation instead.
  */
-app.get('/api/licensing/status', async (_req, res) => {
+app.get('/api/licensing/status', async (req, res) => {
     try {
         // Mission 016B release controls: mirror verifyLicensingMiddleware's test
-        // exemption — this endpoint evaluates against an unordered findFirst()
-        // and cannot bind to a single tenant on multi-tenant dev databases.
+        // exemption — this endpoint cannot bind tenants in multi-tenant dev DBs.
         if (process.env.NODE_ENV === 'test') {
             return res.json({ status: 'active', testModeSkip: true });
         }
-        const activeRestaurant = await prisma.restaurants.findFirst({
-            select: { id: true, name: true, subscription_plan: true, subscription_status: true }
-        });
 
-        if (!activeRestaurant) {
-            return res.json({ status: 'unlicensed', error: 'No local restaurant initialized' });
+        let activeRestaurant: { id: string; name: string; subscription_plan: string; subscription_status: string } | null = null;
+
+        if ((req as any).restaurantId) {
+            const scoped = await prisma.restaurants.findUnique({
+                where: { id: (req as any).restaurantId },
+                select: { id: true, name: true, subscription_plan: true, subscription_status: true }
+            });
+            if (!scoped) return res.status(404).json({ error: 'Authenticated restaurant not found' });
+            activeRestaurant = scoped;
+        } else {
+            const rowCount = await prisma.restaurants.count();
+            if (rowCount === 1) {
+                activeRestaurant = await prisma.restaurants.findFirst({
+                    select: { id: true, name: true, subscription_plan: true, subscription_status: true }
+                });
+            }
         }
 
-        const verification = await LicenseService.evaluateLocalLicenseStatus(activeRestaurant.id);
-        
-        // Synchronize local database meta strings on check
-        if (verification.status === 'active' && verification.payload) {
+        let verification;
+        if (activeRestaurant) {
+            verification = await LicenseService.evaluateLocalLicenseStatus(activeRestaurant.id);
+        } else {
+            verification = await LicenseService.evaluateUnboundLicenseStatus();
+        }
+
+        // Synchronize local database meta strings on check (only when bound)
+        if (activeRestaurant && verification.status === 'active' && verification.payload) {
             const currentDbStatus = activeRestaurant.subscription_status;
             const currentDbPlan = activeRestaurant.subscription_plan;
-            
+
             if (currentDbStatus !== 'active' || currentDbPlan !== verification.payload.plan) {
                 await prisma.restaurants.update({
                     where: { id: activeRestaurant.id },
-                    data: { 
+                    data: {
                         subscription_status: 'active',
                         subscription_plan: verification.payload.plan,
                         subscription_expires_at: new Date(verification.payload.subscription_expires_at)
                     }
                 });
             }
-        } else if (verification.status === 'expired' || verification.status === 'tampered') {
+        } else if (activeRestaurant && (verification.status === 'expired' || verification.status === 'tampered')) {
             if (activeRestaurant.subscription_status !== 'expired') {
                 await prisma.restaurants.update({
                     where: { id: activeRestaurant.id },
@@ -408,8 +435,8 @@ app.get('/api/licensing/status', async (_req, res) => {
             status: verification.status,
             daysRemaining: verification.daysRemaining || 0,
             error: verification.error,
-            plan: verification.payload?.plan || activeRestaurant.subscription_plan || 'BASIC',
-            restaurantName: verification.payload?.restaurant_name || activeRestaurant.name,
+            plan: verification.payload?.plan || activeRestaurant?.subscription_plan || 'BASIC',
+            restaurantName: verification.payload?.restaurant_name || activeRestaurant?.name || 'Fireflow',
             expiresAt: verification.payload?.subscription_expires_at || null
         });
     } catch (e: any) {
@@ -421,10 +448,30 @@ app.get('/api/licensing/status', async (_req, res) => {
 /**
  * POST /api/licensing/sync
  * Sync latest license from cloud Supabase
+ * Phase 1 (condition 4): same tenant-scoping contract as /status — explicit
+ * identity when authenticated, single-restaurant fallback only, otherwise
+ * ambiguous ? 409 rather than an arbitrary first-row binding.
  */
-app.post('/api/licensing/sync', async (_req, res) => {
+app.post('/api/licensing/sync', async (req, res) => {
     try {
-        const activeRestaurant = await prisma.restaurants.findFirst({ select: { id: true } });
+        let activeRestaurant: { id: string } | null = null;
+
+        if ((req as any).restaurantId) {
+            const scoped = await prisma.restaurants.findUnique({
+                where: { id: (req as any).restaurantId },
+                select: { id: true }
+            });
+            if (!scoped) return res.status(404).json({ error: 'Authenticated restaurant not found' });
+            activeRestaurant = scoped;
+        } else {
+            const rowCount = await prisma.restaurants.count();
+            if (rowCount === 1) {
+                activeRestaurant = await prisma.restaurants.findFirst({ select: { id: true } });
+            } else if (rowCount > 1) {
+                return res.status(409).json({ error: 'Ambiguous tenant context for license sync; authenticate or reduce to a single restaurant' });
+            }
+        }
+
         if (!activeRestaurant) return res.status(404).json({ error: 'No local restaurant initialized' });
 
         const { getSupabaseClient } = await import('../shared/lib/cloudClient.js');

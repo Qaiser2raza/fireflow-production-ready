@@ -8,6 +8,7 @@ export interface ProvisioningResult {
   success: boolean;
   restaurant?: any;
   ownerStaff?: any;
+  ownerInviteId?: string;
   error?: string;
 }
 
@@ -30,6 +31,7 @@ export class RestaurantProvisioningService {
     const subscriptionPlan = data.subscriptionPlan || 'BASIC';
     const subscriptionStatus = data.subscriptionStatus || 'trial';
     const now = new Date();
+    const pinExpiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
     const trialEndsAt = new Date(now);
     trialEndsAt.setDate(trialEndsAt.getDate() + 30);
@@ -72,10 +74,22 @@ export class RestaurantProvisioningService {
             restaurant_id: restaurant.id,
             name: data.ownerName,
             role: 'MANAGER',
-            pin: ownerPin,
+            pin: '',
             hashed_pin: ownerPinHash,
+            must_change_pin: true,
+            pin_expires_at: pinExpiresAt,
             status: 'active',
             created_at: now,
+          },
+        });
+
+        // Owner invite state row: durable compensation ledger for the cloud side.
+        // The Supabase invitation itself happens OUTSIDE this transaction (dispatcher).
+        const ownerInvite = await tx.owner_invites.create({
+          data: {
+            restaurant_id: restaurant.id,
+            email: normalizedEmail,
+            state: 'INVITE_PENDING',
           },
         });
 
@@ -150,8 +164,45 @@ export class RestaurantProvisioningService {
               owner_staff_id: ownerStaff.id,
               default_section_id: defaultSection.id,
               default_table_id: defaultTable.id,
+              owner_invite_id: ownerInvite.id,
+              pin_expires_at: pinExpiresAt.toISOString(),
             },
             performed_by_role: 'MANAGER',
+          },
+        });
+
+        // Outbox work items for the cloud dispatcher. Payloads carry identifiers
+        // and routing data only — never the PIN or any secret.
+        await tx.outbox.create({
+          data: {
+            restaurant_id: restaurant.id,
+            event_type: 'RESTAURANT_CLOUD_REGISTER',
+            aggregate_type: 'RESTAURANT',
+            aggregate_id: restaurant.id,
+            payload: {
+              restaurant_id: restaurant.id,
+              name: data.name,
+              slug,
+              phone: data.phone || data.ownerPhone || null,
+              city: data.city || null,
+              subscription_plan: subscriptionPlan,
+            },
+          },
+        });
+
+        await tx.outbox.create({
+          data: {
+            restaurant_id: restaurant.id,
+            event_type: 'OWNER_INVITE_REQUESTED',
+            aggregate_type: 'OWNER_INVITE',
+            aggregate_id: ownerInvite.id,
+            payload: {
+              restaurant_id: restaurant.id,
+              invite_id: ownerInvite.id,
+              email: normalizedEmail,
+              owner_name: data.ownerName,
+              restaurant_name: data.name,
+            },
           },
         });
 
@@ -161,6 +212,7 @@ export class RestaurantProvisioningService {
             ...ownerStaff,
             temporary_pin: ownerPin,
           },
+          ownerInviteId: ownerInvite.id,
         };
       });
 
@@ -168,6 +220,7 @@ export class RestaurantProvisioningService {
         success: true,
         restaurant: result.restaurant,
         ownerStaff: result.ownerStaff,
+        ownerInviteId: result.ownerInviteId,
       };
     } catch (error: any) {
       console.error('[PROVISIONING] Error:', error.message);
@@ -203,12 +256,9 @@ export class RestaurantProvisioningService {
   }
 
   private generateSecurePin(): string {
-    const chars = '0123456789';
-    let pin = '';
-    for (let i = 0; i < 6; i++) {
-      pin += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return pin;
+    // CSPRNG per Phase 1 condition 2: 6 decimal digits (~19.9 bits).
+    // The value is never used as a lookup key anywhere.
+    return crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
   }
 }
 
