@@ -92,6 +92,20 @@ async function cleanupAllRestaurants() {
     }
 }
 
+// Phase 2: provisioned tenants now start SETUP_INCOMPLETE with a forced-change
+// owner PIN. Rotation fixtures predate the wizard and operate immediately —
+// restore legacy fixture semantics explicitly instead of weakening the gate.
+async function neutralizePhase2Restrictions(restaurantId: string, ownerStaffId: string) {
+    await prisma.restaurants.update({
+        where: { id: restaurantId },
+        data: { onboarding_status: 'ACTIVE' }
+    });
+    await prisma.staff.update({
+        where: { id: ownerStaffId },
+        data: { must_change_pin: false, pin_expires_at: null }
+    });
+}
+
 async function createTestStaff(restaurantId: string, name: string, role: string, pin: string, status: string = 'active'): Promise<any> {
     const pinHash = await bcrypt.hash(pin, 12);
     return prisma.staff.create({
@@ -163,6 +177,7 @@ async function runTests() {
     }
 
     const restaurantId = result.restaurant.id;
+    await neutralizePhase2Restrictions(restaurantId, result.ownerStaff!.id);
 
     // ==========================================
     // TEST 1: Successful login issues refresh token
@@ -381,6 +396,7 @@ async function runTests() {
         });
 
         if (resultB.success && resultB.restaurant?.id) {
+            await neutralizePhase2Restrictions(resultB.restaurant.id, resultB.ownerStaff!.id);
             const staffB = await createTestStaff(resultB.restaurant.id, 'Manager B', 'MANAGER', '666666');
             const tokenB = jwtService.generateAccessToken(staffB.id, resultB.restaurant.id, 'MANAGER', 'Manager B');
 
@@ -390,15 +406,18 @@ async function runTests() {
             });
             const dataB = await resB.json();
             assert('Restaurant B staff cannot read Restaurant A staff', resB.status === 200, '200 (own scope)', `${resB.status}`);
-            
-            const staffNamesB = dataB.map((s: any) => s.name);
-            assert('No Restaurant A staff leaked', !staffNamesB.includes('Refresh Owner'), 'Refresh Owner absent', `${staffNamesB.join(',')}`);
+
+            const staffNamesB = Array.isArray(dataB) ? dataB.map((s: any) => s.name) : [];
+            assert('No Restaurant A staff leaked', Array.isArray(dataB) && !staffNamesB.includes('Refresh Owner'), 'Refresh Owner absent', `${staffNamesB.join(',')}`);
         }
 
         await cleanupRestaurant(resultB.restaurant!.id);
     } catch (e: any) {
         console.log('  FAIL: Exception:', e.message);
         failed++;
+        if (resultB?.restaurant?.id) {
+            await cleanupRestaurant(resultB.restaurant.id).catch(() => { });
+        }
     }
 
     // Cleanup

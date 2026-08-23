@@ -620,7 +620,9 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
                 restaurant_id: true,
                 hashed_pin: true,
                 failed_login_count: true,
-                locked_until: true
+                locked_until: true,
+                must_change_pin: true,
+                pin_expires_at: true
             }
         });
 
@@ -668,13 +670,32 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
             }
         }
 
+        // Phase 2: expired one-time PINs authenticate NOTHING. Check runs only
+        // after a successful bcrypt match, so the code leaks nothing to callers
+        // who cannot already produce the PIN. No session or tokens are issued.
+        if (user && user.pin_expires_at && user.pin_expires_at.getTime() <= Date.now()) {
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: restaurant_id,
+                    staff_id: user.id,
+                    action_type: 'STAFF_LOGIN_FAILED',
+                    entity_type: 'STAFF',
+                    entity_id: user.id,
+                    details: { reason: 'pin_expired', ip_address: ipAddress }
+                }
+            });
+            return res.status(403).json({
+                error: 'This PIN has expired and can no longer be used. Request a new PIN via FireFlow Vault support.',
+                code: 'PIN_EXPIRED'
+            });
+        }
+
         if (!user) {
             // Failure accounting: per-staff lockout requires an unambiguous
             // target. With a single eligible candidate we preserve the existing
             // counter/lockout behavior; with several we record the event without
             // punishing unrelated accounts.
-            if (eligible.length === 1) {
-                const c = eligible[0];
+            if (eligible.length === 1) {                const c = eligible[0];
                 const newFailedCount = (c.failed_login_count || 0) + 1;
                 const updateData: any = { failed_login_count: newFailedCount };
 
@@ -739,7 +760,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 
         const restaurant = await prisma.restaurants.findUnique({
             where: { id: user.restaurant_id },
-            select: { id: true, name: true, slug: true, logo_url: true as any }
+            select: { id: true, name: true, slug: true, logo_url: true as any, onboarding_status: true }
         });
 
         const accessToken = jwtService.generateAccessToken(
@@ -786,6 +807,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
             role: user.role,
             restaurant_id: user.restaurant_id,
             status: user.status,
+            must_change_pin: user.must_change_pin === true,
             last_login: lastLoginAt
         };
 
@@ -865,6 +887,217 @@ app.post('/api/restaurants', platformAuthMiddleware, requirePlatformRole('PLATFO
     } catch (error: any) {
         console.error('[ERROR] POST /api/restaurants:', error.message);
         res.status(500).json({ error: error.message || 'Failed to create restaurant' });
+    }
+});
+
+// ==========================================
+// PHASE 2: FIRST-LOGIN WIZARD CONTRACT
+// ==========================================
+
+/**
+ * POST /api/auth/change-pin
+ * Self-service PIN change. Allowlisted for restricted (must_change_pin /
+ * SETUP_INCOMPLETE) sessions in the authMiddleware setup gate.
+ * Clears must_change_pin and pin expiry on success.
+ */
+app.post('/api/auth/change-pin', verifyPinLimiter, authMiddleware, async (req, res) => {
+    try {
+        const { old_pin, new_pin } = req.body;
+        if (typeof old_pin !== 'string' || typeof new_pin !== 'string') {
+            return res.status(400).json({ error: 'old_pin and new_pin are required' });
+        }
+        if (!/^\d{6}$/.test(new_pin)) {
+            return res.status(400).json({ error: 'new_pin must be exactly 6 digits' });
+        }
+        if (old_pin === new_pin) {
+            return res.status(400).json({ error: 'New PIN must differ from the current PIN' });
+        }
+
+        const me = await prisma.staff.findUnique({
+            where: { id: req.staffId },
+            select: { id: true, hashed_pin: true, previous_hashed_pin: true, restaurant_id: true }
+        });
+        if (!me || !me.hashed_pin || !(await bcrypt.compare(old_pin, me.hashed_pin))) {
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: me?.restaurant_id,
+                    staff_id: me?.id,
+                    action_type: 'STAFF_PIN_CHANGE_FAILED',
+                    entity_type: 'STAFF',
+                    entity_id: me?.id,
+                    details: { reason: 'old_pin_mismatch' }
+                }
+            });
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        // Phase 2 matrix: the new PIN must differ from the current AND the most
+        // recent previous PIN (covers re-using a just-issued one-time PIN).
+        if (await bcrypt.compare(new_pin, me.hashed_pin) ||
+            (me.previous_hashed_pin && await bcrypt.compare(new_pin, me.previous_hashed_pin))) {
+            return res.status(400).json({ error: 'New PIN must differ from recently used PINs' });
+        }
+
+        const newHash = await bcrypt.hash(new_pin, 12);
+        await prisma.staff.update({
+            where: { id: me.id },
+            data: {
+                hashed_pin: newHash,
+                previous_hashed_pin: me.hashed_pin,
+                pin: '',
+                must_change_pin: false,
+                pin_expires_at: null,
+                failed_login_count: 0,
+                locked_until: null
+            }
+        });
+
+        await prisma.audit_logs.create({
+            data: {
+                restaurant_id: me.restaurant_id,
+                staff_id: me.id,
+                action_type: 'STAFF_PIN_CHANGED',
+                entity_type: 'STAFF',
+                entity_id: me.id,
+                details: { self_service: true }
+            }
+        });
+
+        res.json({ success: true });
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/auth/change-pin:', e.message);
+        res.status(500).json({ error: 'PIN change failed' });
+    }
+});
+
+/**
+ * GET /api/onboarding/status
+ * Wizard state for the authenticated tenant (trusted claims only).
+ */
+app.get('/api/onboarding/status', authMiddleware, async (req, res) => {
+    try {
+        const [restaurant, me] = await Promise.all([
+            prisma.restaurants.findUnique({
+                where: { id: req.restaurantId },
+                select: { onboarding_status: true, name: true, address: true, phone: true }
+            }),
+            prisma.staff.findUnique({
+                where: { id: req.staffId },
+                select: { must_change_pin: true }
+            })
+        ]);
+        if (!restaurant) return res.status(404).json({ error: 'Tenant not found' });
+        res.json({
+            onboarding_status: restaurant.onboarding_status,
+            requirements: {
+                pin_change_required: me?.must_change_pin === true,
+                profile_fields: {
+                    name: !!restaurant.name,
+                    address: !!restaurant.address,
+                    phone: !!restaurant.phone
+                }
+            }
+        });
+    } catch (e: any) {
+        console.error('[ERROR] GET /api/onboarding/status:', e.message);
+        res.status(500).json({ error: 'Failed to load onboarding status' });
+    }
+});
+
+/**
+ * PATCH /api/onboarding/profile
+ * Wizard profile step — allowlisted field set only.
+ */
+app.patch('/api/onboarding/profile', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const allowed: Record<string, unknown> = {};
+        for (const f of ['name', 'address', 'phone'] as const) {
+            if (typeof req.body[f] === 'string' && req.body[f].trim().length > 0) allowed[f] = req.body[f].trim();
+        }
+        if (Object.keys(allowed).length === 0) {
+            return res.status(400).json({ error: 'No editable profile fields provided (name, address, phone)' });
+        }
+        if (allowed.name !== undefined && String(allowed.name).length < 2) {
+            return res.status(400).json({ error: 'Restaurant name must be at least 2 characters' });
+        }
+
+        const updated = await prisma.restaurants.update({
+            where: { id: req.restaurantId },
+            data: { ...allowed, updated_at: new Date() },
+            select: { id: true, name: true, address: true, phone: true, onboarding_status: true }
+        });
+
+        await prisma.audit_logs.create({
+            data: {
+                restaurant_id: req.restaurantId!,
+                staff_id: req.staffId,
+                action_type: 'ONBOARDING_PROFILE_UPDATED',
+                entity_type: 'RESTAURANT',
+                entity_id: req.restaurantId!,
+                details: { fields: Object.keys(allowed) },
+                performed_by_role: req.role
+            }
+        });
+
+        res.json({ success: true, restaurant: updated });
+    } catch (e: any) {
+        console.error('[ERROR] PATCH /api/onboarding/profile:', e.message);
+        res.status(500).json({ error: 'Profile update failed' });
+    }
+});
+
+/**
+ * POST /api/onboarding/complete
+ * Transactional lifecycle transition SETUP_INCOMPLETE ? ACTIVE.
+ * Replays refuse safely with 409; never demotes an active tenant.
+ */
+app.post('/api/onboarding/complete', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const me = await prisma.staff.findUnique({
+            where: { id: req.staffId },
+            select: { must_change_pin: true }
+        });
+        if (me?.must_change_pin === true) {
+            return res.status(409).json({ error: 'Change your PIN before completing setup', code: 'PIN_CHANGE_REQUIRED' });
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+            const r = await tx.restaurants.findUnique({
+                where: { id: req.restaurantId },
+                select: { onboarding_status: true, name: true }
+            });
+            if (!r) throw Object.assign(new Error('Tenant not found'), { statusCode: 404 });
+            if (!r.name || r.name.trim().length < 2) {
+                throw Object.assign(new Error('Restaurant name is required before completing setup'), { statusCode: 400 });
+            }
+            const updated = await tx.restaurants.updateMany({
+                where: { id: req.restaurantId!, onboarding_status: 'SETUP_INCOMPLETE' },
+                data: { onboarding_status: 'ACTIVE', updated_at: new Date() }
+            });
+            if (updated.count === 0) {
+                throw Object.assign(new Error('Setup already completed'), { statusCode: 409 });
+            }
+            await tx.audit_logs.create({
+                data: {
+                    restaurant_id: req.restaurantId!,
+                    staff_id: req.staffId,
+                    action_type: 'ONBOARDING_COMPLETED',
+                    entity_type: 'RESTAURANT',
+                    entity_id: req.restaurantId!,
+                    details: {},
+                    performed_by_role: req.role
+                }
+            });
+            return true;
+        });
+
+        if (result) return res.json({ success: true, onboarding_status: 'ACTIVE' });
+    } catch (e: any) {
+        const code = e?.statusCode;
+        if (code === 409) return res.status(409).json({ error: e.message, code: 'ALREADY_ACTIVE' });
+        if (code === 404) return res.status(404).json({ error: e.message });
+        if (code === 400) return res.status(400).json({ error: e.message });
+        console.error('[ERROR] POST /api/onboarding/complete:', e.message);
+        res.status(500).json({ error: 'Completion failed' });
     }
 });
 

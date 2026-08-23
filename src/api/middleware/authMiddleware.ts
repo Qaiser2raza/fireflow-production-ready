@@ -133,6 +133,7 @@ export async function authMiddleware(
         id: true,
         status: true,
         restaurant_id: true,
+        must_change_pin: true,
       },
     });
 
@@ -159,6 +160,7 @@ export async function authMiddleware(
       select: {
         id: true,
         is_active: true,
+        onboarding_status: true,
       },
     });
 
@@ -214,6 +216,33 @@ export async function authMiddleware(
         } catch (auditError) {
           console.error('[AUTH] Audit log failed for x-target-restaurant:', auditError);
         }
+      }
+    }
+
+    // 6.5 Phase 2 setup gate — server-authoritative, single choke point.
+    // Two independent restrictions, evaluated against TRUSTED claims (the
+    // actor's own tenant from the JWT, never x-target-restaurant):
+    //   a) actor staff has must_change_pin → allowlist-only access
+    //   b) own tenant onboarding_status = SETUP_INCOMPLETE → same
+    // HQ/support contexts (SUPER_ADMIN role or an active support session)
+    // bypass: they are the people who help tenants complete setup.
+    const mustChangePin = staffRecord.must_change_pin === true;
+    const setupIncomplete = restaurantRecord.onboarding_status === 'SETUP_INCOMPLETE';
+    if ((mustChangePin || setupIncomplete) && req.role !== 'SUPER_ADMIN' && !req.supportSession) {
+      const p = originalUrl;
+      const setupAllowed =
+        p.startsWith('/api/auth/refresh') ||
+        p.startsWith('/api/auth/logout') ||
+        p.startsWith('/api/auth/change-pin') ||
+        p.startsWith('/api/onboarding') ||
+        (req.method === 'GET' && /^\/api\/restaurants\/[0-9a-fA-F-]+\/profile$/.test(p));
+      if (!setupAllowed) {
+        res.status(403).json(
+          mustChangePin
+            ? { error: 'PIN change required before accessing restaurant operations', code: 'PIN_CHANGE_REQUIRED' }
+            : { error: 'Restaurant setup is incomplete. Complete first-login setup to continue.', code: 'SETUP_INCOMPLETE' }
+        );
+        return;
       }
     }
 

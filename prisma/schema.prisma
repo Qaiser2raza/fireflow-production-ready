@@ -716,6 +716,7 @@ model restaurants {
   fbr_pos_id              String?
   logo_url                String?
   cloud_synced_at         DateTime?               @db.Timestamp(6)
+  onboarding_status       String                  @default("ACTIVE")
   subscription_expires_at DateTime?               @db.Timestamp(6)
   trial_ends_at           DateTime?               @db.Timestamp(6)
   approval_logs           approval_logs[]
@@ -852,6 +853,7 @@ model staff {
   failed_login_count                                      Int?              @default(0)
   must_change_pin                                         Boolean           @default(false)
   pin_expires_at                                          DateTime?
+  previous_hashed_pin                                     String?
   approval_logs_approval_logs_approved_by_user_idTostaff  approval_logs[]      @relation("approval_logs_approved_by_user_idTostaff")
   approval_logs_approval_logs_requested_by_user_idTostaff approval_logs[]      @relation("approval_logs_requested_by_user_idTostaff")
   audit_logs                                              audit_logs[]

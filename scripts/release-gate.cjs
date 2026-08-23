@@ -53,7 +53,7 @@ async function main() {
 
     // ---- 1. boot API server (test mode) ----
     log('BOOT api server (NODE_ENV=test) on :3001');
-    serverProc = spawn('npx cross-env NODE_ENV=test npx tsx src/api/server.ts', { shell: true, stdio: 'ignore' });
+    serverProc = spawn('npx cross-env NODE_ENV=test LOGIN_RATE_LIMIT_MAX=10000 VERIFY_PIN_RATE_LIMIT_MAX=10000 npx tsx src/api/server.ts', { shell: true, stdio: 'ignore' });
     await waitForPort(3001);
     log('BOOT api ready');
 
@@ -64,6 +64,7 @@ async function main() {
         'phase1 provisioning                   ', 'npx tsx tests/phase1-provisioning.test.ts',
         'phase1 invite dispatcher              ', 'npx tsx tests/phase1-invite-dispatcher.test.ts',
         'phase1 slice C vault UI               ', 'npx tsx tests/phase1-slice-c-vault.test.ts',
+        'phase2 wizard                         ', 'npx tsx tests/phase2-wizard.test.ts',
         'refresh-token rotation                ', 'npx tsx tests/refresh-token-rotation.test.ts',
         'platform auth                         ', 'npx tsx tests/platform-auth.test.ts',
         'service tenant isolation              ', 'npx tsx tests/service-tenant-isolation.test.ts',

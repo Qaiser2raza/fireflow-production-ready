@@ -179,10 +179,22 @@ async function main() {
         await d.processRegistration(rWork);
         assert('Already-synced mirror never re-created', cloudCalls.create === 0, String(cloudCalls.create));
 
-        // Sweep excludes synced tenants entirely
-        const sweep = new OwnerInviteDispatcher({ invite: port, cloud: cloudPort, isConfigured: () => true }, 9999999);
-        const counts = await sweep.processOnce();
-        assert('Sweep processes pending work without touching synced mirror', counts.invites >= 0 && counts.registrations === 0, JSON.stringify(counts));
+        // Sweep excludes synced tenants entirely. The assertion is self-scoped:
+        // other suites may legitimately leave their own pending work in the
+        // shared dev database, so we assert OUR tenant is not re-created.
+        let sweepCreates = 0;
+        const sweepCloud = {
+            async findCloudRestaurant(rid: string) {
+                return rid === rWork.id ? { found: true } : { found: false, unknown: true };
+            },
+            async createCloudRestaurant() { sweepCreates++; return { outcome: 'REGISTERED' } as any; },
+            async findUserIdByEmail() { return { outcome: 'NOT_FOUND' }; },
+            async createUser() { return { outcome: 'SENT', userId: 'sweep-' + Math.random().toString(36).slice(2) }; },
+            isConfigured() { return false; },
+        };
+        const sweep = new OwnerInviteDispatcher({ invite: sweepCloud, cloud: sweepCloud, isConfigured: () => true }, 9999999);
+        await sweep.processOnce();
+        assert('Sweep never re-creates our already-synced mirror', sweepCreates === 0, String(sweepCreates));
 
     } finally {
         // ---------- CLEANUP ----------

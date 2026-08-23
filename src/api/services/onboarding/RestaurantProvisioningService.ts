@@ -57,6 +57,7 @@ export class RestaurantProvisioningService {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             is_active: true,
+            onboarding_status: 'SETUP_INCOMPLETE',
             subscription_plan: subscriptionPlan,
             subscription_status: subscriptionStatus,
             subscription_expires_at: subscriptionStatus === 'active' ? subscriptionExpiresAt : null,
