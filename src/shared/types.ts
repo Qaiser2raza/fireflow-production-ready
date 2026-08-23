@@ -545,6 +545,8 @@ export interface AppContextType {
     closeSession: (actualCash: number, notes: string) => Promise<boolean>;
     currentUser: Staff | null;
     currentRestaurant: any | null;
+    setupRequired: { pinChangeRequired: boolean; onboardingStatus: string } | null;
+    clearSetupRequired: () => void;
     orders: Order[];
     drivers: Staff[];
     servers: Staff[];

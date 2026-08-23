@@ -65,6 +65,7 @@ async function main() {
         'phase1 invite dispatcher              ', 'npx tsx tests/phase1-invite-dispatcher.test.ts',
         'phase1 slice C vault UI               ', 'npx tsx tests/phase1-slice-c-vault.test.ts',
         'phase2 wizard                         ', 'npx tsx tests/phase2-wizard.test.ts',
+        'phase2 wizard UI                      ', 'npx tsx tests/phase2-wizard-ui.test.ts',
         'refresh-token rotation                ', 'npx tsx tests/refresh-token-rotation.test.ts',
         'platform auth                         ', 'npx tsx tests/platform-auth.test.ts',
         'service tenant isolation              ', 'npx tsx tests/service-tenant-isolation.test.ts',

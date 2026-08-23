@@ -23,6 +23,7 @@ import { FloorManagementView as OrderCommandHub } from '../operations/dashboard/
 import { KDSView } from '../operations/kds/KDSView';
 import { LogisticsHub } from '../operations/logistics/LogisticsHub';
 import { SuperAdminView } from '../features/saas-hq/SuperAdminView';
+import { FirstLoginWizard } from '../features/onboarding/FirstLoginWizard';
 import { CustomersView } from '../operations/customers/CustomersView';
 import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
@@ -52,6 +53,7 @@ export { useAppContext };
 // --- 2. PROVIDER (The Logic Layer) ---
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<Staff | null>(null);
+  const [setupRequired, setSetupRequired] = useState<{ pinChangeRequired: boolean; onboardingStatus: string } | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [optimisticItemStatus, setOptimisticItemStatus] = useState<Record<string, string>>({});
   const [tables, setTables] = useState<Table[]>([]);
@@ -266,7 +268,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         body: JSON.stringify({ pin, restaurant_id: localStorage.getItem('restaurant_id') || undefined })
       });
 
-      if (!res.ok) throw new Error('Invalid PIN');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as any));
+        if (errData?.code === 'PIN_EXPIRED') {
+          addNotification('error', 'This PIN has expired and can no longer be used. Request a new PIN from FireFlow support.');
+        }
+        throw new Error('Invalid PIN');
+      }
       const data = await res.json();
       const user = data.staff;
       const restaurant = data.restaurant;
@@ -285,7 +293,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('accessTokenExpiry', expiryTime.toString());
       }
 
+      // ✅ Phase 2: forced-setup sessions go to the wizard instead of the app.
+      // SUPER_ADMIN (HQ) accounts are never provisioned through this flow and
+      // bypass the server gate; they keep their normal path.
+      const pinChangeRequired = data.staff?.must_change_pin === true;
+      const setupIncomplete = data.restaurant?.onboarding_status === 'SETUP_INCOMPLETE';
       setCurrentUser(user);
+      if ((pinChangeRequired || setupIncomplete) && user.role !== 'SUPER_ADMIN') {
+        setSetupRequired({ pinChangeRequired, onboardingStatus: data.restaurant?.onboarding_status || 'ACTIVE' });
+        return true;
+      }
       if (user.role === 'SUPER_ADMIN') {
         setActiveView('SUPER_ADMIN');
       } else if (user.role === 'CASHIER' || user.role === 'SERVER' || user.role === 'WAITER') {
@@ -317,6 +334,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Clear app state
     setCurrentUser(null);
+    setSetupRequired(null);
     setOrders([]);
     setActiveView('DASHBOARD');
     localStorage.removeItem('saved_pin');
@@ -649,6 +667,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, vendors,
+      setupRequired, clearSetupRequired: () => setSetupRequired(null),
       connectionStatus, lastSyncAt, notifications, activeView, loading, isRestaurantLoading, orderToEdit,
       optimisticItemStatus, setOptimisticItemStatus,
       socket: socketIO,
@@ -934,7 +953,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 // --- 3. THE UI CONTENT WRAPPER ---
 const AppContent = () => {
-  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, activeSession } = useAppContext();
+  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, activeSession, setupRequired, clearSetupRequired } = useAppContext();
   const isMobile = useIsMobile();
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [showSessionModal, setShowSessionModal] = useState(false);
@@ -1001,6 +1020,31 @@ const AppContent = () => {
   }
 
   if (!currentUser) return <LoginView onLogin={login} />;
+
+  // Phase 2: first-login wizard replaces the entire shell until the server
+  // reports setup complete. The server-side gate remains the final authority.
+  if (setupRequired) {
+    let restaurantName: string | undefined;
+    try { restaurantName = JSON.parse(localStorage.getItem('currentRestaurant') || '{}')?.name; } catch { /* ignore */ }
+    return (
+      <FirstLoginWizard
+        restaurantName={restaurantName}
+        staffName={currentUser.name}
+        pinChangeRequired={setupRequired.pinChangeRequired}
+        onCompleted={() => {
+          clearSetupRequired();
+          const role = currentUser.role;
+          if (role === 'SUPER_ADMIN') setActiveView('SUPER_ADMIN');
+          else if (role === 'CASHIER' || role === 'SERVER' || role === 'WAITER') setActiveView('ORDER_HUB');
+          else if (role === 'CHEF') setActiveView('KITCHEN');
+          else if (role === 'RIDER') setActiveView('LOGISTICS');
+          else setActiveView('DASHBOARD');
+          fetchInitialData(currentUser);
+        }}
+        onLogout={logout}
+      />
+    );
+  }
 
   let menuItems: any[] = [];
 
