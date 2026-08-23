@@ -77,3 +77,9 @@ implementation_plan.md
 # Sole consumer: src/api/services/SuperAdminService.ts (server-side).
 # ============================================================
 *.pem
+
+# ============================================================
+# RELEASE-CONTROL TOOLING (explicitly tracked despite *.cjs)
+# ============================================================
+!scripts/release-gate.cjs
+!scripts/browser-smoke.cjs

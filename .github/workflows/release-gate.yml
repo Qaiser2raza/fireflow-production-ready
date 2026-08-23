@@ -1,0 +1,64 @@
+name: release-gate
+
+on:
+  push:
+    branches: [mission-016b-boundary-remediation, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fireflow_gate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fireflow_gate
+      FIREFLOW_JWT_SECRET: ${{ secrets.FIREFLOW_JWT_SECRET || 'gate-only-dev-secret-do-not-use-in-prod' }}
+      FIREFLOW_PLATFORM_JWT_SECRET: ${{ secrets.FIREFLOW_PLATFORM_JWT_SECRET || 'gate-only-platform-secret' }}
+      NODE_ENV: development
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Apply database schema
+        run: npx prisma db push --skip-generate --accept-data-loss
+        continue-on-error: false
+
+      - name: Regenerate Prisma client
+        run: npx prisma generate
+
+      # Sequential execution is enforced INSIDE the gate script by design:
+      # concurrent DB-bound HTTP suites share one server/DB fixture space.
+      - name: Run release gate
+        run: node scripts/release-gate.cjs
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-diagnostics
+          path: |
+            dist/
+            prisma/dev.db
+          retention-days: 7

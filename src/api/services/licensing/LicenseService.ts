@@ -35,8 +35,8 @@ const LICENSE_PATH = path.join(process.cwd(), 'license.lic');
 // Hardcoded SaaS Public Key (Elliptic Curve Public Key in PEM format)
 // In a production build, this public key corresponds to your SaaS private key
 const SAAS_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoF8CpB2SPxE9t+QK2PDorvaOggXG
-48/FNDLcxBA5Xz0tlFT3fMBk/MwPGBtFxTiWfFm9243q5LzgWMi0AkqWIg==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEI4a93GOAmUuoLbZIsbSaOXPBLjEF
+JcPfshLiGdSbOIbQTbHMCnEkKd2l3cIbNHkKl5Qw5soFHRqdl708tVOqNw==
 -----END PUBLIC KEY-----`;
 
 export class LicenseService {
