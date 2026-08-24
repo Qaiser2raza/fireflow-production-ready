@@ -43,7 +43,7 @@ jobs:
         run: npx prisma generate
 
       - name: Run typecheck
-        run: npm run build:backend
+        run: npx tsc --noEmit
 
       - name: Wait for PostgreSQL
         run: |
