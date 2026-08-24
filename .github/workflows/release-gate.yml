@@ -41,8 +41,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Apply database schema
-        run: npx prisma db push --skip-generate --accept-data-loss
+      - name: Apply migrations
+        run: npx prisma migrate deploy
         continue-on-error: false
 
       - name: Regenerate Prisma client

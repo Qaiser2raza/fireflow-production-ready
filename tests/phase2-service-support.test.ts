@@ -8,6 +8,10 @@ import { CashierSessionService } from '../src/api/services/finance/CashierSessio
 import { OrderServiceFactory } from '../src/api/services/orders/OrderServiceFactory';
 import { prisma } from '../src/shared/lib/prisma';
 
+// support_sessions.platform_user_id / created_by are UUID columns; the fixture
+// value must satisfy the column type even though no FK constraint exists.
+const TEST_PLATFORM_USER_ID = '99999999-9999-4999-8999-999999999999';
+
 async function runTests() {
     console.log('--- STARTING PHASE 2 SERVICE & SUPPORT BRIDGE SECURITY TESTS ---');
     let passed = 0;
@@ -146,7 +150,7 @@ async function runTests() {
                 restaurant_id: restaurant.id,
                 scope: ['READ'],
                 reason: 'Test',
-                created_by: 'test-platform-user'
+                created_by: TEST_PLATFORM_USER_ID
             });
 
             const req = {
@@ -186,7 +190,7 @@ async function runTests() {
                 restaurant_id: restaurant.id,
                 scope: ['READ'],
                 reason: 'Test',
-                created_by: 'test-platform-user'
+                created_by: TEST_PLATFORM_USER_ID
             });
 
             const req = {
@@ -232,7 +236,7 @@ async function runTests() {
                 restaurant_id: restaurant.id,
                 scope: ['READ'],
                 reason: 'Test',
-                created_by: 'test-platform-user'
+                created_by: TEST_PLATFORM_USER_ID
             });
 
             // Manually expire the session
@@ -278,10 +282,10 @@ async function runTests() {
                 restaurant_id: restaurant.id,
                 scope: ['READ'],
                 reason: 'Test',
-                created_by: 'test-platform-user'
+                created_by: TEST_PLATFORM_USER_ID
             });
 
-            await supportSessionService.revokeSession(session.id, 'test-platform-user');
+            await supportSessionService.revokeSession(session.id, TEST_PLATFORM_USER_ID);
 
             const req = {
                 params: { sessionId: session.id },
@@ -320,7 +324,7 @@ async function runTests() {
                 restaurant_id: restaurant.id,
                 scope: ['READ'],
                 reason: 'Test',
-                created_by: 'test-platform-user'
+                created_by: TEST_PLATFORM_USER_ID
             });
 
             const req = {
@@ -361,7 +365,7 @@ async function runTests() {
                 restaurant_id: restaurant.id,
                 scope: ['MENU'],
                 reason: 'Test',
-                created_by: 'test-platform-user'
+                created_by: TEST_PLATFORM_USER_ID
             });
 
             const req = {
@@ -402,7 +406,7 @@ async function runTests() {
                 restaurant_id: restaurant.id,
                 scope: ['READ'],
                 reason: 'Test',
-                created_by: 'test-platform-user'
+                created_by: TEST_PLATFORM_USER_ID
             });
 
             const req = {
