@@ -52,18 +52,18 @@ One-time bootstrap (per browser profile), DevTools console on the login screen:
 localStorage.setItem('restaurant_id', '372d000b-5ebd-41bb-8cf0-e08c23ce4020'); location.reload();
 ```
 
-That ID is **Fireflow HQ** — the Vault tenant. After reload, PIN `123456` logs in as SUPER_ADMIN and lands in Vault Control.
+That ID is **Fireflow HQ** — the Vault tenant. After reload, the seed admin PIN logs in as SUPER_ADMIN and lands in Vault Control.
 (If the pad "silently resets", the context is missing or the PIN/tenant pair is wrong — re-run the line above.)
 
 ## P4. Current test fixtures (verified in DB, 2026-08-24)
 
 | Fixture | Detail |
 |---|---|
-| **Fireflow HQ** | SUPER_ADMIN account "Super Admin", PIN `123456`, lands in Vault Control |
-| **Blue Vault Cafe** | Provisioned 2026-08-24. Manager `sheri`, one-time PIN `586196` (issued via reset after original handover was lost; unused, forces change at first login, expires ~2026-08-31). Tenant is `SETUP_INCOMPLETE` — wizard will force |
+| **Fireflow HQ** | SUPER_ADMIN account "Super Admin", seed admin PIN (see `scripts/create-custom-admin.ts` — never store PINs in this doc), lands in Vault Control |
+| **Blue Vault Cafe** | Provisioned 2026-08-24. Manager `sheri`, one-time PIN redacted from this doc (invariant 8) — obtain via the reset-pin support action when needed; forces change at first login, 7-day expiry. Tenant is `SETUP_INCOMPLETE` — wizard will force |
 | Tenant A / Tenant B | Gate-fixture tenants, ignore |
 
-> If `586196` was consumed or expired before Section 4, ask the assistant to run the reset-pin support action again (it is API-only today — finding F-V4).
+> If the one-time PIN was consumed or expired before Section 4, ask the assistant to run the reset-pin support action again (it is API-only today — finding F-V4).
 
 ---
 
@@ -87,11 +87,11 @@ That ID is **Fireflow HQ** — the Vault tenant. After reload, PIN `123456` logs
 
 ## Section 4 — First-login wizard (Phase 2) — THE MAIN REMAINING PASS
 
-Use **Blue Vault Cafe / PIN `586196`**. Log out of Vault first.
+Use **Blue Vault Cafe** with the current one-time PIN (obtain via reset-pin action). Log out of Vault first.
 
 | # | Step | Expect |
 |---|---|---|
-| 4.1 | Log out; log in as manager `sheri` (restaurant: Blue Vault Cafe, PIN `586196`) | **Full-screen wizard replaces the entire app** — no sidebar, no POS, no way into operations |
+| 4.1 | Log out; log in as manager `sheri` (restaurant: Blue Vault Cafe, current one-time PIN) | **Full-screen wizard replaces the entire app** — no sidebar, no POS, no way into operations |
 | 4.2 | Wizard header | "Welcome, sheri" + "Blue Vault Cafe — First-login setup"; progress dots show 3 steps |
 | 4.3 | Enter wrong old PIN / non-matching confirmation / 5-digit new PIN | Clear inline errors; never crashes |
 | 4.4 | Set a valid new PIN (SAVE IT) | Step ticks green; moves to Restaurant details |
@@ -99,7 +99,7 @@ Use **Blue Vault Cafe / PIN `586196`**. Log out of Vault first.
 | 4.6 | Save details (or skip blank) | Moves to Finish setup review |
 | 4.7 | Click Complete setup | Green success panel, then normal manager workspace |
 | 4.8 | Log out; log back in with the NEW PIN | Straight into app — no wizard again |
-| 4.9 | Fresh run: click Log out instead mid-wizard, log back in with `586196` | Wizard resumes at the right remaining step |
+| 4.9 | Fresh run: click Log out instead mid-wizard, log back in with the same one-time PIN | Wizard resumes at the right remaining step |
 | 4.10 | While still restricted, paste a bookmarked operational URL | Wizard still shown; no operational screen reachable |
 
 ## Section 2b — Handover re-check (optional, needs test mode per P2)
@@ -117,8 +117,8 @@ Provision one more clearly-test tenant (e.g. `Second Review Cafe`) and verify:
 
 | # | Step | Expect |
 |---|---|---|
-| 5.1 | DONE via API 2026-08-24 | Produced PIN `586196` (F-V4: no UI button yet) |
-| 5.2 | After 4.4, try logging in with `586196` again | Rejected — one-time PIN consumed by first use |
+| 5.1 | DONE via API 2026-08-24 | Produced one-time PIN (redacted — F-V4: no UI button yet) |
+| 5.2 | After 4.4, try logging in with the same one-time PIN again | Rejected — one-time PIN consumed by first use |
 
 ---
 
