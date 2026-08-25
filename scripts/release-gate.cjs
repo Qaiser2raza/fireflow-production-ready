@@ -2,9 +2,58 @@
 // Boots its own API server (NODE_ENV=test), runs every security-relevant suite
 // STRICTLY SEQUENTIALLY (concurrent DB-bound HTTP suites interfere), then
 // type-checks and builds. Exit code is the single source of truth for CI.
-// Usage: node scripts/release-gate.cjs
+//
+// TD-14b SAFETY BOUNDARY: suites sweep fixture data across the configured
+// database. The gate therefore REFUSES to run against any database that is
+// not an explicitly disposable verify/gate database — a real tenant DB
+// (e.g. fireflow_local) can never be destructively swept by misconfiguration.
 const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const net = require('net');
+
+function resolveDatabaseUrl() {
+    if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+    const envPath = path.join(__dirname, '..', '.env');
+    if (fs.existsSync(envPath)) {
+        const line = fs.readFileSync(envPath, 'utf8').split(/\r?\n/).find(l => l.startsWith('DATABASE_URL='));
+        if (line) return line.slice('DATABASE_URL='.length).trim();
+    }
+    return '';
+}
+
+function extractDbName(url) {
+    const m = String(url || '').match(/\/([^/?]+)(\?|$)/);
+    return m ? m[1] : '';
+}
+
+/**
+ * Only explicitly disposable databases may host the gate:
+ *   *_verify (e.g. fireflow_migrate_verify) and fireflow_gate (CI service DB).
+ * Everything else — production-shaped dev DBs included — hard-fails.
+ */
+function isAllowedGateDb(dbName) {
+    if (!dbName) return false;
+    if (dbName === 'fireflow_gate') return true;
+    return /(^|_)verify$/.test(dbName);
+}
+
+function assertGateDatabaseSafety() {
+    const url = resolveDatabaseUrl();
+    const dbName = extractDbName(url);
+    if (!isAllowedGateDb(dbName)) {
+        console.error('[GATE] REFUSING TO RUN: DATABASE_URL does not point at an approved disposable gate database.');
+        console.error(`[GATE] Target database: "${dbName || '(unresolvable)'}"`);
+        console.error('[GATE] Allowed: *_verify databases and the CI database (fireflow_gate).');
+        console.error('[GATE] Suites sweep data; pointing the gate at a real tenant/dev DB is a destructive operation (TD-14b).');
+        console.error('[GATE] Fix: $env:DATABASE_URL = \'<postgres url for fireflow_migrate_verify>\' then re-run.');
+        process.exit(1);
+    }
+    console.log(`[GATE] DB safety assertion OK: ${dbName}`);
+}
+
+// ---- TD-14b boundary is enforced inside main(), before any server boot or
+// ---- suite sweep, so that requiring this module (tests) never triggers it.
 
 const STEP_RE = /^\[GATE\]/;
 const log = m => console.log(`[GATE] ${m}`);
@@ -51,6 +100,9 @@ function run(name, cmd, opts = {}) {
 async function main() {
     let failed = false;
 
+    // ---- 0. TD-14b: database safety assertion FIRST ----
+    assertGateDatabaseSafety();
+
     // ---- 1. boot API server (test mode) ----
     log('BOOT api server (NODE_ENV=test) on :3001');
     serverProc = spawn('npx cross-env NODE_ENV=test LOGIN_RATE_LIMIT_MAX=10000 VERIFY_PIN_RATE_LIMIT_MAX=10000 npx tsx src/api/server.ts', { shell: true, stdio: 'ignore' });
@@ -59,6 +111,7 @@ async function main() {
 
     // ---- 2. suites — strictly sequential by design ----
     const suites = [
+        'gate db safety guard                  ', 'npx tsx tests/gate-db-guard.test.ts',
         'mission-016b boundary regression      ', 'npx tsx tests/mission-016b-boundary.test.ts',
         'phase1 PIN hardening                  ', 'npx tsx tests/phase1-pin-hardening.test.ts',
         'phase1 provisioning                   ', 'npx tsx tests/phase1-provisioning.test.ts',
@@ -96,8 +149,12 @@ async function main() {
     process.exit(failed ? 1 : 0);
 }
 
-main().catch(async e => {
-    console.error('[GATE] fatal:', e);
-    if (serverProc) { try { process.platform === 'win32' ? spawnSync('taskkill', ['/pid', String(serverProc.pid), '/T', '/F']) : serverProc.kill(); } catch { } }
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch(async e => {
+        console.error('[GATE] fatal:', e);
+        if (serverProc) { try { process.platform === 'win32' ? spawnSync('taskkill', ['/pid', String(serverProc.pid), '/T', '/F']) : serverProc.kill(); } catch { } }
+        process.exit(1);
+    });
+}
+
+module.exports = { isAllowedGateDb, extractDbName, resolveDatabaseUrl };

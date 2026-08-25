@@ -38,6 +38,7 @@ import { authMiddleware, requireRole } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { journalEntryService } from './services/JournalEntryService';
+import { isSettlementUniquenessConflict } from './services/payment/SettlementGuards';
 import { LicenseService } from './services/licensing/LicenseService';
 import { qrOrderBridge } from './services/qr/QROrderBridge';
 import { syncMenuToCloud } from './services/qr/MenuSync';
@@ -2144,13 +2145,12 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
 
             return updatedOrder;
             });
-        } catch (settleError: any) {
-            // Concurrent duplicate settle: whichever unique constraint fires
-            // (settlement_key on the order update, or the outbox idempotency key
-            // on completion events), the winner committed the full settlement
-            // and this submission is a replay. Verify by read-back, then return
-            // the original result verbatim; anything else rethrows unchanged.
-            if (settleError?.code === 'P2002') {
+        } catch (settleError) {
+            // Narrow attribution: ONLY conflicts on the settlement idempotency
+            // mechanisms themselves (settlement_key, outbox completion-event key)
+            // may become replays — and only after read-back confirms a settled
+            // order. Every other integrity error propagates unchanged.
+            if (isSettlementUniquenessConflict(settleError)) {
                 const settled = await prisma.orders.findFirst({
                     where: { id, restaurant_id: req.restaurantId }
                 });

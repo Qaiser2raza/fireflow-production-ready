@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { JwtService } from '../src/api/services/auth/JwtService.js';
+import { isSettlementUniquenessConflict } from '../src/api/services/payment/SettlementGuards.js';
 
 // M017 Phase A — legacy settle-path hardening verification.
 // Proves: (1) settlement idempotency incl. concurrency, (2) per-method journal
@@ -268,6 +269,23 @@ async function main() {
             assert('legacy paid order replay suppressed', res.status === 200 && res.headers.get('x-settlement-replay') === 'true', '200+replay header', `${res.status}/${res.headers.get('x-settlement-replay')}`);
             const txCount = await prisma.transactions.count({ where: { order_id: order.id } });
             assert('legacy replay created no transactions', txCount === 0, '0', `${txCount}`);
+        }
+
+        // =====================================================
+        // TEST 6: P2002 attribution — unrelated unique violations propagate
+        // =====================================================
+        console.log('\n[Test 6] Replay attribution is structural, not inferred');
+        {
+            const orderKeyErr: any = { code: 'P2002', meta: { target: ['orders_settlement_key_key'] } };
+            const outboxKeyErr: any = { code: 'P2002', meta: { target: ['aggregate_type', 'aggregate_id', 'event_type'] } };
+            const unrelatedErr: any = { code: 'P2002', meta: { target: ['foo', 'bar'] } };
+            const fkErr: any = { code: 'P2003', meta: { field_name: 'journal_entry_lines_account_id_fkey' } };
+
+            assert('order settlement_key conflict IS attributable', isSettlementUniquenessConflict(orderKeyErr) === true, 'true', String(isSettlementUniquenessConflict(orderKeyErr)));
+            assert('outbox completion-event key conflict IS attributable (proven race surface)', isSettlementUniquenessConflict(outboxKeyErr) === true, 'true', String(isSettlementUniquenessConflict(outboxKeyErr)));
+            assert('unrelated UNIQUE(foo,bar) NOT attributable — propagates as integrity error', isSettlementUniquenessConflict(unrelatedErr) === false, 'false', String(isSettlementUniquenessConflict(unrelatedErr)));
+            assert('non-P2002 errors never attributed', isSettlementUniquenessConflict(fkErr) === false && isSettlementUniquenessConflict(null) === false && isSettlementUniquenessConflict(new Error('x')) === false, 'false', 'see run');
+            assert('missing target metadata not attributable', isSettlementUniquenessConflict({ code: 'P2002' }) === false, 'false', String(isSettlementUniquenessConflict({ code: 'P2002' })));
         }
     } catch (e: any) {
         console.log('  FAIL: Exception:', e.message);
