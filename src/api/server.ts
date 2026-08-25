@@ -2805,8 +2805,10 @@ app.get('/api/menu_items', authMiddleware, async (req, res) => {
 
 app.post('/api/menu_items', authMiddleware, async (req, res) => {
     try {
-        const { category_id, station_id, prep_time_minutes, ...data } = req.body;
-        const createData: any = { ...data, restaurant_id: req.restaurantId };
+        // Strip client-sent restaurant_id: tenant identity comes from the JWT only,
+        // and the scalar is rejected by Prisma on this multi-relation model (F-V10).
+        const { category_id, station_id, prep_time_minutes, restaurant_id, ...data } = req.body;
+        const createData: any = { ...data, restaurants: { connect: { id: req.restaurantId } } };
         if (category_id) {
             createData.menu_categories = { connect: { id: category_id } };
         }
@@ -2826,7 +2828,8 @@ app.post('/api/menu_items', authMiddleware, async (req, res) => {
 });
 
 app.patch('/api/menu_items', authMiddleware, async (req, res) => {
-    const { id, category_id, station_id, prep_time_minutes, ...data } = req.body;
+    // Strip client-sent restaurant_id: Prisma rejects the scalar on this model (F-V10).
+    const { id, category_id, station_id, prep_time_minutes, restaurant_id, ...data } = req.body;
     if (!id) return res.status(400).json({ error: 'Missing id' });
     try {
         const existing = await prisma.menu_items.findUnique({ where: { id } });
@@ -3423,8 +3426,8 @@ app.post('/api/system/seed-restaurant', authMiddleware, requireRole('MANAGER', '
             if (!exists) {
                 await prisma.menu_items.create({
                     data: {
-                        restaurant_id: restaurantId,
-                        category_id: item.category.id,
+                        restaurants: { connect: { id: restaurantId } },
+                        menu_categories: { connect: { id: item.category.id } },
                         category: item.category.name,
                         name: item.name,
                         name_urdu: item.name_urdu,
