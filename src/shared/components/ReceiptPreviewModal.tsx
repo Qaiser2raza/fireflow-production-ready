@@ -78,7 +78,10 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
         fetchWithAuth('/api/printers')
             .then(res => res.json())
             .then(data => {
-                const active = data.filter((p: any) => p.is_active);
+                // F-V11: printer config is MANAGER+ only; non-manager roles get
+                // a 403 object here. Receipt printing must work without it.
+                const list = Array.isArray(data) ? data : [];
+                const active = list.filter((p: any) => p.is_active);
                 setPrinters(active);
                 if (active.length > 0) {
                     const localPrinter = active.find((p: any) => p.connection_type === 'LOCAL');
@@ -93,12 +96,13 @@ export const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
         const fullHtml = `<html><head><style>
             body { font-family: monospace; width: 80mm; margin: 0; padding: 8px; }
         </style></head><body>${html}</body></html>`;
-        
+
         try {
-            const token = localStorage.getItem('fireflow_token');
-            const res = await fetch('/api/print', {
+            // F-V12: must go through fetchWithAuth — the raw fetch read a
+            // nonexistent token key and every print 401'd.
+            const res = await fetchWithAuth('/api/print', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ printerId: selectedPrinterId, type: 'RECEIPT', html: fullHtml })
             });
             if (res.ok) alert('Sent to printer ✓');

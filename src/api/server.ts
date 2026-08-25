@@ -1113,12 +1113,20 @@ app.post('/api/staff', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_AD
         if (!restaurant_id || !name || !role || !pin) {
             return res.status(400).json({ error: 'Missing required staff fields' });
         }
+        // F-V5: auth verifies against hashed_pin exclusively; the plaintext pin
+        // column is never read. Store only the bcrypt hash (never plaintext),
+        // and enforce the same 6-digit rule the login endpoint applies.
+        if (!/^\d{6}$/.test(pin)) {
+            return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
+        }
+        const hashed_pin = await bcrypt.hash(pin, 12);
 
         const staffData: any = {
             restaurant_id,
             name,
             role,
-            pin,
+            hashed_pin,
+            pin: '',
             status: status || 'active'
         };
         if (id && typeof id === 'string' && id.trim().length > 0) {
@@ -1156,7 +1164,15 @@ app.patch('/api/staff', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_A
         const staffData: any = {};
         if (name !== undefined) staffData.name = name;
         if (role !== undefined) staffData.role = role;
-        if (pin !== undefined) staffData.pin = pin;
+        // F-V5: PIN changes go through the bcrypt pipeline only. Empty/absent
+        // pin means "no change"; plaintext is never stored.
+        if (pin !== undefined && pin !== null && pin !== '') {
+            if (!/^\d{6}$/.test(pin)) {
+                return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
+            }
+            staffData.hashed_pin = await bcrypt.hash(pin, 12);
+            staffData.pin = '';
+        }
         if (status !== undefined) staffData.status = status;
         if (active_tables !== undefined) staffData.active_tables = active_tables;
         if (image !== undefined) staffData.image = image;
@@ -3448,13 +3464,18 @@ app.post('/api/system/seed-restaurant', authMiddleware, requireRole('MANAGER', '
             }
         });
 
+        let seededAdminPin: string | undefined;
         if (!adminExists) {
+            // F-V5: seed admin follows handover-once semantics — bcrypt hash
+            // only; the plaintext is returned exactly once in the response.
+            seededAdminPin = String(Math.floor(100000 + Math.random() * 900000));
             await prisma.staff.create({
                 data: {
                     restaurant_id: restaurantId,
                     name: 'Admin Manager',
                     role: 'ADMIN',
-                    pin: '0000',
+                    hashed_pin: await bcrypt.hash(seededAdminPin, 12),
+                    pin: '',
                     status: 'active'
                 }
             });
@@ -3464,7 +3485,8 @@ app.post('/api/system/seed-restaurant', authMiddleware, requireRole('MANAGER', '
         res.json({
             success: true,
             message: "Restaurant seeded successfully (idempotent)",
-            alreadySeeded: false
+            alreadySeeded: false,
+            admin_temp_pin: seededAdminPin
         });
 
     } catch (e: any) {

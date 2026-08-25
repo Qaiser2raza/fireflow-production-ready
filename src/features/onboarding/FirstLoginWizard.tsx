@@ -34,6 +34,7 @@ export const FirstLoginWizard: React.FC<FirstLoginWizardProps> = ({
   const [requirements, setRequirements] = useState<{ pin_change_required: boolean; profile_fields?: Record<string, boolean> }>({
     pin_change_required: pinChangeRequired
   });
+  const [tenantStatus, setTenantStatus] = useState<string | undefined>(undefined);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [stepIndex, setStepIndex] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -60,6 +61,7 @@ export const FirstLoginWizard: React.FC<FirstLoginWizardProps> = ({
             pin_change_required: data.requirements?.pin_change_required === true,
             profile_fields: data.requirements?.profile_fields
           });
+          setTenantStatus(data.onboarding_status);
           if (isSetupFinished(data, data.requirements?.pin_change_required)) {
             setDone(true);
           }
@@ -84,7 +86,7 @@ export const FirstLoginWizard: React.FC<FirstLoginWizardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepIndex]);
 
-  const steps = useMemo(() => deriveWizardSteps(requirements), [requirements]);
+  const steps = useMemo(() => deriveWizardSteps(requirements, tenantStatus), [requirements, tenantStatus]);
   const pinStepOffset = () => (requirements.pin_change_required ? 0 : -1);
   const currentStep: WizardStepId = steps[Math.min(stepIndex, steps.length - 1)]?.id ?? 'review';
 
@@ -103,7 +105,16 @@ export const FirstLoginWizard: React.FC<FirstLoginWizardProps> = ({
       if (res.ok) {
         setOldPin(''); setNewPin(''); setConfirmPin('');
         setRequirements(r => ({ ...r, pin_change_required: false }));
-        setStepIndex(i => i + 1);
+        // F-V6: if the PIN step was the only outstanding requirement (tenant
+        // already ACTIVE), the wizard is finished — no manager-gated
+        // completion call remains.
+        const remaining = deriveWizardSteps({ pin_change_required: false }, tenantStatus);
+        if (remaining.length === 0) {
+          setDone(true);
+          setTimeout(onCompleted, 900);
+        } else {
+          setStepIndex(i => i + 1);
+        }
       } else {
         setError(data?.error || `PIN change failed (${res.status})`);
       }

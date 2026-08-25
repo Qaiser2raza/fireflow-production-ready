@@ -52,7 +52,7 @@ export const StaffView: React.FC = () => {
       setFormData({
         name: staff.name,
         role: staff.role,
-        pin: staff.pin,
+        pin: '', // F-V5: hashes are never returned to the client; empty = unchanged
         active_tables: staff.active_tables || 0,
         image: staff.image || '' // Load existing image
       });
@@ -61,7 +61,7 @@ export const StaffView: React.FC = () => {
       setFormData({
         name: '',
         role: 'SERVER',
-        pin: Math.floor(1000 + Math.random() * 9000).toString(),
+        pin: Math.floor(100000 + Math.random() * 900000).toString(), // 6-digit: login enforces exactly 6
         active_tables: 0,
         image: ''
       });
@@ -71,6 +71,12 @@ export const StaffView: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // F-V5: the API authenticates 6-digit PINs only — enforce client-side too
+    if (!/^\d{6}$/.test(formData.pin)) {
+      alert('Access PIN must be exactly 6 digits.');
+      return;
+    }
 
     // Payload Construction
     const payload = {
