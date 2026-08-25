@@ -55,6 +55,24 @@ Smallest safe change, inside the active mission, after identifying the relevant 
 
 Workflow: Inspect -> Understand -> Identify invariant -> Make smallest change -> Test -> Review -> Commit.
 
+## Mandatory diff gate (file-write integrity)
+
+Any file change — security artifacts especially — must pass this gate before commit; it is not optional operator habit:
+
+```text
+edit file
+    ?
+git diff --check
+    ?
+git diff -- <changed files>
+    ?
+verify intended-only changes, correct encoding, no BOM/mojibake
+    ?
+commit
+```
+
+Root cause on record (two incidents: `src/api/server.ts`, `docs/technical-debt/REGISTER.md`, 2026-08-25/26): PowerShell 5.1 file cmdlets and redirection (`Get-Content`/`Set-Content` without `-Encoding`, `>` redirects) misread UTF-8 as ANSI, add BOMs, or emit UTF-16 — silently rewriting whole files with mojibake. Agents MUST NOT use shell cmdlets or redirection to create/modify files; use dedicated edit tools or git plumbing only. A whole-file diff where a one-line edit was intended is always corruption — stop and restore from HEAD.
+
 ## What NOT to Assume
 
 - Old `.md` files in `docs/` are often historical; check status metadata.
