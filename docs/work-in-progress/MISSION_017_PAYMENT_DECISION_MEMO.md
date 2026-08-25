@@ -110,3 +110,26 @@ legacy — while keeping the hot path's blast radius minimal.
 
 - Real-restaurant onboarding run (calendar slot — keeps losing to infra work).
 - Founder decision on first target provider (Phase B trigger).
+
+## Phase A closure record (2026-08-25)
+
+GREEN — CONDITIONALLY CLOSED per co-CTO review; both closure actions landed
+(commit follows this file):
+
+1. **P2002 attribution hardened (structural):** replay handling extracted to
+   `src/api/services/payment/SettlementGuards.ts`. Only conflicts ON the two
+   settlement idempotency surfaces — `orders.settlement_key` and the outbox
+   completion-event key — can become replays, each still gated by read-back;
+   every other integrity error propagates unchanged (`server.ts` catch now
+   calls `isSettlementUniquenessConflict`). Empirical note preserved: under a
+   racing duplicate the order-update conflict does NOT fire (same-row
+   same-value no-op) — the completion-event key is the proven surface, so it
+   is named as attributable by design, not inferred. Test 6 asserts unrelated
+   `UNIQUE(foo,bar)` and non-P2002 errors are never attributed.
+2. **TD-14b runtime DB guard:** `release-gate.cjs` refuses to run unless
+   `DATABASE_URL` resolves to an approved disposable database (`*_verify`,
+   CI `fireflow_gate`), enforced before any server boot or sweep; negative
+   suite `tests/gate-db-guard.test.ts` proves hard-fail on a dev URL.
+
+Settlement design FROZEN; concurrency/atomicity/outbox/mixed-tender VERIFIED.
+Gate after closures: 15/15 local (verify DB), hosted green.
