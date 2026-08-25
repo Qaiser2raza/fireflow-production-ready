@@ -148,6 +148,10 @@ export const isProduction = () => config.NODE_ENV === 'production';
 export const isStaging = () => config.NODE_ENV === 'staging';
 export const isDevelopment = () => config.NODE_ENV === 'development';
 
+// Browser/cloud-client capability only: a reachable Supabase URL plus a publishable
+// (anon) key. This does NOT mean server-side sync is possible — writes through the
+// service role need SUPABASE_SERVICE_KEY. Gate server-sync decisions on that key,
+// never on this flag.
 export const isCloudEnabled = () => {
   return !!(config.VITE_SUPABASE_URL || config.SUPABASE_URL) &&
     !!(config.VITE_SUPABASE_ANON_KEY || config.SUPABASE_ANON_KEY || config.SUPABASE_SERVICE_KEY);
