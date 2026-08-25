@@ -145,12 +145,26 @@ async function main() {
     const errors = results.filter(r => r.state === 'ERROR');
     const skips = results.filter(r => r.state === 'SKIP');
     const executed = results.filter(r => ['LOCKED', 'HOLE'].includes(r.state));
+    // Core matrix per co-CTO acceptance criteria: the SIX anonymous mutation
+    // cells (U/D x 3 tables). Exit 0 = all six LOCKED, zero holes/errors.
+    // Structural skips (default-off INSERT probes, unprovisioned contexts)
+    // are labeled but do NOT block LOCKED; --require-control additionally
+    // demands service CONTROL = PASS for exit 0 (final closure run).
+    const CORE = TABLES.flatMap(t => ['UPDATE', 'DELETE'].map(op => `${op} ${t}`));
+    const coreCells = new Map(results.filter(r => r.identity === 'anon' && CORE.includes(`${r.op} ${r.table}`)).map(r => [`${r.op} ${r.table}`, r]));
+    const coreLocked = CORE.every(k => coreCells.get(k)?.state === 'LOCKED');
+    const controlCell = results.find(r => r.op === 'CONTROL');
     console.log(`executed=${executed.length} holes=${holes.length} skips=${skips.length} errors=${errors.length}`);
 
     if (errors.length > 0) { console.log('RESULT: ERROR — inspect unexpected responses'); process.exit(1); }
     if (holes.length > 0) { console.log('RESULT: HOLES PRESENT — lockdown required'); results.filter(r=>r.state==='HOLE').forEach(h => console.log(`  hole: [${h.identity}] ${h.table}.${h.op}`)); process.exit(2); }
-    if (skips.length > 0) { console.log('RESULT: INCOMPLETE — evidence pending skipped cells'); process.exit(3); }
-    console.log('RESULT: LOCKED — all executed write probes rejected, control green');
+    if (!coreLocked) { console.log('RESULT: INCOMPLETE — one or more core anon mutation cells not executed/locked'); process.exit(3); }
+    if (process.argv.includes('--require-control') && controlCell?.state !== 'LOCKED') {
+        console.log('RESULT: INCOMPLETE — --require-control set but service control is ' + (controlCell ? controlCell.state : 'absent'));
+        process.exit(3);
+    }
+    console.log('RESULT: LOCKED — all six core anonymous mutation cells rejecting (HTTP 42501)');
+    if (skips.length > 0) { console.log('labeled skips (non-blocking):'); skips.forEach(s => console.log(`  skip: [${s.identity}] ${s.table}.${s.op} — ${s.detail}`)); }
     process.exit(0);
 }
 
