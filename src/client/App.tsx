@@ -36,7 +36,7 @@ import { RoleContextBar } from './components/RoleContextBar';
 import { CommandPalette } from './components/CommandPalette';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { PreferencesProvider } from './contexts/PreferencesContext';
-import { RestaurantProvider } from './RestaurantContext';
+import { RestaurantProvider, useRestaurant } from './RestaurantContext';
 
 // Services
 import { tableService } from '../shared/lib/tableService';
@@ -96,6 +96,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Debounce timer for fetchInitialData to prevent duplicate concurrent requests
   const fetchDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // F-V15: the React context — not localStorage — is render-time truth for
+  // tenant identity. Login overwrites it from the server response payload;
+  // storage stays a boot-time cache + device binding only.
+  const { setCurrentRestaurant: setContextRestaurant } = useRestaurant();
 
   const API_URL = '/api';
 
@@ -284,6 +289,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('currentRestaurant', JSON.stringify(restaurant));
         localStorage.setItem('restaurant_id', restaurant.id);
       }
+      // F-V15: hydrate context from the server response — never by re-reading
+      // storage. Overwrites any previous tenant on account switch.
+      setContextRestaurant(restaurant || null);
 
       // ✅ Phase 2b: Store JWT tokens if present
       if (data.tokens) {
@@ -327,11 +335,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
-    // Clear JWT tokens
+    // F-V15/F-V1 contract: logout clears SESSION secrets only. The tenant
+    // binding (currentRestaurant / restaurant_id) survives as untrusted
+    // device configuration — it must NOT be cleared here, because
+    // RestaurantContext mirrors every context change into storage and a
+    // context clear would erase the binding and reintroduce F-V1
+    // (unbootable terminal). The binding is never rendered pre-auth
+    // (LoginView takes no tenant props) and is overwritten from the next
+    // login response. Phase 5-6 device-bound-context decision owns this.
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('accessTokenExpiry');
-
     // Clear app state
     setCurrentUser(null);
     setSetupRequired(null);
