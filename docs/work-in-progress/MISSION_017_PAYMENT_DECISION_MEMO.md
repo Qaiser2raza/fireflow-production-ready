@@ -46,9 +46,22 @@ carry real orders.
 | Tenant isolation | Verified by suites | Tested (dormant) |
 | UI integration | Live POS/logistics flows | None |
 
-New findings beyond the audit (this session's read): the two legacy gaps above
-— missing settle idempotency guard and split-payment journals posting under
-`paymentLines[0].method` only.
+New findings beyond the audit (this session's reads, corrected during Phase A):
+
+- **Settle idempotency gap confirmed** — no server-side guard existed; a repeat
+  POST re-closed the order and duplicated transaction rows. Fixed in Phase A.
+- **Split-payment "mis-journaling" RETRACTED**: deeper inspection shows both
+  `recordOrderSale` (ledger) and `recordOrderSaleJournal` (GL) already iterate
+  ALL paid transactions per method (`JournalEntryService.ts:239-273` maps
+  CASH→1000, CREDIT→1040, digital→1010 with per-line `meta.paymentMethod`);
+  the settle route's `paymentLines[0].method` override is only the
+  zero-transactions fallback, which settle never produces. Verified by the
+  mixed-tender drill (60 CASH + 50 CARD → two correctly attributed journal
+  lines, balanced 110/110). My earlier parity-matrix row was wrong.
+- **Fiscal linkage does not exist yet**: POS settle creates no fiscal documents
+  (`FiscalDocumentService.create` is reachable only via the connector route).
+  Tender-type-as-compliance-field therefore has nothing to consume today;
+  recorded as an input to the fiscal mission, not built here.
 
 ## Cash-semantics analysis (CTO rider)
 
