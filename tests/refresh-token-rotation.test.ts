@@ -48,10 +48,13 @@ async function cleanupRestaurant(restaurantId: string) {
         prisma.menu_categories.deleteMany({ where: { restaurant_id: restaurantId } }),
         prisma.menu_item_variants.deleteMany({ where: { menu_item_id: { in: (await prisma.menu_items.findMany({ where: { restaurant_id: restaurantId }, select: { id: true } })).map(m => m.id) } } }),
         prisma.order_type_defaults.deleteMany({ where: { restaurant_id: restaurantId } }),
-        prisma.chart_of_accounts.deleteMany({ where: { restaurant_id: restaurantId } }),
+        // Journal rows must be cleared BEFORE their referenced accounts:
+        // journal_entry_lines.account_id / ledger_entries.account_id both FK
+        // into chart_of_accounts (P2003 otherwise when sweeping real data).
         prisma.journal_entry_lines.deleteMany({ where: { journal_entries: { restaurant_id: restaurantId } } }),
         prisma.journal_entries.deleteMany({ where: { restaurant_id: restaurantId } }),
         prisma.ledger_entries.deleteMany({ where: { restaurant_id: restaurantId } }),
+        prisma.chart_of_accounts.deleteMany({ where: { restaurant_id: restaurantId } }),
         prisma.customer_ledgers.deleteMany({ where: { restaurant_id: restaurantId } }),
         prisma.customers.deleteMany({ where: { restaurant_id: restaurantId } }),
         prisma.expenses.deleteMany({ where: { restaurant_id: restaurantId } }),

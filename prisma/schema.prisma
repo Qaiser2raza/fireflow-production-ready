@@ -474,6 +474,7 @@ model orders {
   refund_transaction_id                  String?
   is_proforma_printed                    Boolean             @default(false)
   payment_status                         PaymentStatus?      @default(UNPAID)
+  settlement_key                         String?             @unique
   predicted_complete_time                DateTime?
   bottleneck_detected                    Boolean             @default(false)
   force_settled_at                       DateTime?

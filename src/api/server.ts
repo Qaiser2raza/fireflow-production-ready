@@ -1994,7 +1994,27 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             return res.status(400).json({ error: 'Valid payment amount required' });
         }
 
-        const result = await prisma.$transaction(async (tx) => {
+        // ?? M017 Phase A: settlement idempotency (storage-layer enforced) ??
+        // Deterministic identity derived from the stable inputs of the settle
+        // request: the tenant-scoped order id. An order settles exactly once;
+        // any repeat or racing submission of the same logical operation is a
+        // replay and must return the ORIGINAL settlement result verbatim with
+        // ZERO side effects. The unique index on orders.settlement_key makes
+        // double-settlement impossible even under concurrency.
+        const settlementKey = `SETTLE:${req.restaurantId}:${id}`;
+
+        const settledOrder = await prisma.orders.findFirst({
+            where: { id, restaurant_id: req.restaurantId }
+        });
+        if (settledOrder && (settledOrder.settlement_key === settlementKey || settledOrder.payment_status === 'PAID')) {
+            console.warn(`[SETTLE] Replay suppressed for order ${settledOrder.order_number || id} — returning original result verbatim`);
+            res.setHeader('X-Settlement-Replay', 'true');
+            return res.json({ success: true, order: settledOrder });
+        }
+
+        let result;
+        try {
+            result = await prisma.$transaction(async (tx) => {
             const order = await tx.orders.findFirst({
                 where: { id, restaurant_id: req.restaurantId } // SaaS Security
             });
@@ -2011,6 +2031,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                 data: {
                     status: 'CLOSED',
                     payment_status: 'PAID',
+                    settlement_key: settlementKey,
                     closed_at: new Date(),
                     session_id: sessionId || undefined,
                     last_action_by: staffId || order.last_action_by || undefined,
@@ -2077,8 +2098,70 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                 });
             }
 
+            // [M017-A] Durable business facts ride the SAME transaction.
+            // Payloads are sanitized business facts (ids, totals, per-method
+            // amounts) -- never full aggregates or secrets. The outbox idempotency
+            // key (aggregate_type+aggregate_id+event_type) makes duplicate events
+            // impossible even under racing replays.
+            const settledAtIso = (updatedOrder.closed_at || new Date()).toISOString();
+            await tx.outbox.create({
+                data: {
+                    restaurant_id: updatedOrder.restaurant_id,
+                    event_type: 'PAYMENT_COMPLETED',
+                    aggregate_type: 'orders',
+                    aggregate_id: updatedOrder.id,
+                    payload: {
+                        orderId: updatedOrder.id,
+                        orderNumber: updatedOrder.order_number,
+                        restaurantId: updatedOrder.restaurant_id,
+                        type: updatedOrder.type,
+                        total: Number(updatedOrder.total),
+                        currency: 'PKR',
+                        sessionId: sessionId || null,
+                        settledBy: staffId || null,
+                        source: isLogisticsSettle ? 'LOGISTICS' : 'POS',
+                        payments: paymentLines.map(l => ({ method: l.method, amount: l.amount })),
+                        settledAt: settledAtIso,
+                    },
+                },
+            });
+            await tx.outbox.create({
+                data: {
+                    restaurant_id: updatedOrder.restaurant_id,
+                    event_type: 'ORDER_COMPLETED',
+                    aggregate_type: 'orders',
+                    aggregate_id: updatedOrder.id,
+                    payload: {
+                        orderId: updatedOrder.id,
+                        orderNumber: updatedOrder.order_number,
+                        restaurantId: updatedOrder.restaurant_id,
+                        type: updatedOrder.type,
+                        total: Number(updatedOrder.total),
+                        completedAt: settledAtIso,
+                    },
+                },
+            });
+
             return updatedOrder;
-        });
+            });
+        } catch (settleError: any) {
+            // Concurrent duplicate settle: whichever unique constraint fires
+            // (settlement_key on the order update, or the outbox idempotency key
+            // on completion events), the winner committed the full settlement
+            // and this submission is a replay. Verify by read-back, then return
+            // the original result verbatim; anything else rethrows unchanged.
+            if (settleError?.code === 'P2002') {
+                const settled = await prisma.orders.findFirst({
+                    where: { id, restaurant_id: req.restaurantId }
+                });
+                if (settled && (settled.payment_status === 'PAID' || settled.settlement_key)) {
+                    console.warn(`[SETTLE] Concurrent duplicate suppressed for order ${settled.order_number || id} (unique constraint)`);
+                    res.setHeader('X-Settlement-Replay', 'true');
+                    return res.json({ success: true, order: settled });
+                }
+            }
+            throw settleError;
+        }
 
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'UPDATE', data: result, id });
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'transactions', eventType: 'INSERT' });
