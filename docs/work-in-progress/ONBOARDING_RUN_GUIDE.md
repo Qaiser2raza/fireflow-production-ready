@@ -155,13 +155,13 @@ C1 (dispatcher adoption + provider decision) and C2 (RLS design).
 
 | Step | Description | Executed (initials/date) | Status | Evidence ref |
 |---|---|---|---|---|
-| T-0.1 | Policy/grants grids captured | founder 2026-08-26 (partial) | PENDING — STEP 0a policy grid archive unconfirmed | thread + founder archive |
+| T-0.1 | Policy/grants grids captured | founder 2026-08-26 | **COMPLETE (disclosed gap)** — STEP 3c post-state grid archived; STEP 0a `pg_policies` provenance grid was NOT captured to a file; lockdown effectiveness proved via T-2/T-4 regardless | thread + screenshots; gap disclosed |
 | T-1 | Lockdown SQL executed | founder 2026-08-26 | **COMPLETE** | STEP 3c post-state grid: zero DML grants both roles |
 | T-1b | TRUNCATE revoked (least-privilege add-on) | founder 2026-08-26 02:05 | **COMPLETE** | screenshot: revoke truncate … Success, 0 rows |
 | T-2 | Probe matrix EXIT=0 LOCKED | eng 2026-08-26 | **COMPLETE** | 6/6 cells HTTP 42501; pre-run was 6x204 exit 2 |
 | T-3 | Service creds provisioned | founder 2026-08-26 | **COMPLETE** | .env SUPABASE_URL + SUPABASE_SERVICE_KEY present |
-| T-4 | CONTROL=PASS + functional smokes | eng 2026-08-26 | **COMPLETE** (probe); smokes READY pending closure review | probe EXIT=0, service CONTROL=PASS; smokes scripted below |
-| T-5 | Closure package committed | eng 2026-08-26 | **COMPLETE** | commits e771976 + dbbeffb; register update in next commit |
+| T-4 | CONTROL=PASS + functional smokes | eng 2026-08-26 | **COMPLETE** | probe EXIT=0 --require-control; 3/3 smokes PASS (201 insert + 204 cleanup each) |
+| T-5 | Closure package committed | eng 2026-08-26 | **COMPLETE** | commits e771976 + dbbeffb + 06cc223 + (pending smoke script commit) |
 | T-FINAL | Co-CTO closes TD-12 | | **AWAITING YOUR REVIEW** | |
 | T-5 | Closure package committed | | PENDING | |
 | T-FINAL | Co-CTO closes TD-12 | | PENDING | |

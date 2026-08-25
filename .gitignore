@@ -84,3 +84,4 @@ implementation_plan.md
 !scripts/release-gate.cjs
 !scripts/browser-smoke.cjs
 !scripts/probe-cloud-lockdown.cjs
+!scripts/td12-functional-smokes.cjs
