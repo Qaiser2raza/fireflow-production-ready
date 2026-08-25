@@ -67,6 +67,27 @@ silent UX breakage.
   `select * from pg_policies where tablename in ('license_keys','restaurants_cloud','subscription_payments');`
   and `select table_name, grantee, privilege_type from information_schema.role_table_grants where table_schema='public' and table_name in (...);`
   Archive output before touching anything. Answers Q1 (policy provenance) and Q3.
+
+  Copy-paste block (Supabase dashboard → SQL Editor, run as one script):
+
+  ```sql
+  -- STEP 0a: policy provenance capture
+  select tablename, policyname, cmd, roles, qual, with_check
+    from pg_policies
+   where schemaname = 'public'
+     and tablename in ('license_keys','restaurants_cloud','subscription_payments')
+   order by tablename, policyname;
+
+  -- STEP 0b: grant capture
+  select table_name, grantee, privilege_type
+    from information_schema.role_table_grants
+   where table_schema = 'public'
+     and table_name in ('license_keys','restaurants_cloud','subscription_payments')
+   order by table_name, grantee, privilege_type;
+  ```
+
+  Archive both result grids next to `scratch/forensic_baseline_2026-08-25.json`.
+
 - **STEP 1 (done/independent):** REST row-level baseline of demo data.
 - **STEP 2 (done):** client-code inventory — this document.
 - **STEP 3 (founder):** DROP the drifted write policies by captured name;
@@ -74,10 +95,50 @@ silent UX breakage.
   and the same `FROM authenticated;` (license administration is a platform
   role, not a tenant role). No `FORCE RLS` (service_role BYPASSRLS; revisit
   only if owner-role connections are verified).
+
+  Copy-paste block (same SQL Editor session, AFTER archiving STEP 0 output).
+  The DO-loop drops by live catalog inspection — no name transcription risk:
+
+  ```sql
+  -- STEP 3a: drop every policy on the three tables that grants anything to anon
+  do $$
+  declare r record;
+  begin
+    for r in
+      select schemaname, tablename, policyname
+        from pg_policies
+       where schemaname = 'public'
+         and tablename in ('license_keys','restaurants_cloud','subscription_payments')
+         and 'anon' = any(roles)
+    loop
+      execute format('drop policy if exists %I on %I.%I', r.policyname, r.schemaname, r.tablename);
+      raise notice 'dropped policy % on %.%', r.policyname, r.schemaname, r.tablename;
+    end loop;
+  end $$;
+
+  -- STEP 3b: revoke DML from anon AND authenticated (service_role bypasses via BYPASSRLS)
+  revoke insert, update, delete on license_keys, restaurants_cloud, subscription_payments from anon;
+  revoke insert, update, delete on license_keys, restaurants_cloud, subscription_payments from authenticated;
+
+  -- STEP 3c: post-state capture (archive alongside STEP 0 grids)
+  select table_name, grantee, privilege_type
+    from information_schema.role_table_grants
+   where table_schema = 'public'
+     and table_name in ('license_keys','restaurants_cloud','subscription_payments')
+     and grantee in ('anon','authenticated')
+   order by table_name, grantee;
+  ```
+
 - **STEP 4:** re-run probe matrix — all mutations must reject for anon AND
   authenticated-tenant contexts, **including a positive control**: one
   service-role write that must succeed (distinguishes "locked down" from
   "harness broken").
+
+  Executable: `node scripts/probe-cloud-lockdown.cjs` (committed). Zero-mutation
+  ghost-row technique; exit 0=LOCKED / 2=HOLES / 3=INCOMPLETE(skips) / 1=fatal.
+  Pre-lockdown live run 2026-08-26: exit 2 — anon U+D open on all three tables
+  (6/6 executed cells), zero mutations performed. Service control + authenticated
+  cells remain SKIP until founder credentials land.
 - **STEP 5 (same window, separate commit):** configure `SUPABASE_URL` +
   `SUPABASE_SERVICE_KEY` on the Vault node; explicitly verify
   `verifyPayment`, `generateLicenseKey` cloud insert, `OwnerInviteDispatcher`.
