@@ -154,9 +154,10 @@ C1 (dispatcher adoption + provider decision) and C2 (RLS design).
 
 | Step | Description | Executed (initials/date) | Status | Evidence ref |
 |---|---|---|---|---|
-| T-0.1 | Policy/grants grids captured | | PENDING | |
-| T-1 | Lockdown SQL executed | | PENDING | |
-| T-2 | Probe matrix EXIT=0 LOCKED | | PENDING | |
+| T-0.1 | Policy/grants grids captured | founder 2026-08-26 (partial) | PENDING — STEP 0a policy grid archive unconfirmed | thread + founder archive |
+| T-1 | Lockdown SQL executed | founder 2026-08-26 | **COMPLETE** | STEP 3c post-state grid: zero DML grants both roles |
+| T-1b | TRUNCATE revoked (least-privilege add-on) | founder 2026-08-26 02:05 | **COMPLETE** | screenshot: revoke truncate … Success, 0 rows |
+| T-2 | Probe matrix EXIT=0 LOCKED | eng 2026-08-26 | **COMPLETE** | 6/6 cells HTTP 42501; pre-run was 6x204 exit 2 |
 | T-3 | Service creds provisioned | | PENDING | |
 | T-4 | CONTROL=PASS + 3 smokes | | PENDING | |
 | T-5 | Closure package committed | | PENDING | |
