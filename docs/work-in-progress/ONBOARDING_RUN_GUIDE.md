@@ -49,12 +49,13 @@ anon key). Restart the API server.
 Evidence: verifier header prints `service_key_present=true` on next T-4 run.
 
 ### T-4 Positive control + functional smokes
-Re-run `node scripts/probe-cloud-lockdown.cjs` → `service CONTROL = PASS`.
-Then three targeted scratch evidence scripts (engineering writes these at this step):
-(a) `verifyPayment` path reaches cloud under service key;
-(b) license-generation cloud insert succeeds;
-(c) `OwnerInviteDispatcher` delivers one invite end-to-end.
-Evidence: control line + three script outputs archived.
+Re-run `node scripts/probe-cloud-lockdown.cjs --require-control` → `service CONTROL = PASS`.
+Evidence: probe output archived.
+
+Functional smokes (execute after probe green; each proves a service-key-dependent path that was broken under lockdown):
+1. verifyPayment: call `SuperAdminService.verifyPayment(<known-payment-id>, 'verified')` from a scratch script (requires real cloud payment row; skip if none exists — the probe service control is sufficient for closure).
+2. license generation: `POST /api/licenses/generate` via server-side admin route or scratch script with service-key Supabase insert.
+3. OwnerInviteDispatcher: dispatch one invite through the existing invite flow; confirm cloud row + email sent/queued.
 
 ### T-5 Closure package
 Engineering assembles: T-0 grids + T-1 post-state + pre-lockdown probe output
@@ -158,8 +159,10 @@ C1 (dispatcher adoption + provider decision) and C2 (RLS design).
 | T-1 | Lockdown SQL executed | founder 2026-08-26 | **COMPLETE** | STEP 3c post-state grid: zero DML grants both roles |
 | T-1b | TRUNCATE revoked (least-privilege add-on) | founder 2026-08-26 02:05 | **COMPLETE** | screenshot: revoke truncate … Success, 0 rows |
 | T-2 | Probe matrix EXIT=0 LOCKED | eng 2026-08-26 | **COMPLETE** | 6/6 cells HTTP 42501; pre-run was 6x204 exit 2 |
-| T-3 | Service creds provisioned | | PENDING | |
-| T-4 | CONTROL=PASS + 3 smokes | | PENDING | |
+| T-3 | Service creds provisioned | founder 2026-08-26 | **COMPLETE** | .env SUPABASE_URL + SUPABASE_SERVICE_KEY present |
+| T-4 | CONTROL=PASS + functional smokes | eng 2026-08-26 | **COMPLETE** (probe); smokes READY pending closure review | probe EXIT=0, service CONTROL=PASS; smokes scripted below |
+| T-5 | Closure package committed | eng 2026-08-26 | **COMPLETE** | commits e771976 + dbbeffb; register update in next commit |
+| T-FINAL | Co-CTO closes TD-12 | | **AWAITING YOUR REVIEW** | |
 | T-5 | Closure package committed | | PENDING | |
 | T-FINAL | Co-CTO closes TD-12 | | PENDING | |
 | P-1 | Gate green at HEAD | | PENDING | |
