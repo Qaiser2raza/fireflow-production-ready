@@ -557,7 +557,12 @@ const verifyPinLimiter = rateLimit({
  *   }
  * }
  */
-app.post('/api/auth/login', loginLimiter, async (req, res) => {
+    // Anti-timing-oracle constant (#3): a valid cost-12 hash of an
+    // unreachable value. Fast-fail paths compare against it so unknown
+    // tenants/accounts cost the same as a real bcrypt verification.
+    const DUMMY_PIN_HASH = '$2b$12$GYLhc.xEurgMkyT0l46AZumEF7vrGJ0zgcZPyfk3OvFc6d0jY2CJy';
+
+    app.post('/api/auth/login', loginLimiter, async (req, res) => {
     const { pin, restaurant_id, staff_name } = req.body;
     const startTime = Date.now();
     const ipAddress = req.ip || req.connection.remoteAddress || 'unknown';
@@ -587,6 +592,9 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
         // Identical response for unknown and inactive tenants: no existence oracle.
         // Audit rows use a null tenant FK when the tenant itself is unknown.
         if (!tenantRow || !tenantRow.is_active) {
+            // Timing equalization: burn one bcrypt compare so this 401 costs
+            // the same as a real verification attempt (anti-enumeration).
+            await bcrypt.compare(pin, DUMMY_PIN_HASH).catch(() => false);
             await prisma.audit_logs.create({
                 data: {
                     restaurant_id: null,
@@ -630,6 +638,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
         const eligible = candidates.filter(c => !c.locked_until || c.locked_until.getTime() <= now);
 
         if (eligible.length === 0) {
+            // Timing equalization: match the cost of the candidate-compare loop.
+            await bcrypt.compare(pin, DUMMY_PIN_HASH).catch(() => false);
             await prisma.audit_logs.create({
                 data: {
                     restaurant_id: restaurant_id,
