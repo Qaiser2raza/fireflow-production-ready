@@ -122,6 +122,23 @@ Provision one more clearly-test tenant (e.g. `Second Review Cafe`) and verify:
 
 ---
 
+## Section 6 — Onboarding-run hardened-settle verification (Phase O)
+
+Execute during the onboarding run after at least one mixed-tender order is settled.
+
+| # | Step | Expect |
+|---|---|---|
+| 6.1 | Settle an order with mixed tender (e.g., 60 CASH + 50 CARD) | Order moves to CLOSED/PAID; cashier session remains open |
+| 6.2 | Inspect the settlement in the UI or API | `settlement_key` present on the order/settlement record |
+| 6.3 | Journal visibility (engineering read-back) | Per-method journal lines balance: CASH line == cash total, CARD line == card total; combined debits == combined credits == order total |
+| 6.4 | Outbox events present | `PAYMENT_COMPLETED` + `ORDER_COMPLETED` events both in `outbox` for this settlement |
+| 6.5 | A1 payment-proof route (Billing surface) | Submit a proof through the live Billing UI → row `status='pending'` locally, exactly one `PAYMENT_PROOF_SUBMITTED` outbox event |
+| 6.6 | Authority boundary (engineering read-back) | `license_keys.count()` unchanged; `restaurants.subscription_status` unchanged; `journal_entries`/`ledger_entries`/`transactions` deltas match ONLY settled orders from this run; `integration_deliveries.count()` unchanged |
+
+> 6.3 and 6.6 are quantitative assertions executed by engineering via the O2 baseline script — they are not visual judgments. The founder confirms the mixed-tender settle happened; engineering diffs the captured baseline against post-run state.
+
+---
+
 ## Findings log (recorded during this review)
 
 | ID | Finding | Disposition |

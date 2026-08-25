@@ -165,12 +165,12 @@ C1 (dispatcher adoption + provider decision) and C2 (RLS design).
 | T-FINAL | Co-CTO closes TD-12 | | **AWAITING YOUR REVIEW** | |
 | T-5 | Closure package committed | | PENDING | |
 | T-FINAL | Co-CTO closes TD-12 | | PENDING | |
-| P-1 | Gate green at HEAD | | PENDING | |
-| P-2 | Fresh PINs / invite ready | | PENDING | |
-| P-3 | license.lic active | | PENDING | |
-| P-4 | DB target acknowledged | | PENDING | |
-| P-5 | O2 baseline captured | | PENDING | |
-| P-6 | Checklist extended | | PENDING | |
+| P-1 | Gate green at HEAD | eng 2026-08-26 | **COMPLETE** | gate 15/15 exit 0 at 3f0e46f |
+| P-2 | Fresh PINs / invite ready | founder TBD | PENDING | |
+| P-3 | license.lic active | eng 2026-08-26 | **COMPLETE** | license.lic at repo root |
+| P-4 | DB target acknowledged | founder TBD | PENDING | |
+| P-5 | O2 baseline captured | eng 2026-08-26 | **READY** — script committed; run at session start | scripts/o2-baseline.cjs |
+| P-6 | Checklist extended | eng 2026-08-26 | **COMPLETE** | Section 6 added to VISUAL_BROWSER_REVIEW_CHECKLIST.md |
 | R-1…R-7 | Run executed per script | | PENDING | |
 | V | O2 assertions all pass | | PENDING | |
 | W | Verdict delivered | | PENDING | |
