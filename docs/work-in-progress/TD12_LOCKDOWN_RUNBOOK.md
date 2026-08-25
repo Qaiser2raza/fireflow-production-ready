@@ -16,12 +16,28 @@ cloud tables. Critical path: founder-held Supabase console access (STEP 0).
 
 ## Verified facts (2026-08-25 probes)
 
-- RLS is **enabled** on all three tables (anon INSERT → 42501).
-- A **drifted UPDATE-granting policy** exists live on `license_keys` and
-  `restaurants_cloud` (anon PATCH → 204, including full status flips). It is
-  absent from `supabase/saas_schema.sql` (which grants anon SELECT only) —
-  someone loosened the live DB outside migrations.
-- `subscription_payments` policy state unverified (Q3) — capture in STEP 0.
+- RLS is **enabled** on all three tables (anon INSERT → 42501 everywhere).
+- **Drifted-policy matrix (ghost-row probes, zero mutations):**
+
+| Table | anon SELECT | anon INSERT | anon UPDATE | anon DELETE |
+|---|---|---|---|---|
+| `license_keys` | yes (rows visible) | **blocked (42501)** | **OPEN (204)** | **OPEN (204)** |
+| `restaurants_cloud` | yes | **blocked (42501)** | **OPEN (204)** | **OPEN (204)** |
+| `subscription_payments` | yes (0 rows) | **blocked (42501)** | **OPEN (204)** | **OPEN (204)** |
+
+  Live policies grant anonymous UPDATE + DELETE on every SaaS table; INSERT is
+  denied everywhere. Anyone on the internet can modify or delete any license or
+  billing row today.
+- Column-level drift confirmed too: `saas_schema.sql` declares `plan` on
+  `restaurants_cloud`; live column is `subscription_plan` (PGRST204). The file
+  is fiction; G4's full diff audit stands.
+- Forensic baseline archived: `scratch/forensic_baseline_2026-08-25.json`
+  (3 license keys, 1 demo restaurant row, 0 payments).
+- `subscription_payments` state (Q3): INSERT blocked ⇒ the POS payment-proof
+  modal (`PaymentSubmissionView`) has never been able to persist — it shows
+  "Database Error: new row violates row-level security policy…" to users.
+  Loud failure, not silent data loss, but the feature is dead at the DB layer.
+- Provenance (Q1) still requires STEP 0 dashboard capture of `pg_policies`.
 
 ## Client-code inventory (STEP 2 — complete)
 
@@ -29,10 +45,10 @@ Every direct touchpoint of the three tables, repo-wide:
 
 | Surface | Table(s) | Ops | Client credential | Fate under lockdown |
 |---|---|---|---|---|
-| `src/hq/hqApi.ts` (Vercel HQ console, `hq.html`) | license_keys, restaurants_cloud, subscription_payments | SELECT, INSERT, UPDATE | anon (`VITE_SUPABASE_ANON_KEY`) | **BREAKS** — hqAddRestaurant, hqRevokeLicense, hqVerifyPayment all anon-writers. Stub or route through service-key API in same window. |
-| `src/operations/pos/PaymentSubmissionView.tsx` (POS Billing → submit payment) | subscription_payments | INSERT | anon | **BREAKS** — tenant-facing payment-proof submission. Stub UI or add authenticated server endpoint before/with revocation. |
-| `src/shared/lib/cloudClient.ts` | all three | SELECT/INSERT/UPDATE/DELETE | anon (browser) or anon-fallback (server) | `checkLicenseKey`/`activateLicenseKey`/`registerRestaurant`/`submitPaymentProof`: zero callers (dead, G5 sweep). `getPaymentHistory`/`getSubscriptionStatus`: reads only (BillingView). `generateLicenseKey`/`revokeLicenseKey`/`deleteLicenseKey`/`getLicenseKeys`: server-called via Vault → need service key configured (STEP 5). |
-| `src/api/services/SuperAdminService.ts` | license_keys, subscription_payments, restaurants_cloud | INSERT/UPDATE/SELECT | anon-fallback (`getSupabaseClient`) | Needs service key (STEP 5); JWT-overwrite update (line 83) also RLS-blocked for anon today. |
+| `src/hq/hqApi.ts` (Vercel HQ console, `hq.html`) | license_keys, restaurants_cloud, subscription_payments | SELECT, INSERT, UPDATE | anon (`VITE_SUPABASE_ANON_KEY`) | Mixed TODAY: updates work through the hole; inserts already fail (42501 / wrong columns). Under lockdown updates die too — stub or route through service-key API in same window. |
+| `src/operations/pos/PaymentSubmissionView.tsx` (POS Billing → submit payment) | subscription_payments | INSERT | anon | **ALREADY BROKEN** (INSERT blocked; UI shows DB error). Stub UI now; real fix = authenticated server endpoint post-lockdown. |
+| `src/shared/lib/cloudClient.ts` | all three | SELECT/INSERT/UPDATE/DELETE | anon (browser) or anon-fallback (server) | INSERT paths (`registerRestaurant`, `submitPaymentProof`, `generateLicenseKey`, activation writes): **already broken off-HQ**. `revokeLicenseKey`/`deleteLicenseKey`: work through the hole today; die under lockdown until service key (STEP 5). `getPaymentHistory`/`getSubscriptionStatus`/`checkLicenseKey`: reads only. Activation functions: zero callers (G5 sweep). |
+| `src/api/services/SuperAdminService.ts` | license_keys, subscription_payments, restaurants_cloud | INSERT/UPDATE/SELECT | anon-fallback (`getSupabaseClient`) | Insert path already broken; verify-payment update works through the hole today. Needs service key (STEP 5). |
 | `src/api/services/platform/SupabaseAdminService.ts` | restaurants_cloud | SELECT, INSERT (upsert) | **service key only** (`isConfigured()` gate) | Unaffected once configured; currently idle locally. |
 | `src/api/server.ts` (licensing sync :482, payments list :2487) | license_keys, subscription_payments | SELECT | anon-fallback | Reads stay open pre-full-RLS; revisit at policy design. |
 | `src/client/RestaurantContext.tsx:65` | subscription_payments | SELECT (limit 1) | anon | Read — unaffected by write revocation. |
