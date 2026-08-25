@@ -107,8 +107,18 @@ function createMockClient(): any {
             single: async () => ({
               data: null,
               error: { message: 'Cloud services disabled (development mode)' }
+            }),
+            maybeSingle: async () => ({
+              data: null,
+              error: null
             })
           }),
+          async maybeSingle() {
+            return {
+              data: null,
+              error: null
+            };
+          },
           async execute() {
             return {
               data: [],
@@ -124,6 +134,12 @@ function createMockClient(): any {
             };
           }
         }),
+        async maybeSingle() {
+          return {
+            data: null,
+            error: null
+          };
+        },
         async execute() {
           return {
             data: [],
@@ -202,6 +218,31 @@ function initializeCloudClient(): SupabaseClient {
   return supabaseClient;
 }
 
+// ==========================================
+// CLOUD ENABLEMENT (client truth from server)
+// ==========================================
+
+let clientCloudEnabledCache: boolean | null = null;
+
+/**
+ * Whether cloud SaaS queries should run in this session. Truth comes from the
+ * SERVER (via /api/health → isCloudEnabled()), never from build-time vars, so
+ * the client cannot drift from the deployed posture (F-V14 guardrail 2).
+ * Cached once per session. Server-side callers must use config/env instead.
+ */
+export async function isClientCloudEnabled(): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+  if (clientCloudEnabledCache !== null) return clientCloudEnabledCache;
+  try {
+    const res = await fetch('/api/health');
+    const json = await res.json().catch(() => null);
+    clientCloudEnabledCache = json?.cloud_enabled === true;
+  } catch {
+    clientCloudEnabledCache = false;
+  }
+  return clientCloudEnabledCache;
+}
+
 /**
  * Get initialized Supabase client
  * Returns mock client if not configured
@@ -225,13 +266,14 @@ export async function checkLicenseKey(key: string): Promise<LicenseKeyResponse> 
     const client = getCloudClient();
 
     const searchKey = key.includes('.') ? key : key.toUpperCase();
+    // maybeSingle: an unknown key is an expected outcome, not an error (F-V14).
     const { data, error } = await client
       .from('license_keys')
       .select('id, key, plan, status')
       .eq('key', searchKey)
-      .single();
+      .maybeSingle();
 
-    if (error) {
+    if (error || !data) {
       return {
         data: null,
         error: error?.message || 'License key not found'
@@ -297,9 +339,11 @@ export async function activateLicenseKey(
       })
       .eq('key', searchKey)
       .select('id, key, restaurant_id, activated_at')
-      .single();
+      .maybeSingle();
 
-    if (error) {
+    // maybeSingle: zero updated rows means the key never matched — reported
+    // as activation failure, not a silent success (F-V14).
+    if (error || !data) {
       return {
         data: null,
         error: 'Failed to activate license key'
@@ -416,9 +460,11 @@ export async function getSubscriptionStatus(
         'subscription_status, subscription_plan, subscription_expires_at, monthly_fee, currency, trial_ends_at'
       )
       .eq('restaurant_id', restaurantId)
-      .single();
+      .maybeSingle();
 
-    if (error) {
+    // maybeSingle: locally-provisioned tenants legitimately have no cloud row
+    // yet (F-V14) — 0 rows is an expected state, not an error.
+    if (error || !data) {
       return {
         data: null,
         error: 'Restaurant subscription not found'
@@ -784,12 +830,13 @@ export async function getLatestVersion(): Promise<{ data: { version: string; dow
       .select('version, download_url, notes')
       .order('created_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
 
-    if (error) {
+    // maybeSingle: no published update is an expected state (F-V14).
+    if (error || !data) {
       return {
         data: null,
-        error: error.message || 'No update information found'
+        error: error?.message || 'No update information found'
       };
     }
 

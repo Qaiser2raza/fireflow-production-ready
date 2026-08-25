@@ -278,7 +278,8 @@ app.get('/api/health', async (_req, res) => {
             status: health.status,
             timestamp: health.timestamp,
             uptime: health.uptime,
-            checks: health.checks
+            checks: health.checks,
+            cloud_enabled: isCloudEnabled()
         });
     } catch (err) {
         logger.log({

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRestaurant, formatCurrency } from '../../client/RestaurantContext';
-import { getPaymentHistory, getSubscriptionStatus } from '../../shared/lib/cloudClient';
+import { getPaymentHistory, getSubscriptionStatus, isClientCloudEnabled } from '../../shared/lib/cloudClient';
 import {
   CreditCard,
   Clock,
@@ -39,16 +39,23 @@ export const BillingView: React.FC = () => {
     const loadBillingData = async () => {
       setLoading(true);
       try {
-        // Fetch payment history
-        const historyResult = await getPaymentHistory(currentRestaurant.id);
-        if (historyResult.data) {
-          setPaymentHistory(historyResult.data);
-        }
+        // F-V14 (b): the server decides whether cloud SaaS queries run. When
+        // disabled (local/offline posture), skip the round-trips entirely and
+        // fall straight through to local subscription state — identical
+        // rendered output to the old error-path fallback, minus the noise.
+        const cloudOn = await isClientCloudEnabled();
+        if (cloudOn) {
+          // Fetch payment history
+          const historyResult = await getPaymentHistory(currentRestaurant.id);
+          if (historyResult.data) {
+            setPaymentHistory(historyResult.data);
+          }
 
-        // Fetch subscription status
-        const statusResult = await getSubscriptionStatus(currentRestaurant.id);
-        if (statusResult.data?.status) {
-          setCloudStatus(statusResult.data.status);
+          // Fetch subscription status
+          const statusResult = await getSubscriptionStatus(currentRestaurant.id);
+          if (statusResult.data?.status) {
+            setCloudStatus(statusResult.data.status);
+          }
         }
       } catch (err) {
         console.error('Failed to load billing data:', err);
