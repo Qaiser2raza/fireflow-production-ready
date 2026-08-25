@@ -35,3 +35,18 @@ export function isSettlementUniquenessConflict(e: unknown): boolean {
         && target.includes('aggregate_id')
         && target.includes('event_type');
 }
+
+/**
+ * A1 payment-proof attribution: the ONLY unique surface a proof submission may
+ * own is its deterministic proof key, stored in
+ * subscription_payments.transaction_id (sha256 of tenant|period|method|
+ * amount_minor|client_token — see POST /api/billing/payment-proof).
+ * Any other integrity error inside the proof transaction propagates.
+ */
+export function isProofUniquenessConflict(e: unknown): boolean {
+    const err = e as PrismaLikeError | null;
+    if (!err || typeof err !== 'object' || err.code !== 'P2002') return false;
+    const t = err.meta?.target;
+    const target = Array.isArray(t) ? t.join('|') : String(t ?? '');
+    return target.includes('proof_key') || target.includes('transaction_id');
+}

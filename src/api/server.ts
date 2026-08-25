@@ -38,7 +38,7 @@ import { authMiddleware, requireRole } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { journalEntryService } from './services/JournalEntryService';
-import { isSettlementUniquenessConflict } from './services/payment/SettlementGuards';
+import { isSettlementUniquenessConflict, isProofUniquenessConflict } from './services/payment/SettlementGuards';
 import { LicenseService } from './services/licensing/LicenseService';
 import { qrOrderBridge } from './services/qr/QROrderBridge';
 import { syncMenuToCloud } from './services/qr/MenuSync';
@@ -2172,6 +2172,118 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
         res.json({ success: true, order: result });
     } catch (e: any) {
         console.error("Order Settle Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// A1: Payment-proof submission (EVIDENCE, NOT AUTHORITY) ---------------------
+// Records a client-asserted, authenticated payment-evidence claim as a local
+// durable fact plus one outbox event. It must NEVER drive subscription
+// activation, license/entitlement mutation, revenue recognition, or order
+// lifecycle events — authority comes only from the separate HQ verify flow
+// under service-role credentials. Contract: plans/a1-payment-proof-spec.md.
+app.post('/api/billing/payment-proof', authMiddleware, sessionGateMiddleware, async (req, res) => {
+    try {
+        const { client_token, billing_period, method, payment_method, amount_minor, reference_note } = req.body;
+        const staffId = req.staffId;
+
+        // authMiddleware guarantees tenant context; this guard narrows the type
+        // for the persistence layer below and defends in depth.
+        if (!req.restaurantId) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+        const tenantId: string = req.restaurantId;
+
+        if (!client_token || typeof client_token !== 'string' || client_token.length < 8 || client_token.length > 64) {
+            return res.status(400).json({ error: 'Valid client_token required' });
+        }
+        if (!billing_period || !/^\d{4}-(0[1-9]|1[0-2])$/.test(billing_period)) {
+            return res.status(400).json({ error: 'Valid billing_period (YYYY-MM) required' });
+        }
+        const proofMethod = method || payment_method;
+        if (!proofMethod || typeof proofMethod !== 'string' || proofMethod.length > 50) {
+            return res.status(400).json({ error: 'Valid payment method required' });
+        }
+        const minor = Number(amount_minor);
+        if (!Number.isInteger(minor) || minor <= 0 || minor > 1000000000) {
+            return res.status(400).json({ error: 'Valid amount_minor required' });
+        }
+
+        // Deterministic identity: stable inputs + client_token disambiguator
+        // (same logical submission retries collide; distinct real payments with
+        // identical period/method/amount do NOT, because their tokens differ).
+        const proofKey = crypto.createHash('sha256')
+            .update([tenantId, billing_period, proofMethod, minor, client_token].join('|'))
+            .digest('hex');
+
+        // Fast-path replay: return the original evidence record verbatim.
+        const existingProof = await prisma.subscription_payments.findFirst({
+            where: { restaurant_id: tenantId, transaction_id: proofKey }
+        });
+        if (existingProof) {
+            console.warn(`[PROOF] Replay suppressed for restaurant ${tenantId} period ${billing_period}`);
+            res.setHeader('X-Proof-Replay', 'true');
+            return res.json({ success: true, proof: existingProof });
+        }
+
+        let proof;
+        try {
+            proof = await prisma.$transaction(async (tx) => {
+                // Write 1 of 2 — the ONLY state this route creates:
+                const row = await tx.subscription_payments.create({
+                    data: {
+                        restaurant_id: tenantId,
+                        amount: minor / 100,
+                        payment_method: proofMethod,
+                        transaction_id: proofKey,
+                        status: 'pending',
+                        billing_period,
+                        reference_note: reference_note ? String(reference_note).slice(0, 255) : null,
+                        submitted_by: staffId || null,
+                    }
+                });
+                // Write 2 of 2 — durable fact for the future cloud sync consumer
+                // (upsert-by-proof_key contract frozen in the A1 spec).
+                await tx.outbox.create({
+                    data: {
+                        restaurant_id: tenantId,
+                        event_type: 'PAYMENT_PROOF_SUBMITTED',
+                        aggregate_type: 'subscription_payment_proofs',
+                        aggregate_id: row.id,
+                        payload: {
+                            proofId: row.id,
+                            restaurantId: tenantId,
+                            billingPeriod: billing_period,
+                            method: proofMethod,
+                            amountMinor: minor,
+                            currency: 'PKR',
+                            submittedBy: staffId || null,
+                            proofKey,
+                            submittedAt: (row.created_at || new Date()).toISOString(),
+                        },
+                    },
+                });
+                return row;
+            });
+        } catch (proofError) {
+            // Narrow attribution: only a conflict on the proof key itself is a
+            // replay; every other integrity error propagates unchanged.
+            if (isProofUniquenessConflict(proofError)) {
+                const settledProof = await prisma.subscription_payments.findFirst({
+                    where: { restaurant_id: tenantId, transaction_id: proofKey }
+                });
+                if (settledProof) {
+                    console.warn(`[PROOF] Concurrent duplicate suppressed for restaurant ${tenantId} period ${billing_period}`);
+                    res.setHeader('X-Proof-Replay', 'true');
+                    return res.json({ success: true, proof: settledProof });
+                }
+            }
+            throw proofError;
+        }
+
+        res.json({ success: true, proof });
+    } catch (e: any) {
+        console.error("Payment Proof Error:", e);
         res.status(500).json({ error: e.message });
     }
 });
