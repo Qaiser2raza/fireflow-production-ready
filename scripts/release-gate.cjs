@@ -129,6 +129,7 @@ async function main() {
         'm018 settlement integrity audit       ', 'npx tsx tests/mission-018-settlement-integrity-audit.test.ts',
         'm019 express kitchen gate             ', 'npx tsx tests/mission-019-express-kitchen-gate.test.ts',
         'm020 refund flow                      ', 'npx tsx tests/mission-020-refund-flow.test.ts',
+        'm021 provider-attempt race            ', 'npx tsx tests/mission-021-provider-race.test.ts',
     ];
     for (let i = 0; i < suites.length; i += 2) {
         const code = await run(suites[i].trim(), suites[i + 1]);

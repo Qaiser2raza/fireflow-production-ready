@@ -1,7 +1,6 @@
 import { prisma } from '../../../shared/lib/prisma';
 import { PaymentRegistry } from './PaymentRegistry';
 import { PaymentRequest, PaymentResult, PaymentExecutionContext, RefundRequest, RefundResult } from './PaymentTypes';
-import crypto from 'crypto';
 
 const DEFAULT_TIMEOUT_MS = 10000;
 
@@ -17,7 +16,7 @@ export class PaymentDispatcher {
     return PaymentDispatcher.instance;
   }
 
-  async startAttempt(paymentId: string, context: PaymentExecutionContext): Promise<void> {
+  async startAttempt(paymentId: string, context: PaymentExecutionContext): Promise<PaymentResult> {
     const registry = PaymentRegistry.getInstance();
 
     const payment = await prisma.payments.findFirst({
@@ -38,14 +37,34 @@ export class PaymentDispatcher {
       throw new Error('Payment and order restaurant mismatch');
     }
 
-    if (payment.status !== 'PENDING') {
-      throw new Error(`Payment is not PENDING: ${payment.status}`);
-    }
-
     const provider = registry.get(payment.provider);
     if (!provider) {
       throw new Error(`Payment provider not registered: ${payment.provider}`);
     }
+
+    // Terminal fast-path: an aggregate that already reached a terminal state
+    // is returned verbatim — the provider is never re-driven.
+    const terminal = this.classifyPaymentStatus(payment.status, payment.external_reference);
+    if (terminal) return terminal;
+
+    // L2 single-driver CAS (PA-1). Exactly one caller may transition
+    // PENDING/PROCESSING -> PROCESSING. Losers read back and classify from
+    // persisted state; they must never reach the provider themselves.
+    const claimed = await prisma.payments.updateMany({
+      where: { id: payment.id, status: { in: ['PENDING', 'PROCESSING'] } },
+      data: { status: 'PROCESSING' },
+    });
+    if (claimed.count === 0) {
+      const current = await prisma.payments.findUnique({ where: { id: payment.id } });
+      const classified = this.classifyPaymentStatus(current?.status || 'UNKNOWN', current?.external_reference);
+      if (classified) return classified;
+      return { outcome: 'UNKNOWN', errorCode: 'PAYMENT_IN_FLIGHT', errorMessage: 'Concurrent settle in progress' };
+    }
+
+    // L3 deterministic provider idempotency: stable per aggregate, not per
+    // attempt. All drives of one payment present the same key so the provider
+    // dedupes across retries / resumed drives.
+    const providerIdempotencyKey = `payment:${paymentId}`;
 
     const existingAttempt = await prisma.payment_attempts.findFirst({
       where: {
@@ -56,25 +75,51 @@ export class PaymentDispatcher {
 
     if (existingAttempt) {
       if (existingAttempt.status === 'PENDING' || existingAttempt.status === 'PROCESSING') {
-        return;
+        return this.classifyPaymentStatus(payment.status, payment.external_reference) || { outcome: 'UNKNOWN', errorCode: 'ATTEMPT_IN_FLIGHT', errorMessage: 'Attempt already in progress' };
       }
-      throw new Error(`Payment attempt already completed with status: ${existingAttempt.status}`);
+      return this.classifyPaymentStatus(payment.status, payment.external_reference) || { outcome: 'UNKNOWN', errorCode: 'ATTEMPT_ALREADY_COMPLETED', errorMessage: `Payment attempt already completed with status: ${existingAttempt.status}` };
     }
 
-    const providerIdempotencyKey = `payment:${paymentId}:attempt:${crypto.randomUUID()}`;
     const correlationId = context.correlationId;
 
-    const attempt = await prisma.payment_attempts.create({
-      data: {
-        payment_id: paymentId,
-        restaurant_id: context.restaurantId,
-        provider: payment.provider,
-        request_idempotency_key: context.requestIdempotencyKey,
-        provider_idempotency_key: providerIdempotencyKey,
-        correlation_id: correlationId,
-        status: 'PENDING',
-      },
-    });
+    let attempt;
+    try {
+      attempt = await prisma.payment_attempts.create({
+        data: {
+          payment_id: paymentId,
+          restaurant_id: context.restaurantId,
+          provider: payment.provider,
+          request_idempotency_key: context.requestIdempotencyKey,
+          provider_idempotency_key: providerIdempotencyKey,
+          correlation_id: correlationId,
+          status: 'PENDING',
+        },
+      });
+    } catch (e: any) {
+      if (e.code === 'P2002') {
+        // A create-time P2002 on (provider, provider_idempotency_key)
+        // always means another concurrent driver already created the attempt
+        // for this deterministic key — external_reference is null at create,
+        // so the other unique constraint cannot fire. Under Read Committed
+        // the winning row may not be visible yet, so retry the read before
+        // resolving; never re-throw (an in-flight attempt is not an error).
+        let existing: Awaited<ReturnType<typeof prisma.payment_attempts.findFirst>> | null = null;
+        for (let i = 0; i < 5 && !existing; i++) {
+          existing = await prisma.payment_attempts.findFirst({
+            where: {
+              provider: payment.provider,
+              provider_idempotency_key: providerIdempotencyKey,
+            },
+          });
+          if (!existing) await new Promise((r) => setTimeout(r, 10));
+        }
+        if (existing?.status === 'PENDING' || existing?.status === 'PROCESSING') {
+          return this.classifyPaymentStatus(payment.status, payment.external_reference) || { outcome: 'UNKNOWN', errorCode: 'ATTEMPT_IN_FLIGHT', errorMessage: 'Attempt already in progress' };
+        }
+        return this.classifyPaymentStatus(payment.status, payment.external_reference) || { outcome: 'UNKNOWN', errorCode: existing ? 'ATTEMPT_ALREADY_COMPLETED' : 'ATTEMPT_IN_FLIGHT', errorMessage: existing ? `Payment attempt already completed with status: ${existing.status}` : 'Concurrent attempt in progress' };
+      }
+      throw e;
+    }
 
     await prisma.payment_attempts.update({
       where: { id: attempt.id },
@@ -93,7 +138,7 @@ export class PaymentDispatcher {
         staffId: context.staffId,
         correlationId: context.correlationId,
         requestIdempotencyKey: context.requestIdempotencyKey,
-        providerIdempotencyKey: providerIdempotencyKey,
+        providerIdempotencyKey,
         source: 'PAYMENT_DISPATCHER',
       },
     };
@@ -101,7 +146,7 @@ export class PaymentDispatcher {
     const timeoutPromise = new Promise<PaymentResult>((resolve) => {
       setTimeout(() => {
         resolve({
-          outcome: 'FAILED',
+          outcome: 'UNKNOWN',
           errorCode: 'TIMEOUT',
           errorMessage: `Payment provider ${provider.type} timed out after ${DEFAULT_TIMEOUT_MS}ms`,
         });
@@ -109,8 +154,8 @@ export class PaymentDispatcher {
     });
 
     const result = await Promise.race([provider.send(request), timeoutPromise]);
-
     await this.completeAttempt(attempt.id, payment.id, result);
+    return result;
   }
 
   private async completeAttempt(attemptId: string, paymentId: string, result: PaymentResult): Promise<void> {
@@ -154,6 +199,13 @@ export class PaymentDispatcher {
       where: { id: paymentId },
       data: paymentUpdateData,
     });
+  }
+
+  private classifyPaymentStatus(status: string, externalReference?: string | null): PaymentResult | null {
+    if (status === 'PAID') return { outcome: 'PAID', externalReference: externalReference || undefined };
+    if (status === 'FAILED') return { outcome: 'FAILED', errorCode: 'PAYMENT_ALREADY_FAILED', errorMessage: 'Payment already FAILED' };
+    if (status === 'UNKNOWN') return { outcome: 'UNKNOWN', errorCode: 'PAYMENT_ALREADY_UNKNOWN', errorMessage: 'Payment already UNKNOWN' };
+    return null;
   }
 
   async reconcileUnknown(paymentId: string, context: PaymentExecutionContext, resolvedOutcome: 'PAID' | 'FAILED'): Promise<void> {

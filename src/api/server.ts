@@ -2218,7 +2218,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             const order = await tx.orders.findFirst({
                 where: { id, restaurant_id: req.restaurantId } // SaaS Security
             });
-            if (!order) throw new Error('Order not found or unauthorized');
+            if (!order) throw Object.assign(new Error('Order not found or unauthorized'), { code: 'ORDER_NOT_FOUND' });
 
             const isLogisticsSettle = req.body.source === 'LOGISTICS';
             if (order.type === 'DELIVERY' && !isLogisticsSettle) {
@@ -2373,6 +2373,9 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
 
         res.json({ success: true, order: result });
     } catch (e: any) {
+        if (e?.code === 'ORDER_NOT_FOUND' || e?.message === 'Order not found or unauthorized') {
+            return res.status(404).json({ error: e.message });
+        }
         console.error("Order Settle Error:", e);
         res.status(500).json({ error: e.message });
     }

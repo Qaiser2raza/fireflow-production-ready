@@ -1165,6 +1165,7 @@ enum PaymentStatus {
 
 enum PaymentAggregateStatus {
   PENDING
+  PROCESSING
   PAID
   FAILED
   UNKNOWN
@@ -1331,6 +1332,7 @@ model payments {
   currency               String                @default("PKR") @db.VarChar(3)
   status                  PaymentAggregateStatus @default(PENDING)
   provider               String                @db.VarChar(50)
+  settle_line_key        String?               @unique @db.VarChar(120)
   external_reference     String?               @db.VarChar(255)
   created_at             DateTime              @default(now()) @db.Timestamp(6)
   updated_at             DateTime              @default(now()) @db.Timestamp(6)

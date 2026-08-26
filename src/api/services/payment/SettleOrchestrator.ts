@@ -42,21 +42,15 @@ export async function resolveProviderLines(params: {
     const paidLines: ResolvedLine[] = [];
 
     for (const line of params.lines) {
-        const requestKey = `settle:${params.orderId}:${line.method.toUpperCase()}`.slice(0, 100);
+        const upperMethod = line.method.toUpperCase();
+        const requestKey = `settle:${params.orderId}:${upperMethod}`.slice(0, 100);
+        const settleLineKey = `SETTLE_LINE:${params.restaurantId}:${params.orderId}:${upperMethod}`.slice(0, 120);
 
-        // Fast-path / prior-outcome classification: an attempt for this exact
-        // logical line may already exist (client retry after UNKNOWN, crash
-        // between attempt and commit, duplicate submit). Never re-drive the
-        // provider for a line whose aggregate already reached a terminal state.
-        const priorAttempt = await prisma.payment_attempts.findFirst({
-            where: { restaurant_id: params.restaurantId, request_idempotency_key: requestKey },
-            orderBy: { created_at: 'desc' },
-        });
-        let paymentRow = priorAttempt
-            ? await prisma.payments.findUnique({ where: { id: priorAttempt.payment_id } })
-            : null;
-
-        if (!paymentRow) {
+        // L1 storage uniqueness (PA-1): the database admits exactly one
+        // payments aggregate per logical settle line. P2002 losers converge on
+        // the winner's row and never reach the provider.
+        let paymentRow;
+        try {
             paymentRow = await prisma.payments.create({
                 data: {
                     restaurant_id: params.restaurantId,
@@ -65,21 +59,21 @@ export async function resolveProviderLines(params: {
                     currency: 'PKR',
                     status: 'PENDING',
                     provider: PROVIDER_TYPE,
+                    settle_line_key: settleLineKey,
                 },
             });
-            await dispatcher.startAttempt(paymentRow.id, {
-                paymentId: paymentRow.id,
-                restaurantId: params.restaurantId,
-                orderId: params.orderId,
-                staffId: params.staffId || '',
-                correlationId: crypto.randomUUID(),
-                requestIdempotencyKey: requestKey,
-                providerIdempotencyKey: '', // dispatcher generates its own; caller value unused
-                source: 'PAYMENT_DISPATCHER',
+        } catch (e: any) {
+            if (String(e?.code || '') !== 'P2002') throw e;
+            paymentRow = await prisma.payments.findFirst({
+                where: { settle_line_key: settleLineKey, restaurant_id: params.restaurantId },
             });
-            paymentRow = (await prisma.payments.findUnique({ where: { id: paymentRow.id } }))!;
+            if (!paymentRow) throw new Error('Settle line claim lost after P2002');
         }
 
+        if (!paymentRow) throw new Error('Payment aggregate missing after claim');
+
+        // Terminal fast-path: replay or classify existing aggregate without
+        // re-driving the provider.
         if (paymentRow.status === 'PAID') {
             paidLines.push({
                 method: line.method,
@@ -91,11 +85,43 @@ export async function resolveProviderLines(params: {
         if (paymentRow.status === 'UNKNOWN') {
             return { outcome: 'UNKNOWN', method: line.method, paymentId: paymentRow.id };
         }
+        if (paymentRow.status === 'FAILED') {
+            return {
+                outcome: 'FAILED',
+                method: line.method,
+                paymentId: paymentRow.id,
+                errorMessage: `Provider reported FAILED for ${upperMethod}`,
+            };
+        }
+
+        // Drive (winner fresh PENDING, or resume PROCESSING under CAS).
+        const dispatchResult = await dispatcher.startAttempt(paymentRow.id, {
+            paymentId: paymentRow.id,
+            restaurantId: params.restaurantId,
+            orderId: params.orderId,
+            staffId: params.staffId || '',
+            correlationId: crypto.randomUUID(),
+            requestIdempotencyKey: requestKey,
+            providerIdempotencyKey: '',
+            source: 'PAYMENT_DISPATCHER',
+        });
+
+        if (dispatchResult.outcome === 'PAID') {
+            paidLines.push({
+                method: line.method,
+                amount: Number(line.amount),
+                externalReference: dispatchResult.externalReference,
+            });
+            continue;
+        }
+        if (dispatchResult.outcome === 'UNKNOWN') {
+            return { outcome: 'UNKNOWN', method: line.method, paymentId: paymentRow.id };
+        }
         return {
             outcome: 'FAILED',
             method: line.method,
             paymentId: paymentRow.id,
-            errorMessage: priorAttempt?.last_error || `Provider reported ${paymentRow.status}`,
+            errorMessage: dispatchResult.errorMessage,
         };
     }
 
