@@ -1,5 +1,5 @@
 ---
-status: DRAFT — pending co-CTO review (no implementation before approval)
+status: PROSE APPROVED with co-CTO dispositions (2026-08-26) — swimlane added; implementation gated on final review
 mission: Express cashier / kitchen-gate operating mode
 governing-constraint: >
   Express cashier / kitchen-gate must be a restaurant-level operating mode on
@@ -42,10 +42,17 @@ kitchen_gate_enforced  Boolean @default(false)                        // only me
   creation. `kitchen_gate_enforced` is forced-inert (see §4); kitchen runs in
   parallel and is never a payment dependency.
 
+- Defaults are **persisted configuration** (`NOT NULL DEFAULT`), never inferred
+  from missing/null state — no migration can accidentally turn an existing
+  tenant into a gated tenant (co-CTO disposition #1).
+
 Mode changes are a restaurant-level operating decision: `PATCH /api/restaurant/flow-mode`,
 `requireRole(MANAGER, ADMIN, SUPER_ADMIN)`, tenant-scoped, audited (§11).
-Changing mode does NOT require re-authentication; unlocking PAYMENT against a
-gate does (§4, §3).
+**Authorization chain (disposition #3):** authenticated session → own tenant
+(server-derived; no client-supplied tenant identifier participates) →
+MANAGER/ADMIN/SUPER_ADMIN → configuration mutation → audit event. Changing mode
+does NOT require re-authentication (configuration act, not money movement);
+unlocking PAYMENT against a gate does (§4, §3).
 
 ## 2. Payment methods permitted in express mode
 
@@ -62,7 +69,7 @@ explicitly out of scope).
 |---|---|
 | Settling in either mode | Unchanged: `authMiddleware` + `sessionGateMiddleware` (any sessioned staff), exactly as Phase B |
 | Changing `order_flow_mode` / `kitchen_gate_enforced` | `MANAGER+` (requireRole) + `ORDER_FLOW_MODE_CHANGED` audit + outbox event |
-| Manager payment-override (STANDARD + enforced gate stuck) | `MANAGER+` **plus fresh credential re-verification** — the override request must carry the manager's own PIN, verified server-side via bcrypt against that manager's `hashed_pin`; a valid session alone is insufficient. Override is per-order, requires a non-empty `reason`, and is audited (§11). It unlocks ONE settle attempt for that order; it is not a session-wide flag and not persisted as entitlement. |
+| Manager payment-override (STANDARD + enforced gate stuck) | **Tightened per disposition #2:** `MANAGER+` **plus fresh credential re-verification** — the override request carries the manager's PIN, verified server-side via bcrypt against the manager bound to the authenticated session; **manager identity is NEVER accepted from the client**. A valid session alone is insufficient. Override requires a non-empty `reason`, is scoped to **one order / one settlement attempt**, is **non-reusable after that attempt**, and is audited (§11). The override **must not mutate the order into a permanently "released" state** — it authorizes one settlement attempt, nothing more. |
 
 ## 4. What the kitchen gate means operationally, per mode
 
@@ -70,11 +77,18 @@ explicitly out of scope).
   move the order to `BILL_REQUESTED`. Server does not check kitchen state.
   Identical to current production behavior for every existing tenant.
 - **STANDARD (enforcement ON — opt-in):** the settle route checks kitchen
-  readiness before opening the Phase B routing: all fired `order_items` have
-  `item_status IN ('DONE','SERVED')` (or the order status is `SERVED`).
-  Not ready → `409 KITCHEN_GATE_NOT_RELEASED`. A manager-override (§3)
-  supplied with the settle request (`paymentOverride: { pin, reason }`)
-  satisfies the gate for that attempt and is audited.
+  readiness before opening the Phase B routing: **every FIRED `order_items`
+  row has `item_status IN ('DONE','SERVED')`** (disposition #4 — item-level,
+  never inferred from order status alone). **Zero fired items = READY** — an
+  explicit tested business rule (nothing awaits kitchen release), never an
+  accidental `every([])` implementation detail. Not ready →
+  `409 KITCHEN_GATE_NOT_RELEASED`. A manager-override (§3) supplied with the
+  settle request (`paymentOverride: { pin, reason }`) satisfies the gate for
+  that attempt and is audited.
+- **The gate is READ-ONLY with respect to payment state:** it decides
+  eligibility only. It never creates payment attempts, never settles, never
+  journals, never emits payment events, and never mutates the order (the
+  override authorizes an attempt; it does not "release" the order).
 - **EXPRESS:** payment available immediately at order creation. The gate check
   is definitionally skipped — not bypassed mid-flight, because the only gate
   that exists is this mode-defined precondition. Kitchen firing/cooking/
@@ -102,6 +116,14 @@ block firing; STANDARD's guards are untouched. Void/cancel fire-batch guards
   re-settle via the orchestrator fast-path.
 - EXPRESS never force-completes, never falls back to cash automatically, never
   suppresses the reconcile loop, never marks UNKNOWN as paid.
+
+**Provider-state authority (co-CTO requirement): the kitchen gate has NO
+authority over provider state.** FAILED remains FAILED; UNKNOWN remains
+UNKNOWN; a manager payment-override does NOT turn UNKNOWN into success and
+cannot substitute for reconciliation; kitchen readiness is never evidence
+that a payment succeeded. The gate answers one question only — *may payment
+begin* — and the unified path answers every question about *how payment
+completes*.
 
 ## 7. Offline behavior
 
@@ -141,7 +163,7 @@ neither worsens nor addresses it.
 | Event | Where | Payload (sanitized facts only) |
 |---|---|---|
 | `ORDER_FLOW_MODE_CHANGED` | audit_logs + outbox (aggregate `restaurants`) | old mode, new mode, enforcement flag, changed-by, reason |
-| `ORDER_PAYMENT_OVERRIDE` | audit_logs + outbox (aggregate `orders`) | order id, manager id, reason, gate state at override time — never credentials |
+| `ORDER_PAYMENT_OVERRIDE` | audit_logs + outbox (aggregate `orders`) | **required fields (disposition #5):** orderId, tenantId, actor (staff id), actor role, reason, prior gate state, resulting authorization, timestamp + correlation identifier. **NEVER:** PIN, PIN hash, or any authentication material |
 | `PAYMENT_COMPLETED` | unchanged | + additive field `orderFlowMode` (settle-time value) |
 | `ORDER_COMPLETED` | unchanged | unchanged |
 | void/cancel events | unchanged by this design (F-03 owns them) |
@@ -180,7 +202,17 @@ settable per restaurant.
 | Vault provisioning form | mode selector (default STANDARD) |
 | POS UI | EXPRESS: payment offered at creation; STANDARD: unchanged |
 
-## 15. Open questions for co-CTO disposition
+## 15. Open questions — DISPOSITIONED by co-CTO (2026-08-26)
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Enforcement default | **OFF** — persisted explicitly (`NOT NULL DEFAULT false`), never inferred |
+| 2 | Override credential | **Manager PIN re-entry**, tightened: identity server-derived, one order/one attempt, non-reusable, no order mutation |
+| 3 | Mode-change auth | **MANAGER+ without re-auth** — session → own tenant → role → mutation → audit |
+| 4 | Readiness | **All FIRED items DONE/SERVED; zero fired = ready (tested rule)**; gate read-only |
+| 5 | Event names | **Accepted as proposed** — payloads carry business facts, never credentials |
+
+Original questions retained below for the record.
 
 1. **Enforcement default:** confirm STANDARD ships with `kitchen_gate_enforced=false` (today's behavior) rather than on-by-default. On-by-default would break counter-service tenants that never use KDS.
 2. **Override credential form:** manager PIN re-entry verified server-side (proposed). Alternative: full re-login. PIN re-entry is the POS-native choice.
@@ -194,5 +226,115 @@ settable per restaurant.
 - No offline settlement / queued payments (future mission)
 - No changes to PaymentDispatcher, SettlementGuards, journals, or outbox
   settlement events (constraint honored by construction)
+
+## 17. Invariants (co-CTO requirement, binding on implementation)
+
+**INVARIANT E1 — EXPRESS does not mean "skip payment controls."**
+"Payment available at creation" means ONLY that the normal unified payment
+path becomes available earlier. It never means any of:
+
+```text
+EXPRESS → bypass PaymentDispatcher            ✗
+EXPRESS → bypass payment-attempt state        ✗
+EXPRESS → bypass UNKNOWN handling             ✗
+EXPRESS → bypass settlement idempotency       ✗
+EXPRESS → bypass journals/outbox/audit        ✗
+```
+
+The architecture, in the co-CTO's own form:
+
+```text
+                 ┌─ STANDARD + gate OFF ─────┐
+Order ───────────┤                           ├──> unified payment path
+                 ├─ STANDARD + gate ON ──────┤
+                 │       │                   │
+                 │   gate check              │
+                 │       ↓                   │
+                 │   ready/override ─────────┤
+                 │                           │
+                 └─ EXPRESS ─────────────────┘
+                                             ↓
+                                      PaymentDispatcher
+                                             ↓
+                                   attempt state machine
+                                             ↓
+                                      settle transaction
+                                             ↓
+                                journals + outbox + audit
+```
+
+**INVARIANT E2 — the kitchen gate has no authority over provider state.**
+FAILED stays FAILED; UNKNOWN stays UNKNOWN; the override does not convert
+UNKNOWN into success; reconciliation remains the only UNKNOWN resolution path;
+kitchen readiness is never evidence of payment success. (See §6.)
+
+**INVARIANT E3 — the gate is read-only and non-mutating.** It decides
+eligibility; it does not create attempts, settle, journal, emit payment
+events, or persist a "released" state on the order (§4).
+
+**INVARIANT E4 — override scope.** One order, one settlement attempt,
+non-reusable, manager identity server-derived, credentials never persisted
+or logged (§3, §11).
+
+## 18. Swimlane diagram — POS operational style
+
+Illustrates the APPROVED design (post-disposition); it does not substitute
+for §1–§17. Lanes: Cashier (POS UI) / Kitchen (KDS) / Settle Route (gate +
+Phase B) / PaymentDispatcher / Journals-Outbox-Audit.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Cashier (POS UI)
+    participant K as Kitchen (KDS)
+    participant S as Settle Route (gate + Phase B)
+    participant D as PaymentDispatcher
+    participant A as Journals / Outbox / Audit
+
+    rect rgb(20, 24, 38)
+    Note over C,A: STANDARD + gate OFF (default = today)
+    C->>C: staff moves order to BILL_REQUESTED (convention)
+    C->>S: POST /orders/:id/settle
+    S->>S: gate check skipped (enforcement OFF, persisted config)
+    end
+
+    rect rgb(30, 24, 20)
+    Note over C,A: STANDARD + gate ENFORCED (opt-in)
+    C->>S: POST /orders/:id/settle
+    S->>K: READ fired items (read-only, zero fired = ready)
+    K-->>S: not all DONE/SERVED
+    S-->>C: 409 KITCHEN_GATE_NOT_RELEASED
+    S->>A: (no payment state touched)
+    C->>S: retry settle + paymentOverride {manager PIN, reason}
+    S->>S: bcrypt verify vs SESSION manager (identity never client-supplied)
+    S->>A: ORDER_PAYMENT_OVERRIDE (facts only: order, tenant, actor, role, reason, prior gate state, authorization, correlation — never credentials)
+    Note over S: override authorizes THIS attempt; order NOT marked released; override non-reusable
+    end
+
+    rect rgb(16, 28, 24)
+    Note over C,A: EXPRESS — payment available at creation (E1: same controls, earlier)
+    C->>S: POST /orders/:id/settle (immediately after creation)
+    S->>S: mode = EXPRESS → gate precondition definitionally absent
+    end
+
+    rect rgb(24, 24, 40)
+    Note over C,A: UNIFIED PHASE B PATH (identical in every mode)
+    S->>S: split lines: CASH vs provider-mediated
+    alt CASH line
+        S->>A: inside commit tx: transaction row + per-method journal + events
+    else provider line (CARD/RAAST/digital)
+        S->>D: startAttempt (deterministic idempotency key)
+        D->>D: attempt state machine (PENDING→PROCESSING→…)
+        D-->>S: PAID
+        S->>A: commit tx: transaction row (external ref) + journals + PAYMENT_COMPLETED + ORDER_COMPLETED
+        D-->>S: FAILED
+        S-->>C: 402 PAYMENT_FAILED — attempt DEAD_LETTER, zero journals/events, order open
+        D-->>S: UNKNOWN
+        S-->>C: 409 PAYMENT_UNKNOWN + paymentId (kitchen gate has NO authority here)
+        Note over C,S: reconciliation endpoint resolves → re-settle via fast-path (provider NOT re-driven)
+    end
+    Note over S,A: settlement_key idempotency throughout — replay returns original verbatim (X-Settlement-Replay)
+    end
+```
 - No swimlane diagram in this doc — produced AFTER design approval, per review
   instruction
