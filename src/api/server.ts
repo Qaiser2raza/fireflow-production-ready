@@ -2111,6 +2111,106 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             return res.json({ success: true, order: settledOrder });
         }
 
+        // [M019] Kitchen gate — STANDARD mode with enforcement ON only.
+        // READ-ONLY eligibility check (design invariants E2/E3): decides WHETHER
+        // settlement may begin; never touches provider state, attempts,
+        // journals, or events. Zero fired items = READY (explicit tested rule).
+        // EXPRESS skips this precondition by mode definition (invariant E1:
+        // earlier entry into the SAME unified path, never fewer controls).
+        const flowConfig = await prisma.restaurants.findUnique({
+            where: { id: req.restaurantId as string },
+            select: { order_flow_mode: true, kitchen_gate_enforced: true }
+        });
+        const kitchenGateActive = flowConfig?.order_flow_mode === 'STANDARD' && flowConfig.kitchen_gate_enforced === true;
+        let overrideAudit: { reason: string } | null = null;
+
+        if (kitchenGateActive) {
+            const firedCount = await prisma.fire_batches.count({ where: { order_id: id } });
+            if (firedCount > 0) {
+                const pendingItems = await prisma.order_items.count({
+                    where: { order_id: id, item_status: { notIn: ['DONE', 'SERVED'] } }
+                });
+                if (pendingItems > 0) {
+                    // Gate blocks. The ONLY release path is the manager
+                    // payment-override: server-side bcrypt re-verification of
+                    // the SESSION manager's own PIN (identity never accepted
+                    // from the client), non-empty reason, one attempt
+                    // (scoped to this request — nothing persisted), audited.
+                    const role = (req.role || '').toUpperCase();
+                    const override = req.body?.paymentOverride as { pin?: string; reason?: string } | undefined;
+                    const overrideEligible = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(role);
+                    let overrideValid = false;
+
+                    if (override && overrideEligible) {
+                        const reason = typeof override.reason === 'string' ? override.reason.trim() : '';
+                        const manager = req.staffId
+                            ? await prisma.staff.findFirst({ where: { id: req.staffId, restaurant_id: req.restaurantId } })
+                            : null;
+                        overrideValid = !!reason && !!manager?.hashed_pin && await bcrypt.compare(String(override.pin || ''), manager.hashed_pin);
+                    }
+
+                    if (!overrideValid) {
+                        await prisma.audit_logs.create({
+                            data: {
+                                restaurant_id: req.restaurantId!,
+                                action_type: 'KITCHEN_GATE_BLOCKED',
+                                entity_type: 'ORDER',
+                                entity_id: id,
+                                staff_id: req.staffId,
+                                details: {
+                                    role: req.role,
+                                    pendingItems,
+                                    override_attempted: !!override,
+                                    ...(override && !overrideEligible ? { override_denied_reason: 'INSUFFICIENT_ROLE' } : {}),
+                                    ...(override && overrideEligible ? { override_denied_reason: 'PIN_VERIFICATION_FAILED' } : {})
+                                }
+                            }
+                        });
+                        return res.status(409).json({ error: 'KITCHEN_GATE_NOT_RELEASED', code: 'KITCHEN_GATE_NOT_RELEASED', pendingItems });
+                    }
+
+                    overrideAudit = { reason: String(override!.reason).trim().slice(0, 255) };
+                }
+            }
+        }
+        if (overrideAudit) {
+            const overrideDetails = {
+                order_number: (settledOrder || (await prisma.orders.findFirst({ where: { id, restaurant_id: req.restaurantId } })))?.order_number || id,
+                role: req.role,
+                reason: overrideAudit.reason,
+                prior_gate_state: 'KITCHEN_GATE_NOT_RELEASED',
+                resulting_authorization: 'SINGLE_SETTLE_ATTEMPT'
+            };
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: req.restaurantId!,
+                    action_type: 'ORDER_PAYMENT_OVERRIDE',
+                    entity_type: 'ORDER',
+                    entity_id: id,
+                    staff_id: req.staffId,
+                    details: overrideDetails
+                }
+            });
+            await prisma.outbox.create({
+                data: {
+                    restaurant_id: req.restaurantId!,
+                    event_type: 'ORDER_PAYMENT_OVERRIDE',
+                    aggregate_type: 'orders',
+                    aggregate_id: id,
+                    payload: {
+                        orderId: id,
+                        tenantId: req.restaurantId,
+                        actor: req.staffId,
+                        actorRole: req.role,
+                        reason: overrideAudit.reason,
+                        priorGateState: 'KITCHEN_GATE_NOT_RELEASED',
+                        resultingAuthorization: 'SINGLE_SETTLE_ATTEMPT',
+                        occurredAt: new Date().toISOString()
+                    }
+                }
+            });
+        }
+
         let result;
         try {
             result = await prisma.$transaction(async (tx) => {
@@ -2222,6 +2322,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                         settledBy: staffId || null,
                         source: isLogisticsSettle ? 'LOGISTICS' : 'POS',
                         payments: effectiveLines.map(l => ({ method: l.method, amount: l.amount, ...(l.externalReference ? { externalReference: l.externalReference } : {}) })),
+                        orderFlowMode: flowConfig?.order_flow_mode || 'STANDARD',
                         settledAt: settledAtIso,
                     },
                 },
@@ -2272,6 +2373,79 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
         res.json({ success: true, order: result });
     } catch (e: any) {
         console.error("Order Settle Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// [M019] Restaurant operating-mode configuration (design §1, §13).
+// Configuration act, not money movement: MANAGER+ with session-derived
+// tenant/actor (no client-supplied tenant identifier), audited, outboxed.
+app.patch('/api/restaurant/flow-mode', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const { orderFlowMode, kitchenGateEnforced, reason } = req.body || {};
+        if (orderFlowMode !== 'STANDARD' && orderFlowMode !== 'EXPRESS') {
+            return res.status(400).json({ error: 'orderFlowMode must be STANDARD or EXPRESS' });
+        }
+        const restaurant = await prisma.restaurants.findUnique({
+            where: { id: req.restaurantId as string },
+            select: { id: true, order_flow_mode: true, kitchen_gate_enforced: true }
+        });
+        if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
+
+        // Enforcement is a STANDARD-mode concept; EXPRESS forces it inert so
+        // the persisted pair is always coherent (design §1).
+        const nextEnforced = orderFlowMode === 'STANDARD' ? Boolean(kitchenGateEnforced) : false;
+
+        const updated = await prisma.restaurants.update({
+            where: { id: restaurant.id },
+            data: { order_flow_mode: orderFlowMode, kitchen_gate_enforced: nextEnforced },
+            select: { id: true, order_flow_mode: true, kitchen_gate_enforced: true }
+        });
+
+        const details = {
+            previous_mode: restaurant.order_flow_mode,
+            new_mode: orderFlowMode,
+            previous_enforced: restaurant.kitchen_gate_enforced,
+            new_enforced: nextEnforced,
+            reason: typeof reason === 'string' ? reason.slice(0, 255) : null,
+            role: req.role
+        };
+        const auditRow = await prisma.audit_logs.create({
+            data: {
+                restaurant_id: restaurant.id,
+                action_type: 'ORDER_FLOW_MODE_CHANGED',
+                entity_type: 'RESTAURANT',
+                entity_id: restaurant.id,
+                staff_id: req.staffId,
+                details
+            }
+        });
+        // Instance-scoped aggregate: mode changes are REPEATABLE config facts,
+        // so the outbox idempotency triple keys on the audit-row instance (the
+        // restaurant id rides in the payload for consumer routing) — the same
+        // pattern as A1's proof events. A restaurant-scoped triple could only
+        // ever hold the FIRST change.
+        await prisma.outbox.create({
+            data: {
+                restaurant_id: restaurant.id,
+                event_type: 'ORDER_FLOW_MODE_CHANGED',
+                aggregate_type: 'restaurant_flow_mode',
+                aggregate_id: auditRow.id,
+                payload: {
+                    restaurantId: restaurant.id,
+                    previousMode: restaurant.order_flow_mode,
+                    newMode: orderFlowMode,
+                    kitchenGateEnforced: nextEnforced,
+                    changedBy: req.staffId,
+                    changedByRole: req.role,
+                    occurredAt: new Date().toISOString()
+                }
+            }
+        });
+
+        res.json({ success: true, restaurant: updated });
+    } catch (e: any) {
+        console.error("Flow Mode Update Error:", e);
         res.status(500).json({ error: e.message });
     }
 });

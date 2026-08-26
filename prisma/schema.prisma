@@ -718,6 +718,8 @@ model restaurants {
   logo_url                String?
   cloud_synced_at         DateTime?               @db.Timestamp(6)
   onboarding_status       String                  @default("ACTIVE")
+  order_flow_mode         String                  @default("STANDARD") @db.VarChar(20)
+  kitchen_gate_enforced   Boolean                 @default(false)
   subscription_expires_at DateTime?               @db.Timestamp(6)
   trial_ends_at           DateTime?               @db.Timestamp(6)
   approval_logs           approval_logs[]
