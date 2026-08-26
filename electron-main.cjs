@@ -268,12 +268,13 @@ let serverProcess;
 
 function createWindow() {
     console.log('[MAIN] Creating Window...');
+    const isHeadless = process.env.HEADLESS === '1';
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
         title: 'Fireflow Restaurant System',
         backgroundColor: '#020617',
-        show: false, // Don't show until ready-to-show
+        show: false, // Don't show until ready-to-show (or never in headless mode)
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -281,15 +282,16 @@ function createWindow() {
             sandbox: false,
             webSecurity: true,
             allowRunningInsecureContent: false,
-            devTools: true
+            devTools: !isHeadless
         },
     });
 
     mainWindow.once('ready-to-show', () => {
-        console.log('[MAIN] Window Ready to Show. Displaying...');
-        mainWindow.show();
-        // Automatically open devtools in development to see console errors
-        if (process.env.NODE_ENV === 'development') {
+        console.log('[MAIN] Window Ready to Show.' + (isHeadless ? ' Headless mode — not displaying.' : ''));
+        if (!isHeadless) {
+            mainWindow.show();
+        }
+        if (!isHeadless && process.env.NODE_ENV === 'development') {
             mainWindow.webContents.openDevTools();
         }
     });
