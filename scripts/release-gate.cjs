@@ -125,6 +125,7 @@ async function main() {
         'phase2 support bridge                 ', 'npx tsx tests/phase2-service-support.test.ts',
         'm017 phase A settle hardening         ', 'npx tsx tests/mission-017-phase-a.test.ts',
         'm017 A1 payment proof                 ', 'npx tsx tests/mission-017-a1-payment-proof.test.ts',
+        'm017 phase B payment unification      ', 'npx tsx tests/mission-017-phase-b.test.ts',
     ];
     for (let i = 0; i < suites.length; i += 2) {
         const code = await run(suites[i].trim(), suites[i + 1]);

@@ -39,6 +39,7 @@ import { sessionGateMiddleware } from './middleware/sessionGate';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
 import { journalEntryService } from './services/JournalEntryService';
 import { isSettlementUniquenessConflict, isProofUniquenessConflict } from './services/payment/SettlementGuards';
+import { resolveProviderLines, isProviderMediated } from './services/payment/SettleOrchestrator';
 import { LicenseService } from './services/licensing/LicenseService';
 import { qrOrderBridge } from './services/qr/QROrderBridge';
 import { syncMenuToCloud } from './services/qr/MenuSync';
@@ -49,6 +50,7 @@ import { IntegrationRegistry } from './services/integration/IntegrationRegistry'
 import { MockConnector } from './services/integration/connectors/MockConnector';
 import { PaymentRegistry } from './services/payment/PaymentRegistry';
 import { MockPaymentProvider } from './services/payment/providers/MockPaymentProvider';
+import { PaymentDispatcher } from './services/payment/PaymentDispatcher';
 import { FiscalRegistry } from './services/fiscal/FiscalRegistry';
 import { MockFiscalProvider } from './services/fiscal/providers/MockFiscalProvider';
 import { FiscalHttpConnector } from './services/fiscal/connectors/FiscalHttpConnector';
@@ -135,6 +137,7 @@ integrationRegistry.register(mockConnector);
 const paymentRegistry = PaymentRegistry.getInstance();
 const mockPaymentProvider = new MockPaymentProvider();
 paymentRegistry.register(mockPaymentProvider);
+const paymentDispatcher = PaymentDispatcher.getInstance();
 
 // Register mock fiscal provider for Mission 012
 const fiscalRegistry = FiscalRegistry.getInstance();
@@ -1990,7 +1993,39 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             ? payments.map((p: any) => ({ method: p.method || p.payment_method || 'CASH', amount: Number(p.amount) }))
             : [{ method: paymentMethod || payment_method || 'CASH', amount: Number(total || req.body.amount) }];
 
-        const totalReceived = paymentLines.reduce((s, l) => s + l.amount, 0);
+        const totalReceivedRaw = paymentLines.reduce((s, l) => s + l.amount, 0);
+        if (!totalReceivedRaw || totalReceivedRaw <= 0) {
+            return res.status(400).json({ error: 'Valid payment amount required' });
+        }
+
+        // [M017-B] Method-routed completion. CASH settles synchronously inside
+        // the commit transaction below; every other method is provider-mediated
+        // and resolves through PaymentDispatcher BEFORE the commit transaction
+        // opens — a provider call never holds a database lock. UNKNOWN leaves
+        // the order untouched for reconciliation (invariant 6); FAILED rejects
+        // the whole settle with nothing persisted beyond the attempt record.
+        const cashLines = paymentLines.filter(l => !isProviderMediated(l.method));
+        const providerLines = paymentLines.filter(l => isProviderMediated(l.method));
+
+        let resolvedProviderLines: Array<{ method: string; amount: number; externalReference?: string }> = [];
+        if (providerLines.length > 0) {
+            const resolution = await resolveProviderLines({
+                restaurantId: req.restaurantId as string,
+                orderId: id,
+                staffId,
+                lines: providerLines,
+            });
+            if (resolution.outcome === 'FAILED') {
+                return res.status(402).json({ error: 'PAYMENT_FAILED', method: resolution.method, paymentId: resolution.paymentId, detail: resolution.errorMessage });
+            }
+            if (resolution.outcome === 'UNKNOWN') {
+                return res.status(409).json({ error: 'PAYMENT_UNKNOWN', method: resolution.method, paymentId: resolution.paymentId, hint: 'Reconcile this payment, then re-submit settle.' });
+            }
+            resolvedProviderLines = resolution.paidLines;
+        }
+
+        const effectiveLines: Array<{ method: string; amount: number; externalReference?: string }> = [...cashLines, ...resolvedProviderLines];
+        const totalReceived = effectiveLines.reduce((s, l) => s + l.amount, 0);
         if (!totalReceived || totalReceived <= 0) {
             return res.status(400).json({ error: 'Valid payment amount required' });
         }
@@ -2045,9 +2080,11 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                 }
             });
 
-            // 2. Create one Transaction record per payment line (supports split payments)
+            // 2. Create one Transaction record per settled payment line (supports
+            // split payments). Provider-mediated lines carry the provider's
+            // external reference for traceability; CASH keeps the POS pattern.
             const txRef = `POS-${Date.now()}`;
-            for (const line of paymentLines) {
+            for (const line of effectiveLines) {
                 await tx.transactions.create({
                     data: {
                         restaurant_id: order.restaurant_id,
@@ -2055,7 +2092,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                         amount: line.amount,
                         payment_method: line.method,
                         status: 'PAID',
-                        transaction_ref: `${txRef}-${line.method}`
+                        transaction_ref: line.externalReference || `${txRef}-${line.method}`
                     }
                 });
             }
@@ -2095,7 +2132,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                 // Normal sale â€” Dine-In, Takeaway
                 await accounting.recordOrderSale(order.id, order.restaurant_id, tx, {
                     amount: totalReceived,
-                    paymentMethod: paymentLines[0].method
+                    paymentMethod: effectiveLines[0].method
                 });
             }
 
@@ -2121,7 +2158,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                         sessionId: sessionId || null,
                         settledBy: staffId || null,
                         source: isLogisticsSettle ? 'LOGISTICS' : 'POS',
-                        payments: paymentLines.map(l => ({ method: l.method, amount: l.amount })),
+                        payments: effectiveLines.map(l => ({ method: l.method, amount: l.amount, ...(l.externalReference ? { externalReference: l.externalReference } : {}) })),
                         settledAt: settledAtIso,
                     },
                 },
@@ -2174,6 +2211,60 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
         console.error("Order Settle Error:", e);
         res.status(500).json({ error: e.message });
     }
+});
+
+// [M017-B] Reconciliation — resolves an UNKNOWN provider outcome (invariant 6:
+// unknown is never failure; it stays reconcilable). Tenant-scoped via the
+// payment aggregate. After a PAID resolution the client re-submits settle and
+// the orchestrator fast-path commits without touching the provider again.
+app.post('/api/payments/:id/reconcile', authMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { outcome } = req.body || {};
+        if (outcome !== 'PAID' && outcome !== 'FAILED') {
+            return res.status(400).json({ error: 'outcome must be PAID or FAILED' });
+        }
+        const payment = await prisma.payments.findFirst({
+            where: { id, restaurant_id: req.restaurantId }
+        });
+        if (!payment) {
+            return res.status(404).json({ error: 'Payment not found' });
+        }
+        if (payment.status !== 'UNKNOWN') {
+            return res.status(409).json({ error: `Payment is not UNKNOWN (status: ${payment.status})` });
+        }
+        await paymentDispatcher.reconcileUnknown(payment.id, {
+            paymentId: payment.id,
+            restaurantId: req.restaurantId as string,
+            orderId: payment.order_id,
+            staffId: req.staffId || '',
+            correlationId: `reconcile:${payment.id}`,
+            requestIdempotencyKey: `reconcile:${payment.id}`,
+            providerIdempotencyKey: '', // unused by reconcileUnknown
+            source: 'PAYMENT_DISPATCHER',
+        }, outcome);
+        const updated = await prisma.payments.findUnique({ where: { id: payment.id } });
+        res.json({ success: true, payment: updated });
+    } catch (e: any) {
+        console.error("Payment Reconcile Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// [M017-B] Test-control surface for the mock provider's outcome mode. Exists
+// ONLY under NODE_ENV=test; answers 404 in every other environment.
+app.post('/api/testing/payment-mode', (req, res) => {
+    if (process.env.NODE_ENV !== 'test') {
+        return res.status(404).json({ error: 'Not found' });
+    }
+    const mode = req.body?.mode;
+    if (mode !== 'SUCCESS' && mode !== 'FAILED' && mode !== 'UNKNOWN') {
+        return res.status(400).json({ error: 'mode must be SUCCESS | FAILED | UNKNOWN' });
+    }
+    const mock = paymentRegistry.get('MOCK_PAYMENT') as MockPaymentProvider;
+    mock.setMode(mode);
+    mock.clearHistory();
+    res.json({ ok: true, mode });
 });
 
 // A1: Payment-proof submission (EVIDENCE, NOT AUTHORITY) ---------------------
