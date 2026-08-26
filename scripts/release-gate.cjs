@@ -126,6 +126,7 @@ async function main() {
         'm017 phase A settle hardening         ', 'npx tsx tests/mission-017-phase-a.test.ts',
         'm017 A1 payment proof                 ', 'npx tsx tests/mission-017-a1-payment-proof.test.ts',
         'm017 phase B payment unification      ', 'npx tsx tests/mission-017-phase-b.test.ts',
+        'm018 settlement integrity audit       ', 'npx tsx tests/mission-018-settlement-integrity-audit.test.ts',
     ];
     for (let i = 0; i < suites.length; i += 2) {
         const code = await run(suites[i].trim(), suites[i + 1]);
