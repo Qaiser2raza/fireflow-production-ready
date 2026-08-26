@@ -520,6 +520,7 @@ model orders {
   takeaway_orders                        takeaway_orders?
   transactions                           transactions[]
   payments                               payments[]
+  refunds                                refunds[]
   fiscal_documents                       fiscal_documents[]
 
   @@index([assigned_driver_id])
@@ -670,6 +671,30 @@ model reservation_orders {
   tables           tables?  @relation(fields: [table_id], references: [id])
 }
 
+model refunds {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id      String    @db.Uuid
+  order_id           String    @db.Uuid
+  refund_key         String    @unique @db.VarChar(100) // REFUND:{tenant}:{order}
+  amount             Decimal   @db.Decimal(10, 2)
+  currency           String    @default("PKR") @db.VarChar(3)
+  status             String    @default("PENDING") @db.VarChar(20) // PENDING|PROCESSING|COMPLETED|FAILED|UNKNOWN
+  provider           String    @db.VarChar(50) // CASH_DRAWER | provider type
+  external_reference String?   @db.VarChar(255)
+  reason_code        String    @db.VarChar(40)
+  reason_detail      String?   @db.VarChar(255)
+  session_id         String?   @db.Uuid
+  requested_by       String    @db.Uuid
+  created_at         DateTime  @default(now()) @db.Timestamp(6)
+  completed_at       DateTime?
+
+  restaurants        restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  orders             orders      @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@index([restaurant_id])
+  @@index([order_id])
+}
+
 model reservations {
   id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id    String?      @db.Uuid
@@ -720,6 +745,7 @@ model restaurants {
   onboarding_status       String                  @default("ACTIVE")
   order_flow_mode         String                  @default("STANDARD") @db.VarChar(20)
   kitchen_gate_enforced   Boolean                 @default(false)
+  refund_window_days      Int                     @default(7)
   subscription_expires_at DateTime?               @db.Timestamp(6)
   trial_ends_at           DateTime?               @db.Timestamp(6)
   approval_logs           approval_logs[]
@@ -764,6 +790,7 @@ model restaurants {
   integration_deliveries  integration_deliveries[]
   payments                payments[]
   payment_attempts        payment_attempts[]
+  refunds                 refunds[]
   fiscal_documents        fiscal_documents[]
   fiscal_attempts         fiscal_attempts[]
 

@@ -135,11 +135,16 @@ async function main() {
         finding('fire_batches NOT cleared on void (KDS surface)', fbCount === 1, `fire_batches rows still present = ${fbCount}; kitchen display keeps the voided order`);
 
         // ================ C. Refund boundary ==================================
-        console.log('\n[C] Refund boundary — fields guarded, endpoint absent');
+        console.log('\n[C] Refund boundary — fields guarded, endpoint ceremony-gated');
         const rRefundField = await patchOrder(oPaid.id, { refund_transaction_id: 'tx-123' }, manager.token);
         assert('refund fields rejected via generic PATCH (403)', rRefundField.status === 403, '403', `${rRefundField.status}`);
-        const rRefundEndpoint = await fetch(`${BASE}/orders/${oPaid.id}/refund`, { method: 'POST', headers: { Authorization: `Bearer ${manager.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: 10 }) });
-        finding('no refund endpoint exists (404)', rRefundEndpoint.status === 404, `POST /orders/:id/refund -> ${rRefundEndpoint.status}; refunds of PAID orders are impossible by design today`);
+        // F-02 CLOSED (M020): the refund endpoint now EXISTS behind
+        // MANAGER+ + money-movement PIN ceremony. The original audit finding
+        // ("no refund endpoint exists, 404") documented the pre-F-02 gap and
+        // is superseded; the boundary probe now asserts the new posture:
+        // an unauthenticated refund attempt is refused at the auth layer.
+        const rRefundEndpoint = await fetch(`${BASE}/orders/${oPaid.id}/refund`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: 10 }) });
+        finding('refund endpoint exists and refuses unauthenticated attempts (F-02 closed)', rRefundEndpoint.status === 401, `POST /orders/:id/refund unauthenticated -> ${rRefundEndpoint.status}; ceremony-gated per M018 F-02 design rev2`);
 
         // ================ D. F-01 REMEDIATED: delete authorization ===========
         // Original finding (2026-08-26): WAITER could hard-delete a SETTLED

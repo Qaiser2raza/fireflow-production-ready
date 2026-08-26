@@ -1,6 +1,6 @@
 import { prisma } from '../../../shared/lib/prisma';
 import { PaymentRegistry } from './PaymentRegistry';
-import { PaymentRequest, PaymentResult, PaymentExecutionContext } from './PaymentTypes';
+import { PaymentRequest, PaymentResult, PaymentExecutionContext, RefundRequest, RefundResult } from './PaymentTypes';
 import crypto from 'crypto';
 
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -204,5 +204,125 @@ export class PaymentDispatcher {
         data: attemptUpdateData,
       });
     }
+  }
+
+  // ─── Refund path (M018 F-02) ────────────────────────────────────────────
+  // Drives ONE provider refund operation for one tender line of a refunds
+  // aggregate. Discipline mirrors startAttempt, with two refund-specific
+  // hardenings (design §3/§11):
+  //   1. The provider idempotency key is DETERMINISTIC
+  //      (`refund:{refundId}:{transactionId}`) so a retry after a crash
+  //      between provider acceptance and local commit dedupes at the
+  //      provider — a second outward movement is impossible.
+  //   2. A storage-layer claim (PENDING|PROCESSING → PROCESSING) admits a
+  //      single driver; losers classify from persisted state and never
+  //      reach the provider.
+  // The outcome is persisted to the refunds aggregate IMMEDIATELY after the
+  // provider answers (durable provider truth), before any commit transaction
+  // opens — a provider call never holds a database lock.
+  async startRefundAttempt(params: {
+    refundId: string;
+    restaurantId: string;
+    orderId: string;
+    transactionId: string;
+    amount: number;
+    currency: string;
+    staffId?: string;
+  }): Promise<RefundResult> {
+    const registry = PaymentRegistry.getInstance();
+
+    const refund = await prisma.refunds.findFirst({
+      where: { id: params.refundId, restaurant_id: params.restaurantId },
+    });
+    if (!refund) {
+      throw new Error('Refund not found or unauthorized');
+    }
+
+    const provider = registry.get(refund.provider);
+    if (!provider) {
+      throw new Error(`Payment provider not registered: ${refund.provider}`);
+    }
+    if (typeof provider.refund !== 'function') {
+      throw new Error(`Provider ${refund.provider} has no refund capability`);
+    }
+
+    const providerIdempotencyKey = `refund:${refund.id}:${params.transactionId}`;
+
+    // Terminal fast-path: an aggregate that already reached a terminal state
+    // is returned verbatim — the provider is never re-driven.
+    const terminal = this.classifyRefundStatus(refund.status, refund.external_reference);
+    if (terminal) return terminal;
+
+    // Single-driver claim. Losers read back and classify — they may be
+    // racing a live drive or observing its durable outcome.
+    const claimed = await prisma.refunds.updateMany({
+      where: { id: refund.id, status: { in: ['PENDING', 'PROCESSING'] } },
+      data: { status: 'PROCESSING' },
+    });
+    if (claimed.count === 0) {
+      const current = await prisma.refunds.findUnique({ where: { id: refund.id } });
+      const classified = this.classifyRefundStatus(current?.status || 'UNKNOWN', current?.external_reference || undefined);
+      return classified || { outcome: 'UNKNOWN', errorCode: 'REFUND_CONCURRENT_DRIVE', errorMessage: 'Another driver owns this refund' };
+    }
+
+    const request: RefundRequest = {
+      refundId: refund.id,
+      transactionId: params.transactionId,
+      amount: params.amount,
+      currency: params.currency,
+      context: {
+        refundId: refund.id,
+        restaurantId: params.restaurantId,
+        orderId: params.orderId,
+        staffId: params.staffId || '',
+        correlationId: `refund:${refund.id}`,
+        providerIdempotencyKey,
+        source: 'REFUND_DISPATCHER',
+      },
+    };
+
+    const timeoutPromise = new Promise<RefundResult>((resolve) => {
+      setTimeout(() => {
+        resolve({
+          outcome: 'UNKNOWN',
+          errorCode: 'TIMEOUT',
+          errorMessage: `Refund provider ${provider.type} timed out after ${DEFAULT_TIMEOUT_MS}ms`,
+        });
+      }, DEFAULT_TIMEOUT_MS);
+    });
+
+    const result = await Promise.race([provider.refund(request), timeoutPromise]);
+    await this.applyRefundOutcome(refund.id, result);
+    return result;
+  }
+
+  private async applyRefundOutcome(refundId: string, result: RefundResult): Promise<void> {
+    if (result.outcome === 'COMPLETED') {
+      await prisma.refunds.update({
+        where: { id: refundId },
+        data: {
+          status: 'COMPLETED',
+          external_reference: result.externalReference || null,
+          completed_at: new Date(),
+        },
+      });
+    } else if (result.outcome === 'FAILED') {
+      await prisma.refunds.update({
+        where: { id: refundId },
+        data: { status: 'FAILED' },
+      });
+    } else {
+      await prisma.refunds.update({
+        where: { id: refundId },
+        data: { status: 'UNKNOWN' },
+      });
+    }
+  }
+
+  private classifyRefundStatus(status: string, externalReference?: string | null): RefundResult | null {
+    if (status === 'COMPLETED') return { outcome: 'COMPLETED', externalReference: externalReference || undefined };
+    if (status === 'FAILED') return { outcome: 'FAILED', errorCode: 'REFUND_ALREADY_FAILED', errorMessage: 'Refund already FAILED' };
+    if (status === 'UNKNOWN') return { outcome: 'UNKNOWN', errorCode: 'REFUND_ALREADY_UNKNOWN', errorMessage: 'Refund already UNKNOWN' };
+    return null;
   }
 }

@@ -4,7 +4,7 @@ import { prisma } from '../../shared/lib/prisma';
 import { toUTCRange } from '../../shared/utils/dateUtils';
 
 export type TransactionType = 'DEBIT' | 'CREDIT';
-export type ReferenceType = 'ORDER' | 'SETTLEMENT' | 'PAYOUT' | 'STOCK_IN' | 'OPENING_BALANCE' | 'ADJUSTMENT' | 'RIDER_SHIFT' | 'VOID_ORDER';
+export type ReferenceType = 'ORDER' | 'SETTLEMENT' | 'PAYOUT' | 'STOCK_IN' | 'OPENING_BALANCE' | 'ADJUSTMENT' | 'RIDER_SHIFT' | 'VOID_ORDER' | 'REFUND';
 
 export interface LedgerEntryData {
     restaurantId: string;

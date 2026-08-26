@@ -128,10 +128,14 @@ export class CashierSessionService {
                 const isSettlementCredit = l.reference_type === 'SETTLEMENT' && Number(l.credit) > 0;
                 const isPayoutCredit = l.reference_type === 'PAYOUT' && Number(l.credit) > 0;
                 const isRiderCredit = l.reference_type === 'RIDER' && Number(l.credit) > 0;
+                // [M018 F-02 §7/§8] Cash refunds leave the drawer: the
+                // mirror-image journal credits 1000 with reference_type
+                // ORDER_REFUND inside the containing OPEN session.
+                const isRefundCredit = l.reference_type === 'ORDER_REFUND' && Number(l.credit) > 0;
 
                 if (isOrderDebit || isSettlementDebit || isRiderDebit) {
                     expectedCash = expectedCash.plus(new Decimal(l.debit.toString()));
-                } else if (isSettlementCredit || isPayoutCredit || isRiderCredit) {
+                } else if (isSettlementCredit || isPayoutCredit || isRiderCredit || isRefundCredit) {
                     expectedCash = expectedCash.minus(new Decimal(l.credit.toString()));
                 }
             });
@@ -231,10 +235,13 @@ export class CashierSessionService {
             const isSettlementCredit = l.reference_type === 'SETTLEMENT' && l.transaction_type === 'CREDIT';
             const isPayoutCredit = l.reference_type === 'PAYOUT' && l.transaction_type === 'CREDIT';
             const isRiderCredit = l.reference_type === 'RIDER' && l.transaction_type === 'CREDIT';
+            // [M018 F-02 §7] Refunded money left the drawer (asset-side
+            // credits); the revenue-reversal debit is not a drawer movement.
+            const isRefundCredit = l.reference_type === 'REFUND' && l.transaction_type === 'CREDIT';
 
             if (isOrderDebit || isSettlementDebit || isRiderDebit) {
                 ledgerCashIn += Number(l.amount);
-            } else if (isSettlementCredit || isPayoutCredit || isRiderCredit) {
+            } else if (isSettlementCredit || isPayoutCredit || isRiderCredit || isRefundCredit) {
                 ledgerCashOut += Number(l.amount);
             }
         });

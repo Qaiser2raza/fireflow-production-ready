@@ -413,6 +413,76 @@ export class JournalEntryService {
         }, db);
     }
 
+    /**
+     * POST ORDER REFUND JOURNAL (M018 F-02)
+     * ─────────────────────────────────────────────────────────────────────
+     * Mirror image of the ORDER_SALE journal, keyed to the refunds aggregate
+     * (design §8). The sale journal remains immutable history — this builder
+     * READS it and posts the exact sign-flipped reversal:
+     *
+     *   CR 1000/1010/1040 per tender asset   (money returns the way it arrived)
+     *   DR 4000 revenue / DR 4010 delivery   (revenue reversal)
+     *   DR 2000 Tax Payable                  (liability correctly reduced)
+     *   DR 2010 Service Charge Payable
+     *   CR 4900 Discount                     (discount reversal)
+     *   sign-flipped 4020 Rounding
+     *
+     * Balanced by construction; JOURNAL_IMBALANCE guard applies identically.
+     * Every line carries reference_type 'ORDER_REFUND' + reference_id =
+     * refundId so session close math attributes the drawer movement to the
+     * containing open session without touching any closed session.
+     */
+    async recordOrderRefundJournal(params: {
+        refundId: string;
+        orderId: string;
+        expectedRestaurantId: string;
+        processedBy?: string;
+    }, tx: any) {
+        const db = tx;
+
+        // Idempotency: skip if already journalised for this refund
+        const existing = await db.journal_entries.findFirst({
+            where: { reference_type: 'ORDER_REFUND', reference_id: params.refundId }
+        });
+        if (existing) return;
+
+        const order = await db.orders.findFirst({
+            where: { id: params.orderId, restaurant_id: params.expectedRestaurantId },
+        });
+        if (!order) return;
+
+        const saleJournals = await db.journal_entries.findMany({
+            where: { reference_type: 'ORDER_SALE', reference_id: params.orderId },
+            include: { journal_entry_lines: true },
+        });
+        if (saleJournals.length === 0) return;
+
+        const reversalLines: JELine[] = [];
+        for (const journal of saleJournals) {
+            for (const line of journal.journal_entry_lines) {
+                reversalLines.push({
+                    accountId: line.account_id,
+                    description: `Refund reversal: ${line.description || 'sale line'}`,
+                    debit: new Decimal(line.credit.toString()),
+                    credit: new Decimal(line.debit.toString()),
+                    referenceType: 'ORDER_REFUND',
+                    referenceId: params.refundId,
+                    meta: { orderId: params.orderId, ...(line.meta || {}) },
+                });
+            }
+        }
+
+        await postJournal({
+            restaurantId: order.restaurant_id,
+            referenceType: 'ORDER_REFUND',
+            referenceId: params.refundId,
+            date: new Date(),
+            description: `${order.type} Refund – Order #${order.order_number}`,
+            processedBy: params.processedBy,
+            lines: reversalLines,
+        }, db);
+    }
+
     async recordRiderFloatJournal(params: {
         restaurantId: string;
         riderId: string;

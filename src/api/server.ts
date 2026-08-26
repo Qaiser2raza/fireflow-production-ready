@@ -51,6 +51,7 @@ import { MockConnector } from './services/integration/connectors/MockConnector';
 import { PaymentRegistry } from './services/payment/PaymentRegistry';
 import { MockPaymentProvider } from './services/payment/providers/MockPaymentProvider';
 import { PaymentDispatcher } from './services/payment/PaymentDispatcher';
+import { RefundService, RefundError } from './services/refund/RefundService';
 import { FiscalRegistry } from './services/fiscal/FiscalRegistry';
 import { MockFiscalProvider } from './services/fiscal/providers/MockFiscalProvider';
 import { FiscalHttpConnector } from './services/fiscal/connectors/FiscalHttpConnector';
@@ -189,7 +190,7 @@ if (config.NODE_ENV === 'production') {
 
 // --- Socket.IO Connection Handler ---
 io.on('connection', async (socket) => {
-    // Mission 016B (F-SEC-3): identify sockets from BOTH transport forms —
+    // Mission 016B (F-SEC-3): identify sockets from BOTH transport forms ï¿½
     // an `Authorization: Bearer <jwt>` header or a bare JWT in the handshake
     // auth payload. Previously the bare-handshake form failed the Bearer
     // prefix check and EVERY socket was silently treated as 'none'.
@@ -377,12 +378,12 @@ app.post('/api/licensing/activate', async (req, res) => {
  * Phase 1 (condition 4): tenant-scoped evaluation. Authenticated requests bind
  * strictly to req.restaurantId; unauthenticated requests fall back to a
  * single-restaurant node only. On zero/ambiguous rows NO unordered findFirst
- * binding happens — payload-only evaluation instead.
+ * binding happens ï¿½ payload-only evaluation instead.
  */
 app.get('/api/licensing/status', async (req, res) => {
     try {
         // Mission 016B release controls: mirror verifyLicensingMiddleware's test
-        // exemption — this endpoint cannot bind tenants in multi-tenant dev DBs.
+        // exemption ï¿½ this endpoint cannot bind tenants in multi-tenant dev DBs.
         if (process.env.NODE_ENV === 'test') {
             return res.json({ status: 'active', testModeSkip: true });
         }
@@ -453,7 +454,7 @@ app.get('/api/licensing/status', async (req, res) => {
 /**
  * POST /api/licensing/sync
  * Sync latest license from cloud Supabase
- * Phase 1 (condition 4): same tenant-scoping contract as /status — explicit
+ * Phase 1 (condition 4): same tenant-scoping contract as /status ï¿½ explicit
  * identity when authenticated, single-restaurant fallback only, otherwise
  * ambiguous ? 409 rather than an arbitrary first-row binding.
  */
@@ -1020,7 +1021,7 @@ app.get('/api/onboarding/status', authMiddleware, async (req, res) => {
 
 /**
  * PATCH /api/onboarding/profile
- * Wizard profile step — allowlisted field set only.
+ * Wizard profile step ï¿½ allowlisted field set only.
  */
 app.patch('/api/onboarding/profile', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
@@ -1296,7 +1297,7 @@ app.post('/api/auth/verify-pin', verifyPinLimiter, authMiddleware, async (req, r
 
     // Mission 016B (F-SEC-1): manager overrides are tenant-bound. The tenant
     // comes exclusively from the authenticated context; candidates are matched
-    // by bcrypt against stored hashes — the plaintext column is never read.
+    // by bcrypt against stored hashes ï¿½ the plaintext column is never read.
     if (!restaurantId) {
         return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -1972,7 +1973,7 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
 
         // [M018-F01] Destructive-delete authorization + settled guard.
         // Deletion requires an elevated role (consistent with the void/cancel
-        // posture) and is NEVER available for a settled order — reversal of a
+        // posture) and is NEVER available for a settled order ï¿½ reversal of a
         // completed sale belongs to the refund flow (M018 F-02), not to
         // deletion. BOTH blocked and successful deletes leave an audit row.
         const role = (req.role || '').toUpperCase();
@@ -2064,7 +2065,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
         // [M017-B] Method-routed completion. CASH settles synchronously inside
         // the commit transaction below; every other method is provider-mediated
         // and resolves through PaymentDispatcher BEFORE the commit transaction
-        // opens — a provider call never holds a database lock. UNKNOWN leaves
+        // opens ï¿½ a provider call never holds a database lock. UNKNOWN leaves
         // the order untouched for reconciliation (invariant 6); FAILED rejects
         // the whole settle with nothing persisted beyond the attempt record.
         const cashLines = paymentLines.filter(l => !isProviderMediated(l.method));
@@ -2106,12 +2107,12 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
             where: { id, restaurant_id: req.restaurantId }
         });
         if (settledOrder && (settledOrder.settlement_key === settlementKey || settledOrder.payment_status === 'PAID')) {
-            console.warn(`[SETTLE] Replay suppressed for order ${settledOrder.order_number || id} — returning original result verbatim`);
+            console.warn(`[SETTLE] Replay suppressed for order ${settledOrder.order_number || id} ï¿½ returning original result verbatim`);
             res.setHeader('X-Settlement-Replay', 'true');
             return res.json({ success: true, order: settledOrder });
         }
 
-        // [M019] Kitchen gate — STANDARD mode with enforcement ON only.
+        // [M019] Kitchen gate ï¿½ STANDARD mode with enforcement ON only.
         // READ-ONLY eligibility check (design invariants E2/E3): decides WHETHER
         // settlement may begin; never touches provider state, attempts,
         // journals, or events. Zero fired items = READY (explicit tested rule).
@@ -2135,7 +2136,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
                     // payment-override: server-side bcrypt re-verification of
                     // the SESSION manager's own PIN (identity never accepted
                     // from the client), non-empty reason, one attempt
-                    // (scoped to this request — nothing persisted), audited.
+                    // (scoped to this request ï¿½ nothing persisted), audited.
                     const role = (req.role || '').toUpperCase();
                     const override = req.body?.paymentOverride as { pin?: string; reason?: string } | undefined;
                     const overrideEligible = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(role);
@@ -2349,7 +2350,7 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
         } catch (settleError) {
             // Narrow attribution: ONLY conflicts on the settlement idempotency
             // mechanisms themselves (settlement_key, outbox completion-event key)
-            // may become replays — and only after read-back confirms a settled
+            // may become replays ï¿½ and only after read-back confirms a settled
             // order. Every other integrity error propagates unchanged.
             if (isSettlementUniquenessConflict(settleError)) {
                 const settled = await prisma.orders.findFirst({
@@ -2377,29 +2378,43 @@ app.post('/api/orders/:id/settle', authMiddleware, sessionGateMiddleware, async 
     }
 });
 
-// [M019] Restaurant operating-mode configuration (design §1, §13).
+// [M019] Restaurant operating-mode configuration (design ï¿½1, ï¿½13).
 // Configuration act, not money movement: MANAGER+ with session-derived
 // tenant/actor (no client-supplied tenant identifier), audited, outboxed.
 app.patch('/api/restaurant/flow-mode', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
     try {
-        const { orderFlowMode, kitchenGateEnforced, reason } = req.body || {};
+        const { orderFlowMode, kitchenGateEnforced, reason, refundWindowDays } = req.body || {};
         if (orderFlowMode !== 'STANDARD' && orderFlowMode !== 'EXPRESS') {
             return res.status(400).json({ error: 'orderFlowMode must be STANDARD or EXPRESS' });
         }
+        // [M018 F-02 design sec.12] Optional refund-window policy on the same
+        // MANAGER+ configuration surface: explicit integer day count,
+        // 0 = same business day only. Never silently unlimited.
+        let refundWindowUpdate: number | undefined;
+        if (refundWindowDays !== undefined) {
+            if (!Number.isInteger(refundWindowDays) || refundWindowDays < 0 || refundWindowDays > 3650) {
+                return res.status(400).json({ error: 'refundWindowDays must be a non-negative integer (days)' });
+            }
+            refundWindowUpdate = refundWindowDays;
+        }
         const restaurant = await prisma.restaurants.findUnique({
             where: { id: req.restaurantId as string },
-            select: { id: true, order_flow_mode: true, kitchen_gate_enforced: true }
+            select: { id: true, order_flow_mode: true, kitchen_gate_enforced: true, refund_window_days: true }
         });
         if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
 
         // Enforcement is a STANDARD-mode concept; EXPRESS forces it inert so
-        // the persisted pair is always coherent (design §1).
+        // the persisted pair is always coherent (design ï¿½1).
         const nextEnforced = orderFlowMode === 'STANDARD' ? Boolean(kitchenGateEnforced) : false;
 
         const updated = await prisma.restaurants.update({
             where: { id: restaurant.id },
-            data: { order_flow_mode: orderFlowMode, kitchen_gate_enforced: nextEnforced },
-            select: { id: true, order_flow_mode: true, kitchen_gate_enforced: true }
+            data: {
+                order_flow_mode: orderFlowMode,
+                kitchen_gate_enforced: nextEnforced,
+                ...(refundWindowUpdate !== undefined ? { refund_window_days: refundWindowUpdate } : {})
+            },
+            select: { id: true, order_flow_mode: true, kitchen_gate_enforced: true, refund_window_days: true }
         });
 
         const details = {
@@ -2407,6 +2422,8 @@ app.patch('/api/restaurant/flow-mode', authMiddleware, requireRole('MANAGER', 'A
             new_mode: orderFlowMode,
             previous_enforced: restaurant.kitchen_gate_enforced,
             new_enforced: nextEnforced,
+            previous_refund_window_days: restaurant.refund_window_days,
+            new_refund_window_days: updated.refund_window_days,
             reason: typeof reason === 'string' ? reason.slice(0, 255) : null,
             role: req.role
         };
@@ -2422,7 +2439,7 @@ app.patch('/api/restaurant/flow-mode', authMiddleware, requireRole('MANAGER', 'A
         });
         // Instance-scoped aggregate: mode changes are REPEATABLE config facts,
         // so the outbox idempotency triple keys on the audit-row instance (the
-        // restaurant id rides in the payload for consumer routing) — the same
+        // restaurant id rides in the payload for consumer routing) ï¿½ the same
         // pattern as A1's proof events. A restaurant-scoped triple could only
         // ever hold the FIRST change.
         await prisma.outbox.create({
@@ -2450,7 +2467,7 @@ app.patch('/api/restaurant/flow-mode', authMiddleware, requireRole('MANAGER', 'A
     }
 });
 
-// [M017-B] Reconciliation — resolves an UNKNOWN provider outcome (invariant 6:
+// [M017-B] Reconciliation ï¿½ resolves an UNKNOWN provider outcome (invariant 6:
 // unknown is never failure; it stays reconcilable). Tenant-scoped via the
 // payment aggregate. After a PAID resolution the client re-submits settle and
 // the orchestrator fast-path commits without touching the provider again.
@@ -2488,6 +2505,68 @@ app.post('/api/payments/:id/reconcile', authMiddleware, async (req, res) => {
     }
 });
 
+// [M018 F-02] Refund of a settled order - design:
+// docs/work-in-progress/REFUND_FLOW_DESIGN.md (rev2). Authorization chain
+// (sec.13): authenticated session -> own-tenant order lookup -> MANAGER+ ->
+// money-movement PIN ceremony (session-derived identity) -> structured
+// reason -> session-context check (sec.7) -> window check (sec.12) -> race-safe
+// aggregate + provider drive + single commit. Session context rides the
+// same x-session-id header as settlement; a CASH refund without an OPEN
+// session is refused 409 REFUND_NO_OPEN_SESSION, digital-only refunds may
+// proceed without one.
+app.post('/api/orders/:id/refund', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await RefundService.requestRefund({
+            restaurantId: req.restaurantId!,
+            orderId: id,
+            staffId: req.staffId!,
+            role: req.role || '',
+            pin: String(req.body?.pin || ''),
+            reasonCode: String(req.body?.reasonCode || ''),
+            reasonDetail: req.body?.reasonDetail !== undefined ? String(req.body.reasonDetail) : undefined,
+            sessionIdHeader: (req.headers['x-session-id'] as string) || undefined,
+        });
+        res.json({ success: true, refund: result.refund, refundStatus: result.refundStatus, ...(result.replay ? { replay: true } : {}) });
+    } catch (e: any) {
+        if (e instanceof RefundError) {
+            return res.status(e.statusCode).json({ error: e.code, code: e.code, detail: e.message, ...(e.extra ? { extra: e.extra } : {}) });
+        }
+        console.error("Order Refund Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// [M018 F-02] Refund reconciliation - resolves an UNKNOWN refund (sec.9).
+// MANAGER+ PLUS the money-movement PIN ceremony: reconcile resolves provider
+// state recorded on the aggregate; it must not become a journal-mutation
+// side door. COMPLETED commits THE reversal exactly once; FAILED leaves the
+// order PAID with the refund terminal-failed.
+app.post('/api/refunds/:id/reconcile', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { pin, outcome } = req.body || {};
+        if (outcome !== 'COMPLETED' && outcome !== 'FAILED') {
+            return res.status(400).json({ error: 'outcome must be COMPLETED or FAILED' });
+        }
+        const result = await RefundService.reconcileRefund({
+            restaurantId: req.restaurantId!,
+            refundId: id,
+            staffId: req.staffId!,
+            role: req.role || '',
+            pin: String(pin || ''),
+            resolvedOutcome: outcome,
+        });
+        res.json({ success: true, refund: result.refund });
+    } catch (e: any) {
+        if (e instanceof RefundError) {
+            return res.status(e.statusCode).json({ error: e.code, code: e.code, detail: e.message, ...(e.extra ? { extra: e.extra } : {}) });
+        }
+        console.error("Refund Reconcile Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // [M017-B] Test-control surface for the mock provider's outcome mode. Exists
 // ONLY under NODE_ENV=test; answers 404 in every other environment.
 app.post('/api/testing/payment-mode', (req, res) => {
@@ -2504,11 +2583,22 @@ app.post('/api/testing/payment-mode', (req, res) => {
     res.json({ ok: true, mode });
 });
 
+// [M018 F-02] Read-back of the mock provider's received-call history -
+// the direct evidence surface for the R1 no-double-refund assertions.
+// Exists ONLY under NODE_ENV=test; answers 404 in every other environment.
+app.get('/api/testing/payment-mode', (_req, res) => {
+    if (process.env.NODE_ENV !== 'test') {
+        return res.status(404).json({ error: 'Not found' });
+    }
+    const mock = paymentRegistry.get('MOCK_PAYMENT') as MockPaymentProvider;
+    res.json({ ok: true, calls: mock.getReceivedCalls(), refundCalls: mock.getReceivedRefundCalls() });
+});
+
 // A1: Payment-proof submission (EVIDENCE, NOT AUTHORITY) ---------------------
 // Records a client-asserted, authenticated payment-evidence claim as a local
 // durable fact plus one outbox event. It must NEVER drive subscription
 // activation, license/entitlement mutation, revenue recognition, or order
-// lifecycle events — authority comes only from the separate HQ verify flow
+// lifecycle events ï¿½ authority comes only from the separate HQ verify flow
 // under service-role credentials. Contract: plans/a1-payment-proof-spec.md.
 app.post('/api/billing/payment-proof', authMiddleware, sessionGateMiddleware, async (req, res) => {
     try {
@@ -2557,7 +2647,7 @@ app.post('/api/billing/payment-proof', authMiddleware, sessionGateMiddleware, as
         let proof;
         try {
             proof = await prisma.$transaction(async (tx) => {
-                // Write 1 of 2 — the ONLY state this route creates:
+                // Write 1 of 2 ï¿½ the ONLY state this route creates:
                 const row = await tx.subscription_payments.create({
                     data: {
                         restaurant_id: tenantId,
@@ -2570,7 +2660,7 @@ app.post('/api/billing/payment-proof', authMiddleware, sessionGateMiddleware, as
                         submitted_by: staffId || null,
                     }
                 });
-                // Write 2 of 2 — durable fact for the future cloud sync consumer
+                // Write 2 of 2 ï¿½ durable fact for the future cloud sync consumer
                 // (upsert-by-proof_key contract frozen in the A1 spec).
                 await tx.outbox.create({
                     data: {
@@ -2721,7 +2811,7 @@ protectedApiRouter.post('/print', async (req, res) => {
     }
 });
 
-// Fiscal connector service routes — HMAC authenticated, separate from tenant JWT boundary
+// Fiscal connector service routes ï¿½ HMAC authenticated, separate from tenant JWT boundary
 app.use('/api/fiscal-connector', fiscalConnectorRoutes);
 
 // Platform authentication rate limiters
@@ -2765,7 +2855,7 @@ const platformCreateAccountLimiter = rateLimit({
     skip: () => process.env.NODE_ENV === 'test',
 });
 
-// Platform authentication routes — separate from platform admin routes
+// Platform authentication routes ï¿½ separate from platform admin routes
 const platformAuthRouter = Router();
 
 platformAuthRouter.post('/login', platformLoginLimiter, async (req, res) => {
@@ -2997,7 +3087,7 @@ platformAuthRouter.post('/create-account', platformCreateAccountLimiter, platfor
 
 app.use('/api/platform/auth', platformAuthRouter);
 
-// Platform control plane routes — separate auth boundary
+// Platform control plane routes ï¿½ separate auth boundary
 app.use('/api/platform', platformRoutes);
 
 app.use('/api', protectedApiRouter);
@@ -4000,7 +4090,7 @@ app.post('/api/system/seed-restaurant', authMiddleware, requireRole('MANAGER', '
 
         let seededAdminPin: string | undefined;
         if (!adminExists) {
-            // F-V5: seed admin follows handover-once semantics — bcrypt hash
+            // F-V5: seed admin follows handover-once semantics ï¿½ bcrypt hash
             // only; the plaintext is returned exactly once in the response.
             seededAdminPin = String(Math.floor(100000 + Math.random() * 900000));
             await prisma.staff.create({
