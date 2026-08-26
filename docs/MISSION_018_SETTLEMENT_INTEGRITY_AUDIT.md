@@ -28,13 +28,15 @@ item is a runtime assertion, not a code-reading claim.
 
 ## Findings (demonstrated gaps — implementation pending disposition)
 
-### F-01 · SEVERE — any staff can hard-delete a SETTLED order
-`DELETE /api/orders/:id` (server.ts:1947) carries `authMiddleware` only — no
+### F-01 · SEVERE — any staff can hard-delete a SETTLED order — **REMEDIATED @ `368e391` (2026-08-26)**
+`DELETE /api/orders/:id` (server.ts:1947) carried `authMiddleware` only — no
 role guard, no PAID check. Runtime proof: a WAITER token deleted a settled
 order → 200; the order AND its transaction rows were destroyed; **no audit
-trail was written**. GL survives only as orphaned references. This is silent
-evidence destruction on the revenue spine.
-**Required fix:** requireRole(MANAGER+) + refuse PAID/CLOSED orders + audit log.
+trail was written**. GL survives only as orphaned references.
+**REMEDIATED:** role authorization (MANAGER/ADMIN/SUPER_ADMIN) + settled guard
+(409 regardless of role — state guard precedes role guard, documented) + audit
+rows for blocked, successful, and cross-tenant attempts. Acceptance matrix
+regression-locked in the M018 suite section D (43/43).
 
 ### F-02 · No refund path exists for PAID orders
 Refunds are impossible by design today: fields are schema-only
