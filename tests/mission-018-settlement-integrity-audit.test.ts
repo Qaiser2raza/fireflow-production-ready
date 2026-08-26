@@ -141,21 +141,48 @@ async function main() {
         const rRefundEndpoint = await fetch(`${BASE}/orders/${oPaid.id}/refund`, { method: 'POST', headers: { Authorization: `Bearer ${manager.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: 10 }) });
         finding('no refund endpoint exists (404)', rRefundEndpoint.status === 404, `POST /orders/:id/refund -> ${rRefundEndpoint.status}; refunds of PAID orders are impossible by design today`);
 
-        // ================ D. Hard-delete hole (SEVERE) ========================
-        console.log('\n[D] DELETE settled order — authorization + evidence destruction');
+        // ================ D. F-01 REMEDIATED: delete authorization ===========
+        // Original finding (2026-08-26): WAITER could hard-delete a SETTLED
+        // order with zero audit trail. Fixed per co-CTO disposition:
+        //   - deletion requires MANAGER/ADMIN/SUPER_ADMIN (void/cancel posture)
+        //   - settled orders are NEVER deletable, regardless of role (reversal
+        //     belongs to the refund flow, F-02)
+        //   - blocked AND successful AND cross-tenant attempts all audited
+        console.log('\n[D] DELETE authorization matrix (F-01 remediated)');
         const oDel = await createOrder(70);
         await settle(oDel.id, { paymentMethod: 'CASH', total: 70 }, manager.token, (await prisma.cashier_sessions.create({ data: { restaurant_id: ridA, opened_by: manager.staff.id, status: 'OPEN', opening_float: 0 } })).id);
-        const txBefore = await prisma.transactions.count({ where: { order_id: oDel.id } });
-        const auditBefore = await prisma.audit_logs.count({ where: { restaurant_id: ridA } });
-        const rDel = await fetch(`${BASE}/orders/${oDel.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${waiter.token}` } });
-        finding('WAITER role can hard-delete a SETTLED order (no role guard, no PAID guard)', rDel.status === 200, `DELETE by WAITER -> ${rDel.status}; order + ${txBefore} transaction evidence rows destroyed`);
-        const oDelAfter = await prisma.orders.findUnique({ where: { id: oDel.id } });
-        const txAfter = await prisma.transactions.count({ where: { order_id: oDel.id } });
-        finding('transactions evidence destroyed with the order', oDelAfter === null && txAfter === 0, `order=${oDelAfter ? 'present' : 'deleted'}, tx rows=${txAfter}`);
-        const jeOrphan = await prisma.journal_entries.count({ where: { reference_type: 'ORDER_SALE', reference_id: oDel.id } });
-        assert('GL survives as orphaned reference (books still balance)', jeOrphan === 1, '1 orphaned JE', `${jeOrphan}`);
-        const auditAfter = await prisma.audit_logs.count({ where: { restaurant_id: ridA } });
-        finding('deletion leaves NO audit trail', (await prisma.audit_logs.count({ where: { restaurant_id: ridA, entity_id: oDel.id } })) === 0, `audit delta for this order = 0 (was ${auditBefore} before, ${auditAfter} after)`);
+
+        const rDelWaiter = await fetch(`${BASE}/orders/${oDel.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${waiter.token}` } });
+        // Precedence decision (documented): the settled STATE guard wins over
+        // the role guard — a settled order answers 409 to every role; role
+        // insufficiency is separately proven on the non-settled case below.
+        assert('WAITER delete settled -> 409 (state guard precedes role guard)', rDelWaiter.status === 409, '409', `${rDelWaiter.status}`);
+        const blockedWaiter = await prisma.audit_logs.findFirst({ where: { restaurant_id: ridA, action_type: 'ORDER_DELETE_BLOCKED', entity_id: oDel.id }, orderBy: { created_at: 'desc' } });
+        assert('blocked WAITER attempt logged with role + reason', !!blockedWaiter && (blockedWaiter.details as any)?.role === 'WAITER' && (blockedWaiter.details as any)?.reason === 'ORDER_SETTLED', 'logged', JSON.stringify(blockedWaiter?.details || {}).slice(0, 60));
+
+        const rDelMgr = await fetch(`${BASE}/orders/${oDel.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${manager.token}` } });
+        assert('MANAGER delete settled -> 409 (settled guard regardless of role)', rDelMgr.status === 409, '409', `${rDelMgr.status}`);
+        const blockedMgr = await prisma.audit_logs.findFirst({ where: { restaurant_id: ridA, action_type: 'ORDER_DELETE_BLOCKED', entity_id: oDel.id }, orderBy: { created_at: 'desc' } });
+        assert('blocked MANAGER attempt logged with settled reason', !!blockedMgr && (blockedMgr.details as any)?.reason === 'ORDER_SETTLED' && (blockedMgr.details as any)?.settled === true, 'logged', JSON.stringify(blockedMgr?.details || {}).slice(0, 60));
+        const oDelIntact = await prisma.orders.findUnique({ where: { id: oDel.id } });
+        assert('settled order + evidence intact after blocks', oDelIntact !== null && (await prisma.transactions.count({ where: { order_id: oDel.id } })) === 1, 'intact', `${oDelIntact ? 'present' : 'gone'}`);
+
+        const oDel2 = await createOrder(45);
+        const rDelOk = await fetch(`${BASE}/orders/${oDel2.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${manager.token}` } });
+        assert('MANAGER delete non-settled -> 200', rDelOk.status === 200, '200', `${rDelOk.status}`);
+        const deletedLog = await prisma.audit_logs.findFirst({ where: { restaurant_id: ridA, action_type: 'ORDER_DELETED', entity_id: oDel2.id } });
+        assert('successful delete logged (who/role/status)', !!deletedLog && (deletedLog.details as any)?.role === 'MANAGER' && (deletedLog.details as any)?.previous_status === 'ACTIVE', 'logged', JSON.stringify(deletedLog?.details || {}).slice(0, 60));
+        assert('non-settled order actually removed', (await prisma.orders.findUnique({ where: { id: oDel2.id } })) === null, 'gone', 'present');
+
+        const oDel3 = await createOrder(30);
+        const rDelWaiter2 = await fetch(`${BASE}/orders/${oDel3.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${waiter.token}` } });
+        assert('WAITER delete non-settled -> 403 (explicit rule: deletion is MANAGER+)', rDelWaiter2.status === 403, '403', `${rDelWaiter2.status}`);
+        assert('oDel3 still present', (await prisma.orders.findUnique({ where: { id: oDel3.id } })) !== null, 'present', 'gone');
+
+        const rDelX = await fetch(`${BASE}/orders/${oDel3.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${managerB.token}` } });
+        assert('cross-tenant delete -> 404', rDelX.status === 404, '404', `${rDelX.status}`);
+        const xLog = await prisma.audit_logs.findFirst({ where: { restaurant_id: ridB, action_type: 'ORDER_DELETE_BLOCKED', entity_id: oDel3.id } });
+        assert('cross-tenant probe logged in CALLER tenant (no existence oracle)', !!xLog && (xLog.details as any)?.reason === 'ORDER_NOT_FOUND_OR_CROSS_TENANT', 'logged', xLog ? 'logged' : 'missing');
 
         // ================ E. Tax/SC/discount accounting map ===================
         console.log('\n[E] Tax liability map — runtime proof of the existing model');
@@ -246,9 +273,9 @@ async function main() {
             await prisma.audit_logs.deleteMany({ where: { restaurant_id: { in: rids } } });
             await prisma.fire_batches.deleteMany({ where: { orders: { restaurant_id: { in: rids } } } });
             await prisma.rider_shifts.deleteMany({ where: { restaurant_id: { in: rids } } });
-            await prisma.takeaway_orders.deleteMany({ where: { restaurant_id: { in: rids } } });
-            await prisma.dine_in_orders.deleteMany({ where: { restaurant_id: { in: rids } } });
-            await prisma.delivery_orders.deleteMany({ where: { restaurant_id: { in: rids } } });
+            await prisma.takeaway_orders.deleteMany({ where: { orders: { restaurant_id: { in: rids } } } });
+            await prisma.dine_in_orders.deleteMany({ where: { orders: { restaurant_id: { in: rids } } } });
+            await prisma.delivery_orders.deleteMany({ where: { orders: { restaurant_id: { in: rids } } } });
             await prisma.orders.deleteMany({ where: { restaurant_id: { in: rids } } });
             await prisma.cashier_sessions.deleteMany({ where: { restaurant_id: { in: rids } } });
             await prisma.chart_of_accounts.deleteMany({ where: { restaurant_id: { in: rids } } });

@@ -1953,12 +1953,75 @@ app.delete('/api/orders/:id', authMiddleware, async (req, res) => {
                 restaurant_id: req.restaurantId // SaaS Security
             }
         });
-        if (!order) return res.status(404).json({ error: 'Order not found or unauthorized' });
+        if (!order) {
+            // [M018-F01] Cross-tenant / unknown probes are logged in the
+            // CALLER's tenant: the record captures the attempt without
+            // revealing whether the target order exists elsewhere.
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: req.restaurantId!,
+                    action_type: 'ORDER_DELETE_BLOCKED',
+                    entity_type: 'ORDER',
+                    entity_id: id,
+                    staff_id: req.staffId,
+                    details: { role: req.role, reason: 'ORDER_NOT_FOUND_OR_CROSS_TENANT' }
+                }
+            });
+            return res.status(404).json({ error: 'Order not found or unauthorized' });
+        }
+
+        // [M018-F01] Destructive-delete authorization + settled guard.
+        // Deletion requires an elevated role (consistent with the void/cancel
+        // posture) and is NEVER available for a settled order — reversal of a
+        // completed sale belongs to the refund flow (M018 F-02), not to
+        // deletion. BOTH blocked and successful deletes leave an audit row.
+        const role = (req.role || '').toUpperCase();
+        const isAuthorizedRole = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(role);
+        const isSettled = order.payment_status === 'PAID' || order.settlement_key !== null;
+
+        if (!isAuthorizedRole || isSettled) {
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: req.restaurantId!,
+                    action_type: 'ORDER_DELETE_BLOCKED',
+                    entity_type: 'ORDER',
+                    entity_id: id,
+                    staff_id: req.staffId,
+                    details: {
+                        order_number: order.order_number,
+                        role: req.role,
+                        payment_status: order.payment_status,
+                        settled: isSettled,
+                        reason: isSettled ? 'ORDER_SETTLED' : 'INSUFFICIENT_ROLE'
+                    }
+                }
+            });
+            if (isSettled) {
+                return res.status(409).json({ error: 'Cannot delete: order is already settled', code: 'ORDER_SETTLED' });
+            }
+            return res.status(403).json({ error: 'Insufficient permissions for order deletion', code: 'INSUFFICIENT_PERMISSION', required_role: ['MANAGER', 'ADMIN', 'SUPER_ADMIN'] });
+        }
 
         const service = OrderServiceFactory.getService(order.type as any);
         const success = await service.deleteOrder(req.restaurantId!, id);
 
         if (success) {
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: req.restaurantId!,
+                    action_type: 'ORDER_DELETED',
+                    entity_type: 'ORDER',
+                    entity_id: id,
+                    staff_id: req.staffId,
+                    details: {
+                        order_number: order.order_number,
+                        role: req.role,
+                        previous_status: order.status,
+                        payment_status: order.payment_status,
+                        total: Number(order.total)
+                    }
+                }
+            });
             io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'orders', eventType: 'DELETE', id });
             // If it was a DINE_IN order, also notify about table change
             if (order.type === 'DINE_IN' && order.table_id) {
