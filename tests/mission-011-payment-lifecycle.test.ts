@@ -441,25 +441,24 @@ async function runTests() {
                 source: 'PAYMENT_DISPATCHER'
             });
 
-            let errorThrown = false;
-            try {
-                await dispatcher.startAttempt(payment.id, {
-                    paymentId: payment.id,
-                    restaurantId: restaurantId,
-                    orderId: order.id,
-                    staffId: 'test-staff',
-                    correlationId: crypto.randomUUID(),
-                    requestIdempotencyKey: requestIdempotencyKey,
-                    providerIdempotencyKey: `payment:${payment.id}:attempt:${crypto.randomUUID()}`,
-                    source: 'PAYMENT_DISPATCHER'
-                });
-            } catch (e: any) {
-                errorThrown = true;
-            }
+            // M021 terminal fast-path: a PAID aggregate is returned verbatim.
+            // Re-invocation converges through the terminal result — it does NOT
+            // throw and it never initiates a second provider operation/attempt.
+            const redrive = await dispatcher.startAttempt(payment.id, {
+                paymentId: payment.id,
+                restaurantId: restaurantId,
+                orderId: order.id,
+                staffId: 'test-staff',
+                correlationId: crypto.randomUUID(),
+                requestIdempotencyKey: requestIdempotencyKey,
+                providerIdempotencyKey: `payment:${payment.id}:attempt:${crypto.randomUUID()}`,
+                source: 'PAYMENT_DISPATCHER'
+            });
 
             const attempts = await prisma.payment_attempts.findMany({ where: { payment_id: payment.id } });
             assert('Only one attempt created', attempts.length === 1, '1', `${attempts.length}`);
-            assert('Second request rejected for PAID payment', errorThrown, 'true', errorThrown ? 'true' : 'false');
+            assert('Re-drive of PAID converges via terminal PAID (no throw)', redrive?.outcome === 'PAID', 'PAID', redrive?.outcome || 'none');
+            assert('Converged re-drive returns the provider reference', !!redrive?.externalReference, 'present', redrive?.externalReference || 'none');
         } catch (e: any) {
             console.log('  FAIL: Exception:', e.message);
             failed++;
@@ -648,23 +647,23 @@ async function runTests() {
                 source: 'PAYMENT_DISPATCHER'
             });
 
-            let errorThrown = false;
-            try {
-                await dispatcher.startAttempt(payment.id, {
-                    paymentId: payment.id,
-                    restaurantId: restaurantId,
-                    orderId: order.id,
-                    staffId: 'test-staff',
-                    correlationId: crypto.randomUUID(),
-                    requestIdempotencyKey: crypto.randomUUID(),
-                    providerIdempotencyKey: `payment:${payment.id}:attempt:${crypto.randomUUID()}`,
-                    source: 'PAYMENT_DISPATCHER'
-                });
-            } catch (e: any) {
-                errorThrown = true;
-            }
-
-            assert('PAID payment rejects new attempt', errorThrown, 'true', errorThrown ? 'true' : 'false');
+            // M021 terminal re-play: a PAID aggregate is returned verbatim. It never
+            // throws, never re-drives the provider, and never adds an attempt.
+            const redrive = await dispatcher.startAttempt(payment.id, {
+                paymentId: payment.id,
+                restaurantId: restaurantId,
+                orderId: order.id,
+                staffId: 'test-staff',
+                correlationId: crypto.randomUUID(),
+                requestIdempotencyKey: crypto.randomUUID(),
+                providerIdempotencyKey: `payment:${payment.id}:attempt:${crypto.randomUUID()}`,
+                source: 'PAYMENT_DISPATCHER'
+            });
+            const paidAfterRedrive = await prisma.payments.findUnique({ where: { id: payment.id } });
+            const attemptsAfterRedrive = await prisma.payment_attempts.findMany({ where: { payment_id: payment.id } });
+            assert('PAID payment re-drive converges via terminal result', redrive?.outcome === 'PAID', 'PAID', redrive?.outcome || 'none');
+            assert('PAID payment stays terminal on re-drive', paidAfterRedrive?.status === 'PAID', 'PAID', paidAfterRedrive?.status || 'none');
+            assert('No duplicate attempt on PAID re-drive', attemptsAfterRedrive.length === 1, '1', `${attemptsAfterRedrive.length}`);
         } catch (e: any) {
             console.log('  FAIL: Exception:', e.message);
             failed++;

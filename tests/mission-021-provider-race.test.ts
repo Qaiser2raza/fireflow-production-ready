@@ -114,6 +114,7 @@ async function main() {
         const retryBody: any = await rRetry.json();
         const retryAfter = (await providerHistory()).filter(c => c.outcome === 'PAID').length;
         assert('retry returns 200', rRetry.status === 200, '200', `${rRetry.status}`);
+        assert('replay marked via header', rRetry.headers.get('x-settlement-replay') === 'true', 'true', String(rRetry.headers.get('x-settlement-replay')));
         assert('zero additional mock sends', retryAfter === retryBefore, `${retryBefore}`, `${retryAfter}`);
         assert('order stays PAID on replay', (await prisma.orders.findUnique({ where: { id: oRace.id } }))?.payment_status === 'PAID', 'PAID', 'other');
 
