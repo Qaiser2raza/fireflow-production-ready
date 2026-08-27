@@ -52,6 +52,24 @@ function assertGateDatabaseSafety() {
     console.log(`[GATE] DB safety assertion OK: ${dbName}`);
 }
 
+// ---- TD-1: fail fast when the required test port is already occupied ----
+function assertPortFree(port) {
+    return new Promise(resolve => {
+        const s = net.connect(port, '127.0.0.1');
+        const onError = () => { s.destroy(); resolve(); };
+        const onConnect = () => {
+            s.destroy();
+            console.error(`[GATE] REFUSING TO RUN: port ${port} is already occupied.`);
+            console.error(`[GATE] A stale or manually started server may be listening.`);
+            console.error(`[GATE] Stop the existing process or resolve the port conflict before retrying.`);
+            process.exit(1);
+        };
+        s.once('error', onError);
+        s.once('connect', onConnect);
+        setTimeout(() => { s.destroy(); resolve(); }, 1000);
+    });
+}
+
 // ---- TD-14b boundary is enforced inside main(), before any server boot or
 // ---- suite sweep, so that requiring this module (tests) never triggers it.
 
@@ -102,6 +120,9 @@ async function main() {
 
     // ---- 0. TD-14b: database safety assertion FIRST ----
     assertGateDatabaseSafety();
+
+    // ---- 0b. TD-1: port occupancy guard BEFORE server boot ----
+    await assertPortFree(3001);
 
     // ---- 1. boot API server (test mode) ----
     log('BOOT api server (NODE_ENV=test) on :3001');
