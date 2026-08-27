@@ -149,7 +149,6 @@ function clearAuthSession(): void {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('accessTokenExpiry');
-    localStorage.removeItem('saved_pin');
 }
 
 /**

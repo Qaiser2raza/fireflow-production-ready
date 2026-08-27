@@ -174,7 +174,6 @@ export async function clearAuthSession(): Promise<void> {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('accessTokenExpiry');
-    localStorage.removeItem('saved_pin');
     localStorage.removeItem('restaurant_id');
     localStorage.removeItem('currentRestaurant');
   }

@@ -329,7 +329,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return true;
     } catch (err) {
       addNotification('error', "Authentication Failed: Invalid PIN");
-      localStorage.removeItem('saved_pin');
       return false;
     }
   };

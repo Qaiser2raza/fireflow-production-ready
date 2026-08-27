@@ -33,16 +33,6 @@ export interface LicenseKeyResponse {
   error: string | null;
 }
 
-export interface ActivateLicenseResponse {
-  data: {
-    id: string;
-    key: string;
-    restaurant_id: string;
-    activated_at: string;
-  } | null;
-  error: string | null;
-}
-
 export interface RegisterRestaurantResponse {
   data: {
     id: string;
@@ -62,17 +52,6 @@ export interface SubscriptionStatusResponse {
     monthlyFee: number;
     currency: string;
     trialEndsAt: string | null;
-  } | null;
-  error: string | null;
-}
-
-export interface PaymentProofResponse {
-  data: {
-    id: string;
-    restaurant_id: string;
-    amount: number;
-    status: 'pending' | 'verified' | 'rejected';
-    created_at: string;
   } | null;
   error: string | null;
 }
@@ -305,71 +284,6 @@ export async function checkLicenseKey(key: string): Promise<LicenseKeyResponse> 
   }
 }
 
-/**
- * Activate a license key for a specific restaurant
- * 
- * @param key - License key to activate
- * @param restaurantId - Local restaurant UUID to link with
- * @returns Activation details
- */
-export async function activateLicenseKey(
-  key: string,
-  restaurantId: string
-): Promise<ActivateLicenseResponse> {
-  try {
-    const client = getCloudClient();
-
-    // First verify key exists and is unused
-    const checkResponse = await checkLicenseKey(key);
-    if (checkResponse.error || !checkResponse.data) {
-      return {
-        data: null,
-        error: checkResponse.error || 'License key validation failed'
-      };
-    }
-
-    const searchKey = key.includes('.') ? key : key.toUpperCase();
-    // Update license key status
-    const { data, error } = await client
-      .from('license_keys')
-      .update({
-        status: 'active',
-        restaurant_id: restaurantId,
-        activated_at: new Date().toISOString()
-      })
-      .eq('key', searchKey)
-      .select('id, key, restaurant_id, activated_at')
-      .maybeSingle();
-
-    // maybeSingle: zero updated rows means the key never matched — reported
-    // as activation failure, not a silent success (F-V14).
-    if (error || !data) {
-      return {
-        data: null,
-        error: 'Failed to activate license key'
-      };
-    }
-
-    console.log(`[CLOUD] License key activated for restaurant ${restaurantId}`);
-
-    return {
-      data: {
-        id: data.id,
-        key: data.key,
-        restaurant_id: data.restaurant_id,
-        activated_at: data.activated_at
-      },
-      error: null
-    };
-  } catch (error: any) {
-    console.error('[CLOUD] activateLicenseKey error:', error.message);
-    return {
-      data: null,
-      error: 'Failed to activate license key'
-    };
-  }
-}
-
 // ==========================================
 // RESTAURANT REGISTRATION
 // ==========================================
@@ -505,76 +419,6 @@ export async function getSubscriptionStatus(
     return {
       data: null,
       error: 'Failed to fetch subscription status'
-    };
-  }
-}
-
-// ==========================================
-// PAYMENT OPERATIONS
-// ==========================================
-
-/**
- * Submit payment proof for subscription activation
- * Creates a pending payment record for manual verification
- * 
- * @param restaurantId - Restaurant UUID
- * @param proofUrl - URL to payment proof image/document (uploaded to cloud storage)
- * @param amount - Payment amount in PKR
- * @returns Payment record
- */
-export async function submitPaymentProof(
-  restaurantId: string,
-  proofUrl: string,
-  amount: number
-): Promise<PaymentProofResponse> {
-  try {
-    if (!proofUrl || !restaurantId || amount <= 0) {
-      return {
-        data: null,
-        error: 'Invalid payment details'
-      };
-    }
-
-    const client = getCloudClient();
-
-    const { data, error } = await client
-      .from('subscription_payments')
-      .insert({
-        restaurant_id: restaurantId,
-        amount: amount,
-        payment_method: 'BANK_TRANSFER',
-        payment_proof_url: proofUrl,
-        status: 'pending',
-        notes: `Payment proof submitted for manual verification`,
-        created_at: new Date().toISOString()
-      })
-      .select('id, restaurant_id, amount, status, created_at')
-      .single();
-
-    if (error) {
-      return {
-        data: null,
-        error: 'Failed to submit payment proof'
-      };
-    }
-
-    console.log(`[CLOUD] Payment proof submitted for restaurant ${restaurantId}`);
-
-    return {
-      data: {
-        id: data.id,
-        restaurant_id: data.restaurant_id,
-        amount: data.amount,
-        status: data.status,
-        created_at: data.created_at
-      },
-      error: null
-    };
-  } catch (error: any) {
-    console.error('[CLOUD] submitPaymentProof error:', error.message);
-    return {
-      data: null,
-      error: 'Failed to submit payment proof'
     };
   }
 }
