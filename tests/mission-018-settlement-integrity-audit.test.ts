@@ -271,6 +271,23 @@ async function main() {
         await prisma.rider_shifts.create({ data: { restaurant_id: ridA, rider_id: manager.staff.id, opened_by: manager.staff.id } });
         const rRider2 = await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${cashier.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: s3.body.session.id, actualCash: 0, withdrawnAmount: 0, closedBy: cashier.staff.id }) });
         assert('close blocked while rider shifts OPEN (409)', rRider2.status === 409, '409', `${rRider2.status}`);
+
+        // Clean up rider shift so s3 can be closed before F-06
+        await prisma.rider_shifts.deleteMany({ where: { restaurant_id: ridA } });
+        const rCloseS3 = await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${cashier.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: s3.body.session.id, actualCash: 0, withdrawnAmount: 0, closedBy: cashier.staff.id }) });
+        assert('s3 closed after rider shift removed', rCloseS3.status === 200, '200', `${rCloseS3.status}`);
+
+        // ================ F-06. Session-close journal blocking =================
+        console.log('\n[F-06] Session-close journal blocking (HTTP regression)');
+        const sF06 = await openSession(cashier.token, 0);
+        const sessionIdF06 = sF06.body?.session?.id;
+        assert('F-06 openSession succeeded', !!sessionIdF06, 'session id', sessionIdF06 || 'missing');
+        const rCloseF06 = await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${cashier.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: sessionIdF06, actualCash: 100, withdrawnAmount: 50, closedBy: cashier.staff.id }) });
+        assert('session close succeeds via HTTP', rCloseF06.status === 200, '200', `${rCloseF06.status}`);
+        const closeF06Body: any = await rCloseF06.json();
+        assert('response carries session', !!closeF06Body.session, 'session object', JSON.stringify(closeF06Body));
+        const closeJeF06 = await prisma.journal_entries.count({ where: { reference_type: 'CASHIER_SESSION', reference_id: sessionIdF06 } });
+        assert('session-close journal written via HTTP', closeJeF06 === 1, '1', `${closeJeF06}`);
     } catch (e: any) {
         console.log('  FAIL: Exception:', e.message);
         failed++;

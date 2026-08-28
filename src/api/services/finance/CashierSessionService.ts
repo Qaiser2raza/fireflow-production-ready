@@ -143,6 +143,24 @@ export class CashierSessionService {
         const actual = new Decimal(actualCash);
         const difference = actual.minus(expectedCash);
 
+        // Trigger Double-Entry Journaling (blocking — F-06)
+        // Journal must succeed before the session is marked CLOSED.
+        // If journaling fails, the session remains OPEN and the cashier
+        // can retry; we never silently close with missing accounting.
+        try {
+            await journalEntryService.recordSessionCloseJournal({
+                restaurantId: session.restaurant_id,
+                sessionId: sessionId,
+                withdrawnAmount: withdrawnAmount,
+                actualHandover: withdrawnAmount,
+                variance: difference,
+                description: notes || `Session closed by ${closedBy}`,
+                processedBy: closedBy
+            });
+        } catch (e) {
+            throw new Error('SESSION_CLOSE_JOURNAL_FAILED: Session close journal failed — close blocked to preserve accounting integrity');
+        }
+
         const updated = await prisma.cashier_sessions.update({
             where: { id: sessionId },
             data: {
@@ -155,21 +173,6 @@ export class CashierSessionService {
                 notes: notes
             }
         });
-
-        // Trigger Double-Entry Journaling (non-blocking)
-        try {
-            await journalEntryService.recordSessionCloseJournal({
-                restaurantId: session.restaurant_id,
-                sessionId: sessionId,
-                withdrawnAmount: withdrawnAmount,
-                actualHandover: withdrawnAmount,
-                variance: difference,
-                description: notes || `Session closed by ${closedBy}`,
-                processedBy: closedBy
-            });
-        } catch (e) {
-            console.error('[Session Close Journal Error]:', e);
-        }
 
         return updated;
     }

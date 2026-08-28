@@ -72,9 +72,14 @@ router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'),
         const session = await CashierSessionService.closeSession(req.restaurantId!, sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
         res.json({ success: true, session });
     } catch (e: any) {
-        const status = e.message?.includes('Access denied') ? 403 : 500;
-        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
-        res.status(status).json({ success: false, error: message });
+        const msg = e.message || 'Server error';
+        if (msg.includes('Access denied')) {
+            return res.status(403).json({ success: false, error: 'Access denied' });
+        }
+        if (msg.includes('SESSION_CLOSE_JOURNAL_FAILED')) {
+            return res.status(500).json({ success: false, error: 'Session close journal failed', code: 'SESSION_CLOSE_JOURNAL_FAILED', detail: msg });
+        }
+        res.status(500).json({ success: false, error: msg });
     }
 });
 
