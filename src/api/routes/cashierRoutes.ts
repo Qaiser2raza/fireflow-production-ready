@@ -14,7 +14,9 @@ router.get('/current', authMiddleware, async (req, res) => {
         const result = await CashierSessionService.getActiveSession(restaurantId as string, staffId as string);
         res.json({ success: true, ...result });
     } catch (e: any) {
-        res.status(500).json({ success: false, error: e.message });
+        const status = e.message?.includes('Access denied') ? 403 : 500;
+        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
+        res.status(status).json({ success: false, error: message });
     }
 });
 
@@ -33,7 +35,9 @@ router.post('/open', authMiddleware, requireRole('CASHIER', 'MANAGER', 'ADMIN', 
         const session = await CashierSessionService.openSession(restaurantId, staffId, Number(openingFloat || 0), Number(expectedFloat || 0), terminalId);
         res.json({ success: true, session });
     } catch (e: any) {
-        res.status(500).json({ success: false, error: e.message });
+        const status = e.message?.includes('Access denied') ? 403 : 500;
+        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
+        res.status(status).json({ success: false, error: message });
     }
 });
 
@@ -68,7 +72,9 @@ router.post('/close', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'),
         const session = await CashierSessionService.closeSession(req.restaurantId!, sessionId, Number(actualCash || 0), Number(withdrawnAmount || 0), closedBy, notes);
         res.json({ success: true, session });
     } catch (e: any) {
-        res.status(500).json({ success: false, error: e.message });
+        const status = e.message?.includes('Access denied') ? 403 : 500;
+        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
+        res.status(status).json({ success: false, error: message });
     }
 });
 
@@ -78,7 +84,9 @@ router.get('/:id/summary', requireRole('CASHIER', 'MANAGER', 'ADMIN', 'SUPER_ADM
         const summary = await CashierSessionService.getSessionSummary(req.restaurantId!, req.params.id);
         res.json({ success: true, summary });
     } catch (e: any) {
-        res.status(500).json({ success: false, error: e.message });
+        const status = e.message?.includes('Access denied') ? 403 : 500;
+        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
+        res.status(status).json({ success: false, error: message });
     }
 });
 
@@ -90,7 +98,9 @@ router.get('/:id/logs', authMiddleware, async (req, res) => {
         const logs = await CashierShiftLogService.getLogsForSession(req.params.id);
         res.json({ success: true, logs });
     } catch (e: any) {
-        res.status(500).json({ success: false, error: e.message });
+        const status = e.message?.includes('Access denied') ? 403 : 500;
+        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
+        res.status(status).json({ success: false, error: message });
     }
 });
 
@@ -110,7 +120,9 @@ router.post('/:id/logs', authMiddleware, requireRole('CASHIER', 'MANAGER', 'ADMI
         });
         res.json({ success: true, log });
     } catch (e: any) {
-        res.status(500).json({ success: false, error: e.message });
+        const status = e.message?.includes('Access denied') ? 403 : 500;
+        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
+        res.status(status).json({ success: false, error: message });
     }
 });
 
@@ -127,7 +139,9 @@ router.post('/logs/:logId/resolve', requireRole('MANAGER', 'SUPER_ADMIN', 'ADMIN
         });
         res.json({ success: true, log });
     } catch (e: any) {
-        res.status(500).json({ success: false, error: e.message });
+        const status = e.message?.includes('Access denied') ? 403 : 500;
+        const message = status === 403 ? 'Access denied' : (e.message || 'Server error');
+        res.status(status).json({ success: false, error: message });
     }
 });
 

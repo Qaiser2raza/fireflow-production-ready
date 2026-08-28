@@ -253,14 +253,21 @@ async function main() {
         const closedV: any = (await rCloseV.json()).session;
         assert('shortage variance persisted (-10)', Number(closedV.difference) === -10 && Number(closedV.expected_cash) === 100, '-10', `${closedV.difference}/${closedV.expected_cash}`);
 
-        // cross-tenant close
-        const rX = await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${managerB.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: sessionId2, actualCash: 0, withdrawnAmount: 0, closedBy: managerB.staff.id }) });
-        finding('cross-tenant close blocked but surfaces as 500 (not 403/404)', rX.status === 500, `tenant B closing tenant A session -> ${rX.status}; isolation holds via service check, error taxonomy leaks internals`);
+        // cross-tenant close — use a fresh open session
+        const sCross = await openSession(cashier.token, 0);
+        const sessionIdCross = sCross.body.session.id;
+        const rX = await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${managerB.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: sessionIdCross, actualCash: 0, withdrawnAmount: 0, closedBy: managerB.staff.id }) });
+        assert('cross-tenant close blocked with 403', rX.status === 403, '403', `${rX.status}; isolation holds via service check`);
 
         // rider-shift gate
         const rRider = await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${cashier.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: s1.body.session.id, actualCash: 0, withdrawnAmount: 0, closedBy: cashier.staff.id }) });
-        // s1 already closed; use a fresh open session to test rider gate
+        // s1 already closed; close the cross-tenant test session too, then open a fresh one
+        await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${cashier.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: sessionIdCross, actualCash: 0, withdrawnAmount: 0, closedBy: cashier.staff.id }) });
         const s3 = await openSession(cashier.token, 0);
+        if (!s3.body.session) {
+            console.log('  [DEBUG] s3 openSession failed:', JSON.stringify(s3.body));
+            throw new Error('openSession failed for rider-shift gate test');
+        }
         await prisma.rider_shifts.create({ data: { restaurant_id: ridA, rider_id: manager.staff.id, opened_by: manager.staff.id } });
         const rRider2 = await fetch(`${BASE}/cashier/close`, { method: 'POST', headers: { Authorization: `Bearer ${cashier.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: s3.body.session.id, actualCash: 0, withdrawnAmount: 0, closedBy: cashier.staff.id }) });
         assert('close blocked while rider shifts OPEN (409)', rRider2.status === 409, '409', `${rRider2.status}`);
