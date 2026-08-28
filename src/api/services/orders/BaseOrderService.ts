@@ -170,13 +170,13 @@ export abstract class BaseOrderService implements IOrderService {
                 throw new Error('Access denied: Order does not belong to this restaurant');
             }
 
-            if ((data as any).refund_transaction_id || (data as any).void_notes) {
+            if ((data as any).refund_transaction_id) {
                 throw new Error('Refund state cannot be set through generic order update');
             }
 
             const isVoidOrCancel = data.status === 'CANCELLED' || data.status === 'VOIDED';
+            const hasFireBatches = await tx.fire_batches.count({ where: { order_id: id } }) > 0;
             if (isVoidOrCancel) {
-                const hasFireBatches = await tx.fire_batches.count({ where: { order_id: id } }) > 0;
                 const isPaid = currentOrder.payment_status === 'PAID';
 
                 if (data.status === 'CANCELLED') {
@@ -271,6 +271,13 @@ export abstract class BaseOrderService implements IOrderService {
                 orderUpdatePayload.fbr_sync_status = 'VOIDED';
             }
 
+            if (data.status === 'VOIDED') {
+                orderUpdatePayload.voided_at = new Date();
+                orderUpdatePayload.voided_by = (data as any).authorized_by || (data as any).manager_id || null;
+                orderUpdatePayload.void_reason = (data as any).void_reason || null;
+                orderUpdatePayload.void_notes = (data as any).void_notes || null;
+            }
+
             if (data.table_id) orderUpdatePayload.tables = { connect: { id: data.table_id } };
             if (customerId) orderUpdatePayload.customers = { connect: { id: customerId } };
             
@@ -284,6 +291,27 @@ export abstract class BaseOrderService implements IOrderService {
                 where: { id },
                 data: orderUpdatePayload
             });
+
+            if (data.status === 'VOIDED') {
+                await tx.outbox.create({
+                    data: {
+                        restaurant_id: currentOrder.restaurant_id,
+                        event_type: 'ORDER_VOIDED',
+                        aggregate_type: 'orders',
+                        aggregate_id: id,
+                        payload: {
+                            order_id: id,
+                            order_number: currentOrder.order_number,
+                            voided_by: orderUpdatePayload.voided_by,
+                            void_reason: orderUpdatePayload.void_reason,
+                            previous_status: currentOrder.status,
+                            has_fire_batches: hasFireBatches
+                        }
+                    }
+                });
+
+                await tx.fire_batches.deleteMany({ where: { order_id: id } });
+            }
 
             // 5. Automatic Item status promotion on 'SERVED'
             if (data.status === 'SERVED') {

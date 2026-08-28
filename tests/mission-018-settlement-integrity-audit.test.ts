@@ -119,20 +119,22 @@ async function main() {
         assert('void PAID blocked', rVoidPaid.status === 500 && /already paid/i.test(rVoidPaidBody.error || ''), 'blocked', `${rVoidPaid.status}:${(rVoidPaidBody.error || '').slice(0, 40)}`);
 
         // ================ B. Void of a VOIDABLE order =========================
-        console.log('\n[B] Void of unpaid kitchen-fired order — behavior + findings');
+        console.log('\n[B] Void of unpaid kitchen-fired order — F-03 fix verification');
         const oVoid = await createOrder(60);
         await prisma.fire_batches.create({ data: { order_id: oVoid.id, version_number: 1, created_by_user_id: manager.staff.id, metadata_json: { item_count: 1 } } as any });
-        const rVoid = await patchOrder(oVoid.id, { status: 'VOIDED' }, manager.token);
+        const rVoid = await patchOrder(oVoid.id, { status: 'VOIDED', authorized_by: manager.staff.id, void_reason: 'Customer changed mind', void_notes: 'Kitchen notified' }, manager.token);
         assert('void of voidable order succeeds', rVoid.status === 200, '200', `${rVoid.status}`);
         const oVoidAfter = await prisma.orders.findUnique({ where: { id: oVoid.id } });
         assert('order status VOIDED', oVoidAfter?.status === 'VOIDED', 'VOIDED', String(oVoidAfter?.status));
         const auditVoid = await prisma.audit_logs.findFirst({ where: { restaurant_id: ridA, action_type: 'ORDER_VOIDED', entity_id: oVoid.id } });
         assert('audit log ORDER_VOIDED written', !!auditVoid, 'present', auditVoid ? 'present' : 'missing');
-        const voidEvents = await prisma.outbox.count({ where: { restaurant_id: ridA, aggregate_id: oVoid.id } });
-        finding('no durable outbox event on void (F-03 class)', voidEvents === 0, `outbox rows for voided order = ${voidEvents}; void is invisible to future cloud/fiscal consumers`);
-        finding('voided_at/voided_by/void_reason columns NEVER written', oVoidAfter?.voided_at === null && oVoidAfter?.void_reason === null, `LossPreventionReport reads these columns; they are write-orphaned (audit lives only in audit_logs)`);
+        assert('voided_at written', !!oVoidAfter?.voided_at, 'present', oVoidAfter?.voided_at ? 'present' : 'missing');
+        assert('voided_by written', !!oVoidAfter?.voided_by, 'present', oVoidAfter?.voided_by ? 'present' : 'missing');
+        assert('void_reason written', oVoidAfter?.void_reason === 'Customer changed mind', 'Customer changed mind', String(oVoidAfter?.void_reason || 'missing'));
+        const voidEvents = await prisma.outbox.count({ where: { restaurant_id: ridA, aggregate_id: oVoid.id, event_type: 'ORDER_VOIDED' } });
+        assert('ORDER_VOIDED outbox event created', voidEvents === 1, '1', `${voidEvents}`);
         const fbCount = await prisma.fire_batches.count({ where: { order_id: oVoid.id } });
-        finding('fire_batches NOT cleared on void (KDS surface)', fbCount === 1, `fire_batches rows still present = ${fbCount}; kitchen display keeps the voided order`);
+        assert('fire_batches cleared on void (KDS surface)', fbCount === 0, '0', `fire_batches rows still present = ${fbCount}`);
 
         // ================ C. Refund boundary ==================================
         console.log('\n[C] Refund boundary — fields guarded, endpoint ceremony-gated');

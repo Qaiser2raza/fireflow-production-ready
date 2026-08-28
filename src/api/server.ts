@@ -1930,7 +1930,7 @@ app.patch('/api/orders/:id', authMiddleware, async (req, res) => {
 
         if (!data.type) data.type = order.type;
 
-        if (data.refund_transaction_id || data.void_notes) {
+        if (data.refund_transaction_id) {
             return res.status(403).json({ error: 'Refund state cannot be set through generic order update', code: 'REFUND_BOUNDARY_VIOLATION' });
         }
 
