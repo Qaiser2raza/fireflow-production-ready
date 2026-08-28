@@ -141,6 +141,12 @@ async function runTests() {
     const restaurantAId = resultA.restaurant.id;
     const restaurantBId = resultB.restaurant.id;
 
+    // Complete onboarding so non-SUPER_ADMIN staff can access protected routes
+    await prisma.restaurants.updateMany({
+        where: { id: { in: [restaurantAId, restaurantBId] } },
+        data: { onboarding_status: 'ACTIVE' },
+    });
+
     // Create staff for each restaurant
     const staffA = await createTestStaff(restaurantAId, 'Manager A', 'MANAGER', '111111');
     const staffB = await createTestStaff(restaurantBId, 'Manager B', 'MANAGER', '222222');
@@ -412,6 +418,143 @@ async function runTests() {
         assert('No cross-tenant menu items leaked', !itemNames.includes('Item B Secret'), 'Item B Secret absent', `${itemNames.join(',')}`);
 
         await prisma.menu_items.delete({ where: { id: menuB.id } });
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
+    // ==========================================
+    // TEST 10: Floor layout cross-tenant enforcement
+    // ==========================================
+    console.log('\n[Test 10] Floor layout cross-tenant enforcement');
+    try {
+        const sectionA = await prisma.sections.create({ data: { restaurant_id: restaurantAId, name: 'Section A', priority: 1 } });
+        const sectionB = await prisma.sections.create({ data: { restaurant_id: restaurantBId, name: 'Section B', priority: 1 } });
+
+        const resA = await fetch(`http://localhost:3001/api/floor/layout/${restaurantAId}`, {
+            headers: { 'Authorization': `Bearer ${tokenA}` },
+        });
+        assert('Restaurant A can read own floor layout', resA.status === 200, '200', `${resA.status}`);
+        const layoutA = await resA.json();
+        assert('Floor layout contains own section', (layoutA.sections || []).some((s: any) => s.name === 'Section A'), 'Section A present', JSON.stringify(layoutA.sections));
+
+        const resB = await fetch(`http://localhost:3001/api/floor/layout/${restaurantBId}`, {
+            headers: { 'Authorization': `Bearer ${tokenA}` },
+        });
+        assert('Restaurant A cannot read Restaurant B floor layout', resB.status === 403, '403', `${resB.status}`);
+
+        await prisma.sections.delete({ where: { id: sectionA.id } });
+        await prisma.sections.delete({ where: { id: sectionB.id } });
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
+    // ==========================================
+    // TEST 11: Customer mutation cross-tenant enforcement
+    // ==========================================
+    console.log('\n[Test 11] Customer mutation cross-tenant enforcement');
+    try {
+        const customerA = await prisma.customers.create({ data: { restaurant_id: restaurantAId, name: 'Customer A', phone: '111' } });
+        const customerB = await prisma.customers.create({ data: { restaurant_id: restaurantBId, name: 'Customer B', phone: '222' } });
+
+        const patchB = await fetch(`http://localhost:3001/api/customers`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${tokenA}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ id: customerB.id, name: 'Hacked Customer' }),
+        });
+        assert('Restaurant A cannot update Restaurant B customer', patchB.status === 403, '403', `${patchB.status}`);
+
+        const patchOwn = await fetch(`http://localhost:3001/api/customers`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${tokenA}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ id: customerA.id, name: 'Customer A Updated' }),
+        });
+        assert('Restaurant A can update own customer', patchOwn.status === 200, '200', `${patchOwn.status}`);
+
+        await prisma.customers.delete({ where: { id: customerA.id } });
+        await prisma.customers.delete({ where: { id: customerB.id } });
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
+    // ==========================================
+    // TEST 12: Vendor mutation cross-tenant enforcement
+    // ==========================================
+    console.log('\n[Test 12] Vendor mutation cross-tenant enforcement');
+    try {
+        const vendorA = await prisma.vendors.create({ data: { restaurant_id: restaurantAId, name: 'Vendor A', category: 'General' } });
+        const vendorB = await prisma.vendors.create({ data: { restaurant_id: restaurantBId, name: 'Vendor B', category: 'General' } });
+
+        const patchB = await fetch(`http://localhost:3001/api/vendors`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${tokenA}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ id: vendorB.id, name: 'Hacked Vendor' }),
+        });
+        assert('Restaurant A cannot update Restaurant B vendor', patchB.status === 403, '403', `${patchB.status}`);
+
+        const patchOwn = await fetch(`http://localhost:3001/api/vendors`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${tokenA}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ id: vendorA.id, name: 'Vendor A Updated' }),
+        });
+        assert('Restaurant A can update own vendor', patchOwn.status === 200, '200', `${patchOwn.status}`);
+
+        await prisma.vendors.delete({ where: { id: vendorA.id } });
+        await prisma.vendors.delete({ where: { id: vendorB.id } });
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
+    // ==========================================
+    // TEST 13: Menu category deletion cross-tenant enforcement
+    // ==========================================
+    console.log('\n[Test 13] Menu category deletion cross-tenant enforcement');
+    try {
+        const categoryA = await prisma.menu_categories.create({ data: { restaurant_id: restaurantAId, name: 'Cat A' } });
+        const categoryB = await prisma.menu_categories.create({ data: { restaurant_id: restaurantBId, name: 'Cat B' } });
+
+        const deleteB = await fetch(`http://localhost:3001/api/menu_categories?id=${categoryB.id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${tokenA}` },
+        });
+        assert('Restaurant A cannot delete Restaurant B menu category', deleteB.status === 403, '403', `${deleteB.status}`);
+
+        const deleteOwn = await fetch(`http://localhost:3001/api/menu_categories?id=${categoryA.id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${tokenA}` },
+        });
+        assert('Restaurant A can delete own menu category', deleteOwn.status === 200, '200', `${deleteOwn.status}`);
+
+        await prisma.menu_categories.delete({ where: { id: categoryB.id } }).catch(() => {});
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
+    // ==========================================
+    // TEST 14: Super-admin role boundary enforcement
+    // ==========================================
+    console.log('\n[Test 14] Super-admin role boundary enforcement');
+    try {
+        const res = await fetch('http://localhost:3001/api/super-admin/licenses', {
+            headers: { 'Authorization': `Bearer ${tokenA}` },
+        });
+        assert('MANAGER cannot access super-admin licenses', res.status === 403, '403', `${res.status}`);
     } catch (e: any) {
         console.log('  FAIL: Exception:', e.message);
         failed++;

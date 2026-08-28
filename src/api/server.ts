@@ -3579,6 +3579,8 @@ app.patch('/api/menu_categories', authMiddleware, async (req, res) => {
 app.delete('/api/menu_categories', authMiddleware, async (req, res) => {
     const { id } = req.query;
     try {
+        const existing = await prisma.menu_categories.findFirst({ where: { id: String(id), restaurant_id: req.restaurantId } });
+        if (!existing) return res.status(403).json({ error: 'Access denied' });
         await prisma.menu_categories.delete({ where: { id: String(id) } });
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'menu_categories', eventType: 'DELETE', id });
         res.json({ success: true });
@@ -3809,8 +3811,11 @@ app.delete('/api/tables', authMiddleware, async (req, res) => {
 });
 
 // Floor Layout
-app.get('/api/floor/layout/:restaurantId', async (req, res) => {
+app.get('/api/floor/layout/:restaurantId', authMiddleware, async (req, res) => {
     const { restaurantId } = req.params;
+    if (restaurantId !== req.restaurantId) {
+        return res.status(403).json({ error: 'Access denied' });
+    }
     try {
         const layout = await getFloorLayout(restaurantId);
         res.json(layout);
@@ -3840,9 +3845,11 @@ app.post('/api/customers', authMiddleware, async (req, res) => {
     }
 });
 
-app.patch('/api/customers', async (req, res) => {
+app.patch('/api/customers', authMiddleware, async (req, res) => {
     const { id, ...data } = req.body;
     try {
+        const existing = await prisma.customers.findFirst({ where: { id, restaurant_id: req.restaurantId } });
+        if (!existing) return res.status(403).json({ error: 'Access denied' });
         const customer = await prisma.customers.update({ where: { id }, data });
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'customers', eventType: 'UPDATE', data: customer });
         res.json(customer);
@@ -3868,9 +3875,11 @@ app.post('/api/vendors', authMiddleware, async (req, res) => {
     }
 });
 
-app.patch('/api/vendors', async (req, res) => {
+app.patch('/api/vendors', authMiddleware, async (req, res) => {
     const { id, ...data } = req.body;
     try {
+        const existing = await prisma.vendors.findFirst({ where: { id, restaurant_id: req.restaurantId } });
+        if (!existing) return res.status(403).json({ error: 'Access denied' });
         const vendor = await prisma.vendors.update({ where: { id }, data });
         io.to(`restaurant:${req.restaurantId}`).emit('db_change', { table: 'vendors', eventType: 'UPDATE', data: vendor });
         res.json(vendor);

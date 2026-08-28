@@ -13,9 +13,9 @@ import { prisma } from '../../shared/lib/prisma';
 
 const router = Router();
 
-// All super-admin routes require authentication + elevated role
+// All super-admin routes require authentication + SUPER_ADMIN role
 router.use(authMiddleware);
-router.use(requireRole('SUPER_ADMIN', 'MANAGER'));
+router.use(requireRole('SUPER_ADMIN'));
 
 // ==========================================
 // LICENSE KEY MANAGEMENT
