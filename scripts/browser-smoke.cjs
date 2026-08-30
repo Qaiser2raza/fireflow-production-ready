@@ -11,7 +11,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const APP = 'http://localhost:3000';
 const DEBUG_PORT = 9223;
 const EVIDENCE = path.join(__dirname, 'evidence');

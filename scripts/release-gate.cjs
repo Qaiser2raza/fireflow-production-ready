@@ -130,6 +130,16 @@ async function main() {
     await waitForPort(3001);
     log('BOOT api ready');
 
+    // ---- 1b. optional browser smoke (RUN_BROWSER_SMOKE=true) ----
+    // Requires Vite dev server running on :3000 (npm run dev) AND API on :3001.
+    // Only for local full-stack verification; skipped in CI by default.
+    if (process.env.RUN_BROWSER_SMOKE === 'true') {
+        const code = await run('browser authentication smoke', 'node scripts/browser-smoke.cjs');
+        if (code !== 0) failed = true;
+    } else {
+        log('SKIP browser smoke (set RUN_BROWSER_SMOKE=true to enable; requires Vite on :3000)');
+    }
+
     // ---- 2. suites — strictly sequential by design ----
     const suites = [
         'gate db safety guard                  ', 'npx tsx tests/gate-db-guard.test.ts',
