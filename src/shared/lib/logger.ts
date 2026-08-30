@@ -248,7 +248,7 @@ export function requestLoggerMiddleware(req: any, res: any, next: any): void {
       {
         level: isError ? LogLevel.WARN : LogLevel.INFO,
         service: 'api',
-        restaurant_id: req.restaurant_id || req.body?.restaurant_id,
+        restaurant_id: req.restaurantId || req.body?.restaurant_id,
         user_id: req.user?.id,
         staff_id: req.user?.id, // Keep for backward compatibility
         action: `${req.method} ${req.path}`,

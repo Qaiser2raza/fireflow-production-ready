@@ -323,6 +323,58 @@ async function runTests() {
     }
 
     // ==========================================
+    // REGRESSION TEST: Audit log tenant context (TD-15 / M025-C)
+    // Verifies the request logger captures req.restaurantId (canonical field)
+    // rather than req.restaurant_id (never set by any middleware).
+    // Strategy: directly invoke requestLoggerMiddleware with a mocked
+    // req that mirrors what authMiddleware sets, capture the logger.log
+    // call payload by stubbing it on the singleton, then assert the
+    // restaurant_id comes from req.restaurantId and NOT req.body.
+    // ==========================================
+    console.log('\n[Regression] Audit log tenant context captured correctly');
+    try {
+        const { logger, requestLoggerMiddleware } = await import('../src/shared/lib/logger.js');
+        const captured: any[] = [];
+        const originalLog = logger.log.bind(logger);
+        (logger as any).log = (entry: any) => { captured.push(entry); };
+
+        const mkReq = (restaurantId: string | undefined, body: any) => ({
+            method: 'GET',
+            path: '/api/test',
+            ip: '127.0.0.1',
+            get: () => 'test-agent',
+            restaurantId,
+            body,
+            query: {},
+        } as any);
+        const mkRes = () => {
+            const r: any = { statusCode: 200 };
+            r.setHeader = () => undefined;
+            r.on = (ev: string, cb: () => void) => { if (ev === 'finish') (r as any)._finish = cb; };
+            return r;
+        };
+
+        const r1 = mkRes(); requestLoggerMiddleware(mkReq(restaurantAId, {}), r1, () => undefined);
+        (r1 as any)._finish();
+
+        const r2 = mkRes(); requestLoggerMiddleware(mkReq(undefined, { restaurant_id: restaurantBId }), r2, () => undefined);
+        (r2 as any)._finish();
+
+        const r3 = mkRes(); requestLoggerMiddleware(mkReq(restaurantAId, { restaurant_id: restaurantBId }), r3, () => undefined);
+        (r3 as any)._finish();
+
+        (logger as any).log = originalLog;
+
+        assert('Logger received entries for all three requests', captured.length === 3, '3', `${captured.length}`);
+        assert('Authenticated req.restaurantId is captured (A)', captured[0]?.restaurant_id === restaurantAId, restaurantAId, `${captured[0]?.restaurant_id}`);
+        assert('Body fallback works when req.restaurantId absent', captured[1]?.restaurant_id === restaurantBId, restaurantBId, `${captured[1]?.restaurant_id}`);
+        assert('req.restaurantId takes precedence over body (A overrides B)', captured[2]?.restaurant_id === restaurantAId, restaurantAId, `${captured[2]?.restaurant_id}`);
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
+    // ==========================================
     // TEST 6: Inactive staff rejection
     // ==========================================
     console.log('\n[Test 6] Inactive staff rejection');
