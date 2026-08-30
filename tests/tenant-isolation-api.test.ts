@@ -560,6 +560,39 @@ async function runTests() {
         failed++;
     }
 
+    // ==========================================
+    // TEST 15: Subscription payments super-admin boundary
+    // ==========================================
+    console.log('\n[Test 15] Subscription payments super-admin boundary');
+    try {
+        const res = await fetch('http://localhost:3001/api/subscription_payments', {
+            headers: { 'Authorization': `Bearer ${tokenA}` },
+        });
+        assert('MANAGER cannot access subscription_payments', res.status === 403, '403', `${res.status}`);
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
+    // ==========================================
+    // TEST 16: System reset-environment super-admin boundary
+    // ==========================================
+    console.log('\n[Test 16] System reset-environment super-admin boundary');
+    try {
+        const res = await fetch(`http://localhost:3001/api/system/reset-environment`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${tokenA}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({}),
+        });
+        assert('MANAGER cannot access system/reset-environment', res.status === 403, '403', `${res.status}`);
+    } catch (e: any) {
+        console.log('  FAIL: Exception:', e.message);
+        failed++;
+    }
+
     // Cleanup
     await cleanupRestaurant(restaurantAId);
     await cleanupRestaurant(restaurantBId);

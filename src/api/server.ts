@@ -3096,7 +3096,7 @@ app.use('/api/platform', platformRoutes);
 app.use('/api', protectedApiRouter);
 
 // Standalone subscription_payments route — queries Supabase cloud (table not in local DB)
-app.get('/api/subscription_payments', authMiddleware, requireRole('SUPER_ADMIN', 'MANAGER'), async (_req, res) => {
+app.get('/api/subscription_payments', authMiddleware, requireRole('SUPER_ADMIN'), async (_req, res) => {
     try {
         const { getSupabaseClient } = await import('../shared/lib/cloudClient');
         const cloud = getSupabaseClient();
@@ -4131,7 +4131,7 @@ app.post('/api/system/seed-restaurant', authMiddleware, requireRole('MANAGER', '
     }
 });
 
-app.post('/api/system/reset-environment', authMiddleware, requireRole('SUPER_ADMIN', 'MANAGER'), async (req, res) => {
+app.post('/api/system/reset-environment', authMiddleware, requireRole('SUPER_ADMIN'), async (req, res) => {
     const restaurant_id = req.restaurantId;
     if (!restaurant_id) return res.status(400).json({ error: 'Restaurant ID required' });
 
