@@ -158,34 +158,23 @@ export class PaymentDispatcher {
     return result;
   }
 
-  private async completeAttempt(attemptId: string, paymentId: string, result: PaymentResult): Promise<void> {
-    const attemptUpdateData: any = {
-      completed_at: new Date(),
-    };
-
-    let attemptStatus: string;
-    if (result.outcome === 'PAID') {
-      attemptStatus = 'COMPLETED';
-      attemptUpdateData.external_reference = result.externalReference || null;
-    } else if (result.outcome === 'FAILED') {
-      attemptStatus = 'DEAD_LETTER';
-      attemptUpdateData.last_error = result.errorMessage;
-    } else {
-      attemptStatus = 'UNKNOWN';
-      attemptUpdateData.last_error = result.errorMessage;
+  private async applyPaymentOutcome(paymentId: string, result: PaymentResult, attemptId?: string): Promise<void> {
+    if (attemptId) {
+      const attemptUpdateData: any = { completed_at: new Date() };
+      if (result.outcome === 'PAID') {
+        attemptUpdateData.status = 'COMPLETED';
+        attemptUpdateData.external_reference = result.externalReference || null;
+      } else if (result.outcome === 'FAILED') {
+        attemptUpdateData.status = 'DEAD_LETTER';
+        attemptUpdateData.last_error = result.errorMessage;
+      } else {
+        attemptUpdateData.status = 'UNKNOWN';
+        attemptUpdateData.last_error = result.errorMessage;
+      }
+      await prisma.payment_attempts.update({ where: { id: attemptId }, data: attemptUpdateData });
     }
 
-    attemptUpdateData.status = attemptStatus;
-
-    await prisma.payment_attempts.update({
-      where: { id: attemptId },
-      data: attemptUpdateData,
-    });
-
-    const paymentUpdateData: any = {
-      updated_at: new Date(),
-    };
-
+    const paymentUpdateData: any = { updated_at: new Date() };
     if (result.outcome === 'PAID') {
       paymentUpdateData.status = 'PAID';
       paymentUpdateData.external_reference = result.externalReference || null;
@@ -194,11 +183,11 @@ export class PaymentDispatcher {
     } else if (result.outcome === 'UNKNOWN') {
       paymentUpdateData.status = 'UNKNOWN';
     }
+    await prisma.payments.update({ where: { id: paymentId }, data: paymentUpdateData });
+  }
 
-    await prisma.payments.update({
-      where: { id: paymentId },
-      data: paymentUpdateData,
-    });
+  private async completeAttempt(attemptId: string, paymentId: string, result: PaymentResult): Promise<void> {
+    await this.applyPaymentOutcome(paymentId, result, attemptId);
   }
 
   private classifyPaymentStatus(status: string, externalReference?: string | null): PaymentResult | null {
@@ -208,54 +197,51 @@ export class PaymentDispatcher {
     return null;
   }
 
-  async reconcileUnknown(paymentId: string, context: PaymentExecutionContext, resolvedOutcome: 'PAID' | 'FAILED'): Promise<void> {
+  async authoritativeReconcile(paymentId: string, context: PaymentExecutionContext): Promise<PaymentResult> {
     const payment = await prisma.payments.findFirst({
-      where: {
-        id: paymentId,
-        restaurant_id: context.restaurantId,
-      },
+      where: { id: paymentId, restaurant_id: context.restaurantId },
     });
-
-    if (!payment) {
-      throw new Error('Payment not found or unauthorized');
-    }
-
+    if (!payment) throw new Error('Payment not found or unauthorized');
     if (payment.status !== 'UNKNOWN') {
-      throw new Error(`Payment is not UNKNOWN: ${payment.status}`);
+      return this.classifyPaymentStatus(payment.status, payment.external_reference) || { outcome: 'UNKNOWN', errorCode: 'PAYMENT_NOT_UNKNOWN', errorMessage: `Payment is not UNKNOWN: ${payment.status}` };
     }
 
-    await prisma.payments.update({
-      where: { id: paymentId },
-      data: {
-        status: resolvedOutcome,
-        updated_at: new Date(),
-      },
+    const registry = PaymentRegistry.getInstance();
+    const provider = registry.get(payment.provider);
+    if (!provider) throw new Error(`Payment provider not registered: ${payment.provider}`);
+
+    const statusResult = await (provider as any).retrieveStatus({
+      paymentId: payment.id,
+      restaurantId: context.restaurantId,
+      orderId: payment.order_id,
+      providerReference: payment.external_reference || paymentId,
+      correlationId: context.correlationId,
     });
 
-    const attempts = await prisma.payment_attempts.findMany({
+    const latestAttempt = await prisma.payment_attempts.findFirst({
       where: { payment_id: paymentId },
       orderBy: { created_at: 'desc' },
-      take: 1,
     });
+    await this.applyPaymentOutcome(paymentId, statusResult, latestAttempt?.id);
+    return statusResult;
+  }
 
-    if (attempts.length > 0) {
-      const attemptUpdateData: any = {
-        completed_at: new Date(),
-      };
+  async reconcileUnknown(paymentId: string, context: PaymentExecutionContext, resolvedOutcome: 'PAID' | 'FAILED'): Promise<void> {
+    const payment = await prisma.payments.findFirst({
+      where: { id: paymentId, restaurant_id: context.restaurantId },
+    });
+    if (!payment) throw new Error('Payment not found or unauthorized');
+    if (payment.status !== 'UNKNOWN') throw new Error(`Payment is not UNKNOWN: ${payment.status}`);
 
-      if (resolvedOutcome === 'PAID') {
-        attemptUpdateData.status = 'COMPLETED';
-        attemptUpdateData.last_error = null;
-      } else {
-        attemptUpdateData.status = 'DEAD_LETTER';
-        attemptUpdateData.last_error = 'Reconciled as FAILED';
-      }
+    const result: PaymentResult = resolvedOutcome === 'PAID'
+      ? { outcome: 'PAID' }
+      : { outcome: 'FAILED', errorCode: 'CLIENT_RECONCILED', errorMessage: 'Reconciled as FAILED by client' };
 
-      await prisma.payment_attempts.update({
-        where: { id: attempts[0].id },
-        data: attemptUpdateData,
-      });
-    }
+    const latestAttempt = await prisma.payment_attempts.findFirst({
+      where: { payment_id: paymentId },
+      orderBy: { created_at: 'desc' },
+    });
+    await this.applyPaymentOutcome(paymentId, result, latestAttempt?.id);
   }
 
   // ─── Refund path (M018 F-02) ────────────────────────────────────────────

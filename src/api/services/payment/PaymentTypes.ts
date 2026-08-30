@@ -7,6 +7,7 @@ export type PaymentExecutionContext = {
   requestIdempotencyKey: string;
   providerIdempotencyKey: string;
   source: "PAYMENT_DISPATCHER";
+  customerMobile?: string;
 };
 
 export type PaymentRequest = {
@@ -34,12 +35,38 @@ export type PaymentResult =
       errorMessage: string;
     };
 
+export type PaymentStatusRequest = {
+  paymentId: string;
+  restaurantId: string;
+  orderId: string;
+  providerReference: string;
+  correlationId: string;
+};
+
+export type PaymentStatusResult =
+  | {
+      outcome: "PAID";
+      providerStatus?: string;
+    }
+  | {
+      outcome: "FAILED";
+      errorCode: string;
+      errorMessage: string;
+    }
+  | {
+      outcome: "UNKNOWN";
+      errorCode: string;
+      errorMessage: string;
+    };
+
 export interface PaymentProvider {
   readonly type: string;
   readonly version: string;
   readonly capabilities: readonly string[];
 
   send(request: PaymentRequest): Promise<PaymentResult>;
+
+  retrieveStatus?(request: PaymentStatusRequest): Promise<PaymentStatusResult>;
 
   // M018 F-02: optional money-outward capability. Providers that cannot
   // reverse simply leave this undefined; the dispatcher refuses refund

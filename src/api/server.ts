@@ -140,6 +140,21 @@ const mockPaymentProvider = new MockPaymentProvider();
 paymentRegistry.register(mockPaymentProvider);
 const paymentDispatcher = PaymentDispatcher.getInstance();
 
+// M023: Register JazzCash sandbox provider when explicitly configured.
+// Invalid/missing JazzCash configuration must fail startup rather than
+// silently falling back to mock payments in a non-test environment.
+if (process.env.JAZZCASH_MERCHANT_ID) {
+    try {
+        const { JazzCashProvider } = require('./api/services/payment/providers/JazzCashProvider');
+        paymentRegistry.register(new JazzCashProvider());
+    } catch (e: any) {
+        console.error('[BOOT] JazzCash provider registration failed:', e.message);
+        if (process.env.NODE_ENV !== 'test') {
+            throw e;
+        }
+    }
+}
+
 // Register mock fiscal provider for Mission 012
 const fiscalRegistry = FiscalRegistry.getInstance();
 const mockFiscalProvider = new MockFiscalProvider();
@@ -2477,10 +2492,6 @@ app.patch('/api/restaurant/flow-mode', authMiddleware, requireRole('MANAGER', 'A
 app.post('/api/payments/:id/reconcile', authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { outcome } = req.body || {};
-        if (outcome !== 'PAID' && outcome !== 'FAILED') {
-            return res.status(400).json({ error: 'outcome must be PAID or FAILED' });
-        }
         const payment = await prisma.payments.findFirst({
             where: { id, restaurant_id: req.restaurantId }
         });
@@ -2490,16 +2501,43 @@ app.post('/api/payments/:id/reconcile', authMiddleware, async (req, res) => {
         if (payment.status !== 'UNKNOWN') {
             return res.status(409).json({ error: `Payment is not UNKNOWN (status: ${payment.status})` });
         }
-        await paymentDispatcher.reconcileUnknown(payment.id, {
-            paymentId: payment.id,
-            restaurantId: req.restaurantId as string,
-            orderId: payment.order_id,
-            staffId: req.staffId || '',
-            correlationId: `reconcile:${payment.id}`,
-            requestIdempotencyKey: `reconcile:${payment.id}`,
-            providerIdempotencyKey: '', // unused by reconcileUnknown
-            source: 'PAYMENT_DISPATCHER',
-        }, outcome);
+
+        const registry = PaymentRegistry.getInstance();
+        const provider = registry.get(payment.provider);
+
+        if (payment.provider === 'MOCK_PAYMENT') {
+            const { outcome } = req.body || {};
+            if (outcome !== 'PAID' && outcome !== 'FAILED') {
+                return res.status(400).json({ error: 'outcome must be PAID or FAILED' });
+            }
+            await paymentDispatcher.reconcileUnknown(payment.id, {
+                paymentId: payment.id,
+                restaurantId: req.restaurantId as string,
+                orderId: payment.order_id,
+                staffId: req.staffId || '',
+                correlationId: `reconcile:${payment.id}`,
+                requestIdempotencyKey: `reconcile:${payment.id}`,
+                providerIdempotencyKey: '',
+                source: 'PAYMENT_DISPATCHER',
+            }, outcome);
+        } else if (provider && typeof (provider as any).retrieveStatus === 'function') {
+            const result = await paymentDispatcher.authoritativeReconcile(payment.id, {
+                paymentId: payment.id,
+                restaurantId: req.restaurantId as string,
+                orderId: payment.order_id,
+                staffId: req.staffId || '',
+                correlationId: `reconcile:${payment.id}`,
+                requestIdempotencyKey: `reconcile:${payment.id}`,
+                providerIdempotencyKey: '',
+                source: 'PAYMENT_DISPATCHER',
+            });
+            const updated = await prisma.payments.findUnique({ where: { id: payment.id } });
+            res.json({ success: true, payment: updated, outcome: result.outcome });
+            return;
+        } else {
+            return res.status(400).json({ error: 'Provider does not support reconciliation' });
+        }
+
         const updated = await prisma.payments.findUnique({ where: { id: payment.id } });
         res.json({ success: true, payment: updated });
     } catch (e: any) {

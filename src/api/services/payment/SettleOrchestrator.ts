@@ -1,5 +1,6 @@
 import { prisma } from '../../../shared/lib/prisma';
 import { PaymentDispatcher } from './PaymentDispatcher';
+import { resolveProvider } from './PaymentProviderResolver';
 import crypto from 'crypto';
 
 // M017-B: method-routed completion. CASH settles synchronously inside the
@@ -30,8 +31,6 @@ export type ProviderResolution =
     | { outcome: 'FAILED'; method: string; paymentId: string; errorMessage: string }
     | { outcome: 'UNKNOWN'; method: string; paymentId: string };
 
-const PROVIDER_TYPE = 'MOCK_PAYMENT'; // founder provider decision swaps THIS only
-
 export async function resolveProviderLines(params: {
     restaurantId: string;
     orderId: string;
@@ -45,6 +44,8 @@ export async function resolveProviderLines(params: {
         const upperMethod = line.method.toUpperCase();
         const requestKey = `settle:${params.orderId}:${upperMethod}`.slice(0, 100);
         const settleLineKey = `SETTLE_LINE:${params.restaurantId}:${params.orderId}:${upperMethod}`.slice(0, 120);
+        const providerResolution = resolveProvider({ restaurantId: params.restaurantId, paymentMethod: upperMethod });
+        const providerType = providerResolution.providerType;
 
         // L1 storage uniqueness (PA-1): the database admits exactly one
         // payments aggregate per logical settle line. P2002 losers converge on
@@ -58,7 +59,7 @@ export async function resolveProviderLines(params: {
                     amount: line.amount,
                     currency: 'PKR',
                     status: 'PENDING',
-                    provider: PROVIDER_TYPE,
+                    provider: providerType,
                     settle_line_key: settleLineKey,
                 },
             });

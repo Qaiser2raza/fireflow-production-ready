@@ -30,7 +30,6 @@ const REFUND_REASON_CODES = ['CUSTOMER_REQUEST', 'ORDER_ERROR', 'FOOD_QUALITY', 
 
 const DIGITAL_METHODS = new Set(['CARD', 'RAAST', 'JAZZCASH', 'EASYPAISA', 'NAYAPAY', 'SADAPAY']);
 
-const PROVIDER_TYPE = 'MOCK_PAYMENT'; // founder provider decision swaps THIS only
 const CASH_DRAWER_PROVIDER = 'CASH_DRAWER';
 
 const accounting = new AccountingService();
@@ -220,6 +219,25 @@ export class RefundService {
         let refund = await prisma.refunds.findFirst({ where: { refund_key: refundKey } });
         let created = false;
 
+        // ── Provider selection: use the original payment/provider record,
+        // not a newly guessed provider from today's environment. The refund
+        // must ride the same rail that carried the original payment.
+        let refundProvider = CASH_DRAWER_PROVIDER;
+        if (hasDigitalTender) {
+            const orderPayments = await prisma.payments.findMany({
+                where: { order_id: orderId, restaurant_id: restaurantId },
+                select: { provider: true },
+            });
+            const usedProviders = [...new Set(orderPayments.map(p => p.provider))];
+            if (usedProviders.includes('JAZZCASH')) {
+                refundProvider = 'JAZZCASH';
+            } else if (usedProviders.includes('MOCK_PAYMENT')) {
+                refundProvider = 'MOCK_PAYMENT';
+            } else if (usedProviders.length > 0) {
+                refundProvider = usedProviders[0];
+            }
+        }
+
         if (!refund) {
             try {
                 refund = await prisma.refunds.create({
@@ -230,7 +248,7 @@ export class RefundService {
                         amount: order.total,
                         currency: 'PKR',
                         status: 'PENDING',
-                        provider: hasDigitalTender ? PROVIDER_TYPE : CASH_DRAWER_PROVIDER,
+                        provider: refundProvider,
                         reason_code: reasonCode,
                         ...(reasonDetail ? { reason_detail: reasonDetail } : {}),
                         ...(sessionId ? { session_id: sessionId } : {}),
