@@ -265,6 +265,8 @@ model inventory_items {
   current_stock        Decimal                @default(0) @db.Decimal(10, 4)
   minimum_stock        Decimal                @default(0) @db.Decimal(10, 4)
   unit_cost            Decimal                @default(0) @db.Decimal(10, 4)
+  average_unit_cost    Decimal                @default(0) @db.Decimal(15, 4)
+  total_cost_basis     Decimal                @default(0) @db.Decimal(15, 4)
   category             String?                @db.VarChar(50)
   created_at           DateTime               @default(now())
   updated_at           DateTime               @default(now())
@@ -278,7 +280,7 @@ model journal_entries {
   id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id       String                @db.Uuid
   reference_type      String                @db.VarChar(50)
-  reference_id        String?
+  reference_id        String?               @db.VarChar(100)
   date                DateTime              @db.Timestamp(6)
   description         String?
   processed_by        String?
@@ -1123,6 +1125,7 @@ enum CustomerLedgerEntryType {
 enum StockMovementType {
   RECEIVE
   ADJUSTMENT
+  CONSUME
 }
 
 model stock_movements {
@@ -1131,14 +1134,15 @@ model stock_movements {
   inventory_item_id   String              @db.Uuid
   movement_type       StockMovementType
   quantity            Decimal             @db.Decimal(10, 4)
-  unit_cost           Decimal             @default(0) @db.Decimal(10, 4)
+  unit_cost           Decimal             @default(0) @db.Decimal(15, 4)
+  total_cost          Decimal             @default(0) @db.Decimal(15, 4)
   reference_type      String              @db.VarChar(50)
   reference_id        String?             @db.Uuid
   po_line_id          String?             @db.Uuid
   stock_count_line_id String?             @db.Uuid
-  operation_key       String              @db.VarChar(120)
-  created_by          String?
-  created_at          DateTime            @default(now())
+   operation_key       String              @db.VarChar(120)
+   created_by          String?             @db.VarChar(120)
+   created_at          DateTime            @default(now())
   purchase_order_items purchase_order_items? @relation(fields: [po_line_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   stock_count_lines   stock_count_lines?  @relation(fields: [stock_count_line_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   restaurants         restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
@@ -1152,8 +1156,8 @@ model stock_counts {
   id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id     String              @db.Uuid
   status            String              @default("OPEN") @db.VarChar(20)
-  counted_by        String?             @db.Uuid
-  finalized_by      String?             @db.Uuid
+  counted_by        String?             @db.VarChar(120)
+  finalized_by      String?             @db.VarChar(120)
   finalized_at      DateTime?
   operation_key     String              @unique @db.VarChar(120)
   created_at        DateTime            @default(now())

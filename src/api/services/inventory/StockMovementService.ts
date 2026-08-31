@@ -1,7 +1,7 @@
 import { prisma } from '../../../shared/lib/prisma';
 import { Decimal } from '@prisma/client/runtime/library';
 
-export type StockMovementType = 'RECEIVE' | 'ADJUSTMENT';
+export type StockMovementType = 'RECEIVE' | 'ADJUSTMENT' | 'CONSUME';
 
 export interface CreateStockMovementParams {
     restaurantId: string;
@@ -24,6 +24,7 @@ export interface StockMovementResult {
     movementType: StockMovementType;
     quantity: Decimal;
     unitCost: Decimal;
+    totalCost: Decimal;
     referenceType: string;
     referenceId: string | null;
     poLineId: string | null;
@@ -34,7 +35,7 @@ export interface StockMovementResult {
 }
 
 export class StockMovementService {
-    private static readonly VALID_MOVEMENT_TYPES: StockMovementType[] = ['RECEIVE', 'ADJUSTMENT'];
+    private static readonly VALID_MOVEMENT_TYPES: StockMovementType[] = ['RECEIVE', 'ADJUSTMENT', 'CONSUME'];
     private static readonly VALID_REFERENCE_TYPES = ['PURCHASE_ORDER', 'STOCK_COUNT', 'MANUAL_ADJUSTMENT', 'RECIPE_USAGE', 'WASTE', 'TRANSFER'];
 
     static async createMovement(params: CreateStockMovementParams, tx?: any): Promise<StockMovementResult> {
@@ -56,6 +57,7 @@ export class StockMovementService {
 
         const quantity = new Decimal(params.quantity.toString());
         const unitCost = new Decimal((params.unitCost || 0).toString());
+        const totalCost = quantity.times(unitCost);
 
         if (quantity.isZero()) {
             throw new Error('Stock movement quantity cannot be zero');
@@ -68,6 +70,7 @@ export class StockMovementService {
                 movement_type: params.movementType,
                 quantity,
                 unit_cost: unitCost,
+                total_cost: totalCost,
                 reference_type: params.referenceType,
                 reference_id: params.referenceId || null,
                 po_line_id: params.poLineId || null,
@@ -146,7 +149,7 @@ export class StockMovementService {
             throw new Error('movementType is required');
         }
         if (!this.VALID_MOVEMENT_TYPES.includes(params.movementType)) {
-            throw new Error(`Invalid movementType: ${params.movementType}. Must be RECEIVE or ADJUSTMENT`);
+            throw new Error(`Invalid movementType: ${params.movementType}. Must be RECEIVE, ADJUSTMENT, or CONSUME`);
         }
         if (params.quantity === undefined || params.quantity === null) {
             throw new Error('quantity is required');
@@ -165,6 +168,9 @@ export class StockMovementService {
         }
         if (params.movementType === 'ADJUSTMENT' && !params.stockCountLineId && params.referenceType !== 'MANUAL_ADJUSTMENT') {
             throw new Error('stockCountLineId or MANUAL_ADJUSTMENT referenceType is required for ADJUSTMENT movements');
+        }
+        if (params.movementType === 'CONSUME' && !params.referenceType) {
+            throw new Error('referenceType is required for CONSUME movements');
         }
     }
 
@@ -236,6 +242,7 @@ export class StockMovementService {
             movementType: movement.movement_type,
             quantity: movement.quantity,
             unitCost: movement.unit_cost,
+            totalCost: movement.total_cost,
             referenceType: movement.reference_type,
             referenceId: movement.reference_id,
             poLineId: movement.po_line_id,

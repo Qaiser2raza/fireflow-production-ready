@@ -1153,6 +1153,100 @@ export class JournalEntryService {
     }
 
     /**
+     * POST ORDER COGS JOURNAL
+     * ─────────────────────────────────────────────────────────────────────
+     * Called when an order reaches SERVED status and inventory is consumed.
+     * Creates the COGS journal entry that pairs with the CONSUME stock movements.
+     *
+     * DR  5020  Cost of Goods Sold (COGS)   totalCogs
+     * CR  1060  Inventory Asset             totalCogs
+     *
+     * Idempotent: safe to call multiple times for the same order — uses
+     * database unique constraint on journal_entries(reference_type, reference_id) WHERE reference_type = 'ORDER_COGS'
+     */
+    async recordOrderCOGSJournal(params: {
+        restaurantId: string;
+        orderId: string;
+        totalCogs: number | Decimal;
+        consumedItems: Array<{
+            inventoryItemId: string;
+            inventoryItemName: string;
+            quantityConsumed: Decimal;
+            unitCost: Decimal;
+            totalCost: Decimal;
+        }>;
+        processedBy?: string;
+    }, tx: any) {
+        const db = tx;
+
+        // Idempotency: skip if already journalised
+        const existing = await db.journal_entries.findFirst({
+            where: { reference_type: 'ORDER_COGS', reference_id: params.orderId, restaurant_id: params.restaurantId }
+        });
+        if (existing) return existing;
+
+        const [cogsAcc, inventoryAcc] = await Promise.all([
+            resolveAccount(params.restaurantId, GL.COGS, db),
+            resolveAccount(params.restaurantId, GL.INVENTORY_ASSET, db),
+        ]);
+
+        if (!cogsAcc || !inventoryAcc) {
+            console.warn(`[JE] recordOrderCOGSJournal: COA accounts missing for restaurant ${params.restaurantId}. COGS=5020=${!!cogsAcc}, Inventory=1060=${!!inventoryAcc}. Skipping journal.`);
+            return;
+        }
+
+        const totalCogs = new Decimal(params.totalCogs.toString());
+        if (totalCogs.isZero()) {
+            // Zero COGS – nothing to post
+            return;
+        }
+
+        const date = new Date();
+        const description = `COGS for Order ${params.orderId}`;
+
+        // Build line descriptions from consumed items
+        const cogsLines = params.consumedItems.map(item =>
+            `${item.inventoryItemName}: ${item.quantityConsumed} @ ${item.unitCost} = ${item.totalCost}`
+        ).join('; ');
+
+        try {
+            await postJournal({
+                restaurantId: params.restaurantId,
+                referenceType: 'ORDER_COGS',
+                referenceId: params.orderId,
+                date,
+                description: cogsLines || description,
+                processedBy: params.processedBy || 'system',
+                lines: [
+                    {
+                        accountId: cogsAcc.id,
+                        description: 'Cost of Goods Sold',
+                        debit: totalCogs,
+                        referenceType: 'ORDER_COGS',
+                        referenceId: params.orderId,
+                        meta: { consumedItems: params.consumedItems }
+                    },
+                    {
+                        accountId: inventoryAcc.id,
+                        description: 'Inventory Consumption',
+                        credit: totalCogs,
+                        referenceType: 'ORDER_COGS',
+                        referenceId: params.orderId,
+                        meta: { consumedItems: params.consumedItems }
+                    }
+                ],
+            }, db);
+        } catch (err: any) {
+            if (err?.code === 'P2002') {
+                // Concurrent insert — unique constraint prevented duplicate
+                // This is expected behavior; idempotency is guaranteed by DB constraint
+                return;
+            }
+            throw err;
+        }
+    }
+
+    /**
      * POST SUPPLIER PAYMENT JOURNAL
      */
     async recordSupplierPaymentJournal(params: {

@@ -1,6 +1,7 @@
 import { prisma } from '../../../shared/lib/prisma';
 import { Decimal } from '@prisma/client/runtime/library';
 import { StockMovementService, StockMovementResult } from './StockMovementService';
+import { wacProjectionService } from './WACProjectionService';
 
 export interface ReceivePOLineParams {
     restaurantId: string;
@@ -108,6 +109,14 @@ export class PurchaseOrderReceiveService {
                 operationKey: params.operationKey,
                 createdBy: params.createdBy
             }, txInner);
+
+            await wacProjectionService.updateAverageCost(
+                poLine.inventory_item_id,
+                params.restaurantId,
+                quantity,
+                new Decimal(poLine.unit_price.toString()),
+                txInner
+            );
 
             const updatedPOLine = await txInner.purchase_order_items.update({
                 where: { id: params.poLineId },

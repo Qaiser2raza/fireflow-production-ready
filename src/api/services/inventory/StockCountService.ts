@@ -1,6 +1,7 @@
 import { prisma } from '../../../shared/lib/prisma';
 import { Decimal } from '@prisma/client/runtime/library';
 import { StockMovementService, StockMovementResult } from './StockMovementService';
+import { wacProjectionService } from './WACProjectionService';
 
 export type StockCountStatus = 'OPEN' | 'FINALIZING' | 'CLOSED';
 
@@ -282,6 +283,14 @@ export class StockCountService {
                 where: { operation_key: operationKey, restaurant_id: params.restaurantId }
             });
 
+            const currentItem = await db.inventory_items.findFirst({
+                where: { id: line.inventory_item_id, restaurant_id: params.restaurantId },
+                select: { average_unit_cost: true, unit_cost: true }
+            });
+            const wacUnitCost = (currentItem?.average_unit_cost && !new Decimal(currentItem.average_unit_cost.toString()).isZero())
+                ? new Decimal(currentItem.average_unit_cost.toString())
+                : (line.inventory_items?.unit_cost || 0);
+
             let movement: StockMovementResult | null = null;
 
             if (!existingMovement) {
@@ -290,13 +299,21 @@ export class StockCountService {
                     inventoryItemId: line.inventory_item_id,
                     movementType: 'ADJUSTMENT',
                     quantity: difference.abs(),
-                    unitCost: line.inventory_items?.unit_cost || 0,
+                    unitCost: wacUnitCost,
                     referenceType: 'STOCK_COUNT',
                     referenceId: params.stockCountId,
                     stockCountLineId: line.id,
                     operationKey,
                     createdBy: params.finalizedBy
                 }, db);
+
+                await wacProjectionService.updateAverageCost(
+                    line.inventory_item_id,
+                    params.restaurantId,
+                    difference,
+                    new Decimal(wacUnitCost.toString()),
+                    db
+                );
             } else {
                 movement = StockMovementService['formatMovement'](existingMovement);
             }

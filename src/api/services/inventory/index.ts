@@ -1,3 +1,5 @@
 export { StockMovementService, stockMovementService, type StockMovementType, type CreateStockMovementParams, type StockMovementResult } from './StockMovementService';
 export { PurchaseOrderReceiveService, purchaseOrderReceiveService, type ReceivePOLineParams, type ReceivePOLineResult } from './PurchaseOrderReceiveService';
 export { StockCountService, stockCountService, type StockCountStatus, type CreateStockCountParams, type StockCountResult, type CreateStockCountLineParams, type StockCountLineResult, type FinalizeStockCountParams, type ReconciliationResult } from './StockCountService';
+export { WACProjectionService, wacProjectionService, type WACProjection, type RecalcWACResult } from './WACProjectionService';
+export { InventoryConsumptionService, inventoryConsumptionService, type ConsumeOrderParams, type ConsumeOrderResult } from './InventoryConsumptionService';
