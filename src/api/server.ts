@@ -3158,32 +3158,42 @@ app.get('/api/subscription_payments', authMiddleware, requireRole('SUPER_ADMIN')
  * PATCH /api/orders/:id/guest-count
  * Update guest count with capacity check
  */
-app.patch('/api/orders/:id/guest-count', async (req, res) => {
-    const { id } = req.params;
-    const { guest_count, allow_over_capacity = true } = req.body;
-    const staffId = req.headers['x-staff-id'] as string;
+app.patch(
+    '/api/orders/:id/guest-count',
+    authMiddleware,
+    requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'),
+    async (req, res) => {
+        const { id } = req.params;
+        const { guest_count, allow_over_capacity = true } = req.body;
+        const staffId = req.staffId || 'SYSTEM';
 
-    if (!guest_count || guest_count < 1) {
-        return res.status(400).json({ error: 'Valid guest count required (minimum 1)' });
+        if (!guest_count || guest_count < 1) {
+            return res.status(400).json({ error: 'Valid guest count required (minimum 1)' });
+        }
+
+        try {
+            const result = await updateGuestCount(
+                req.restaurantId!,
+                id,
+                guest_count,
+                staffId,
+                io,
+                allow_over_capacity
+            );
+
+            res.json(result);
+        } catch (error: any) {
+            console.error('Failed to update guest count:', error);
+            if (error.message.includes('Cannot update')) {
+                res.status(403).json({ error: error.message });
+            } else if (error.message.includes('Order not found')) {
+                res.status(404).json({ error: error.message });
+            } else {
+                res.status(500).json({ error: error.message });
+            }
+        }
     }
-
-    try {
-        const result = await updateGuestCount(
-            req.restaurantId!,
-            id,
-            guest_count,
-            staffId || 'SYSTEM',
-            io,
-            allow_over_capacity
-        );
-
-        res.json(result);
-    } catch (error: any) {
-        console.error('Failed to update guest count:', error);
-        res.status(error.message.includes('Cannot update') ? 403 : 500)
-            .json({ error: error.message });
-    }
-});
+);
 
 // ✅ FIXED: Dev Reset route using prisma transaction for atomic wipe
 app.post('/api/system/dev-reset', authMiddleware, async (req, res) => {

@@ -233,7 +233,10 @@ export async function updateGuestCount(
             }
         });
 
-        const currentHistory = order.dine_in_orders?.guest_count_history as any[] || [];
+        const rawHistory = order.dine_in_orders?.guest_count_history;
+        const currentHistory: any[] = Array.isArray(rawHistory) ? rawHistory
+            : rawHistory && typeof rawHistory === 'object' ? Object.values(rawHistory)
+            : [];
         currentHistory.push({
             count: newGuestCount,
             timestamp: new Date(),
