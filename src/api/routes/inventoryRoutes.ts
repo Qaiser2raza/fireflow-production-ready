@@ -249,6 +249,60 @@ router.get('/items/:id/wac', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/inventory/po-lines
+ * List PO lines that have remaining quantity to receive.
+ * Returns lines with their inventory item name for UI selection.
+ */
+router.get('/po-lines', async (req, res) => {
+    try {
+        const restaurant_id = req.restaurantId!;
+
+        const allLines = await prisma.purchase_order_items.findMany({
+            where: { purchase_orders: { restaurant_id } },
+            include: {
+                inventory_items: { select: { id: true, name: true, unit_of_measure: true, current_stock: true, average_unit_cost: true } },
+                purchase_orders: { select: { id: true, po_number: true, supplier_id: true, status: true } },
+            },
+            orderBy: { purchase_order_id: 'desc' },
+        });
+
+        const lines = allLines.filter((line: any) => {
+            const ordered = Number(line.quantity_ordered);
+            const received = Number(line.quantity_received);
+            return received < ordered;
+        });
+
+        const enriched = lines.map((line: any) => {
+            const item = line.inventory_items;
+            const po = line.purchase_orders;
+            const ordered = Number(line.quantity_ordered);
+            const received = Number(line.quantity_received);
+            return {
+                id: line.id,
+                purchase_order_id: line.purchase_order_id,
+                po_number: po?.po_number,
+                po_status: po?.status,
+                supplier_id: po?.supplier_id,
+                inventory_item_id: line.inventory_item_id,
+                inventory_item_name: item?.name,
+                unit_of_measure: item?.unit_of_measure,
+                current_stock: item ? Number(item.current_stock) : null,
+                average_unit_cost: item ? Number(item.average_unit_cost) : null,
+                quantity_ordered: ordered,
+                quantity_received: received,
+                quantity_remaining: Math.max(0, ordered - received),
+                unit_price: Number(line.unit_price),
+                total_price: Number(line.total_price),
+            };
+        });
+
+        res.json({ success: true, poLines: enriched });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ─── MANAGER ROUTES — MANAGER, ADMIN, SUPER_ADMIN only ─────────────────────
 
 /**

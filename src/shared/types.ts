@@ -517,6 +517,90 @@ export interface LedgerEntry {
     created_at: Date | string;
 }
 
+export interface InventoryItem {
+    id: string;
+    name: string;
+    unitOfMeasure: string;
+    currentStock: number;
+    minimumStock: number;
+    unitCost: number;
+    averageUnitCost: number;
+    totalCostBasis: number;
+    category: string;
+    isNegative: boolean;
+    createdAt: Date | string;
+    updatedAt: Date | string;
+}
+
+export interface InventoryMovement {
+    id: string;
+    movementType: 'RECEIVE' | 'CONSUME' | 'ADJUSTMENT' | 'RECIPE_USAGE';
+    quantity: number;
+    unitCost: number;
+    totalCost: number;
+    referenceType: string;
+    referenceId: string;
+    createdAt: Date | string;
+}
+
+export interface NegativeStockItem {
+    id: string;
+    name: string;
+    unitOfMeasure: string;
+    currentStock: number;
+    minimumStock: number;
+    averageUnitCost: number;
+    category: string;
+    createdAt: Date | string;
+    updatedAt: Date | string;
+}
+
+export interface RecalcWACResult {
+    success: boolean;
+    itemId: string;
+    itemName: string;
+    averageUnitCost: number;
+    currentQuantity: number;
+    totalCostBasis: number;
+}
+
+export interface POLine {
+    id: string;
+    purchase_order_id: string;
+    po_number: string | null;
+    po_status: string | null;
+    supplier_id: string | null;
+    inventory_item_id: string;
+    inventory_item_name: string | null;
+    unit_of_measure: string | null;
+    current_stock: number | null;
+    average_unit_cost: number | null;
+    quantity_ordered: number;
+    quantity_received: number;
+    quantity_remaining: number;
+    unit_price: number;
+    total_price: number;
+}
+
+export interface ReceivePOResult {
+    success: true;
+    movement: {
+        id: string;
+        quantity: number;
+        unitCost: number;
+        totalCost: number;
+    };
+    poLine: {
+        id: string;
+        po_number: string;
+        inventory_item_id: string;
+        inventory_item_name: string;
+        quantity_ordered: number;
+        quantity_received: number;
+    };
+    isFullReceipt: boolean;
+}
+
 export interface Notification {
     id: string;
     type: 'success' | 'error' | 'info' | 'warning';

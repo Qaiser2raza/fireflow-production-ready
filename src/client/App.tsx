@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Staff, Order, OrderStatus, Table, Section, MenuItem, MenuCategory, Notification, OrderItem, OrderType, TableStatus, PaymentBreakdown, Customer, Vendor, Station } from '../shared/types';
-import { Layout, Grid, LogOut, Settings, Users, Coffee, Bike, ShoppingBag, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun } from 'lucide-react';
+import { Layout, Grid, LogOut, Settings, Users, Coffee, Bike, ShoppingBag, CreditCard, Utensils, Shield, RefreshCw, Clock, Bell, Moon, Sun, Boxes } from 'lucide-react';
 import { useIsMobile } from './hooks/useIsMobile';
 
 declare global {
@@ -28,6 +28,7 @@ import { CustomersView } from '../operations/customers/CustomersView';
 import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
 import { TransactionsView } from '../operations/transactions/TransactionsView';
+import { InventoryListView } from './operations/inventory/InventoryListView';
 import { StaffView } from '../features/settings/StaffView';
 import { SettingsView } from '../features/settings/SettingsView';
 import { BillingView } from '../features/restaurant/BillingView';
@@ -1059,57 +1060,63 @@ const AppContent = () => {
     );
   }
 
-  let menuItems: any[] = [];
+let menuItems: any[] = [];
 
-  if (currentUser.role === 'SUPER_ADMIN') {
-    menuItems = [
-      { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
-    ];
-  } else if (currentUser.role === 'CASHIER') {
-    menuItems = [
-      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
-      { id: 'POS', icon: Grid, label: 'POS Control' },
-      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
-      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
-      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
-      { id: 'BILLING', icon: CreditCard, label: 'Billing' },
-      { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
-      { id: 'SETTINGS', icon: Settings, label: 'System' },
-    ];
-  } else if (currentUser.role === 'SERVER' || currentUser.role === 'WAITER') {
-    menuItems = [
-      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
-      { id: 'POS', icon: Grid, label: 'POS Control' },
-    ];
-  } else if (currentUser.role === 'CHEF') {
-    menuItems = [
-      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
-    ];
-  } else if (currentUser.role === 'RIDER') {
-    menuItems = [
-      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
-    ];
-  } else {
-    menuItems = [
-      { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
-      { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
-      { id: 'POS', icon: Grid, label: 'POS Control' },
-      { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
-      { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
-      { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
-      { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
-      { id: 'REGISTER', icon: CreditCard, label: 'Register' },
-      { id: 'BILLING', icon: CreditCard, label: 'Billing' },
-      { id: 'STAFF', icon: Users, label: 'Personnel' },
-      { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
-      { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
-      { id: 'SETTINGS', icon: Settings, label: 'System' },
-    ];
-  }
+    if (currentUser.role === 'SUPER_ADMIN') {
+        menuItems = [
+            { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
+        ];
+    } else if (currentUser.role === 'CASHIER' || currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN') {
+        menuItems = [
+            { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+            { id: 'POS', icon: Grid, label: 'POS Control' },
+            { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+            { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+            { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+            { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+            { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+            { id: 'SETTINGS', icon: Settings, label: 'System' },
+        ];
+    } else if (currentUser.role === 'SERVER' || currentUser.role === 'WAITER') {
+        menuItems = [
+            { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+            { id: 'POS', icon: Grid, label: 'POS Control' },
+        ];
+    } else if (currentUser.role === 'CHEF') {
+        menuItems = [
+            { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+        ];
+    } else if (currentUser.role === 'RIDER') {
+        menuItems = [
+            { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+        ];
+    } else {
+        menuItems = [
+            { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
+            { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+            { id: 'POS', icon: Grid, label: 'POS Control' },
+            { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+            { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+            { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
+            { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+            { id: 'REGISTER', icon: CreditCard, label: 'Register' },
+            { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+            { id: 'STAFF', icon: Users, label: 'Personnel' },
+            { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+            { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
+            { id: 'SETTINGS', icon: Settings, label: 'System' },
+        ];
+    }
 
   // Command palette commands
   const commands = [
     // Navigation
+    { id: 'nav-inventory', label: 'Go to Inventory', shortcut: 'G I', category: 'Navigation', icon: 'ðŸ”’', action: () => setActiveView('INVENTORY') },
     { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: 'ðŸ“Š', action: () => setActiveView('DASHBOARD') },
     { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: 'ðŸ›’', action: () => setActiveView('POS') },
     { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: 'ðŸ‘¨â€ ðŸ ³', action: () => setActiveView('KITCHEN') },
@@ -1286,21 +1293,22 @@ const AppContent = () => {
 
         {/* Main Content */}
         <div className={`flex-1 ${activeView === 'POS' ? 'overflow-hidden flex flex-col' : 'overflow-auto'}`}>
-          {activeView === 'SUPER_ADMIN' ? <SuperAdminView /> :
-            activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
-              activeView === 'MENU' ? <MenuView /> :
-                activeView === 'DASHBOARD' ? <DashboardView /> :
-                  activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
-                    activeView === 'KITCHEN' ? <KDSView /> :
-                      activeView === 'LOGISTICS' ? <LogisticsHub /> :
-                        activeView === 'ACTIVITY' ? <ActivityLog /> :
-                          activeView === 'REGISTER' ? <TransactionsView /> :
-                            activeView === 'BILLING' ? <BillingView /> :
-                              activeView === 'FINANCE' ? <FinancialCommandCenter /> :
-                                activeView === 'STAFF' ? <StaffView /> :
-                                  activeView === 'CUSTOMERS' ? <CustomersView /> :
-                                    activeView === 'SETTINGS' ? <SettingsView /> :
-                                      <div className="p-20 text-slate-700 font-black uppercase tracking-[0.3em]">SECURE SECTOR NOT SELECTED</div>}
+{activeView === 'SUPER_ADMIN' ? <SuperAdminView /> :
+             activeView === 'INVENTORY' ? <InventoryListView /> :
+             activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
+             activeView === 'MENU' ? <MenuView /> :
+             activeView === 'DASHBOARD' ? <DashboardView /> :
+               activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :
+               activeView === 'KITCHEN' ? <KDSView /> :
+               activeView === 'LOGISTICS' ? <LogisticsHub /> :
+               activeView === 'ACTIVITY' ? <ActivityLog /> :
+               activeView === 'REGISTER' ? <TransactionsView /> :
+               activeView === 'BILLING' ? <BillingView /> :
+               activeView === 'FINANCE' ? <FinancialCommandCenter /> :
+               activeView === 'STAFF' ? <StaffView /> :
+               activeView === 'CUSTOMERS' ? <CustomersView /> :
+               activeView === 'SETTINGS' ? <SettingsView /> :
+               <div className="p-20 text-slate-700 font-black uppercase tracking-[0.3em]">SECURE SECTOR NOT SELECTED</div>}
         </div>
       </main>
 
