@@ -97,7 +97,10 @@ export class InventoryConsumptionService {
                         createdBy: 'system'
                     }, db);
                 } catch (err: any) {
-                    if (err?.code === 'P2002') {
+                    const isDuplicate = err?.code === 'P2002' ||
+                        err?.message?.includes('operationKey') ||
+                        err?.message?.includes('already used');
+                    if (isDuplicate) {
                         isNew = false;
                         const existing = await db.stock_movements.findFirst({
                             where: { operation_key: operationKey, restaurant_id: params.restaurantId }
