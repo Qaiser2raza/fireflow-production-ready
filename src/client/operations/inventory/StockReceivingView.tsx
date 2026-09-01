@@ -8,6 +8,7 @@ import {
     ShoppingBasket,
 } from 'lucide-react';
 import { inventoryService, POLine, ReceivePOResult } from '../../../shared/lib/inventoryService';
+import { useAppContext } from '../../contexts/AppContext';
 
 interface StockReceivingViewProps {
     onClose: () => void;
@@ -15,6 +16,8 @@ interface StockReceivingViewProps {
 }
 
 export const StockReceivingView: React.FC<StockReceivingViewProps> = ({ onClose, onReceiveComplete }) => {
+    const { currentUser } = useAppContext();
+    const canManageInventory = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role ?? '');
     const [poLines, setPoLines] = useState<POLine[]>([]);
     const [selectedLine, setSelectedLine] = useState<POLine | null>(null);
     const [receiveQuantity, setReceiveQuantity] = useState<string>('');
@@ -310,23 +313,31 @@ export const StockReceivingView: React.FC<StockReceivingViewProps> = ({ onClose,
                                         )}
                                     </div>
 
-                                    <button
-                                        onClick={handleReceive}
-                                        disabled={submitLoading || !receiveQuantity}
-                                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
-                                    >
-                                        {submitLoading ? (
-                                            <>
-                                                <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                                                Receiving...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Check size={14} />
-                                                Receive Stock
-                                            </>
-                                        )}
-                                    </button>
+                                    {canManageInventory ? (
+                                        <button
+                                            onClick={handleReceive}
+                                            disabled={submitLoading || !receiveQuantity}
+                                            className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                                        >
+                                            {submitLoading ? (
+                                                <>
+                                                    <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                                    Receiving...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Check size={14} />
+                                                    Receive Stock
+                                                </>
+                                            )}
+                                        </button>
+                                    ) : (
+                                        <div className="w-full py-3 bg-slate-900 border border-slate-800 rounded-2xl text-center">
+                                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                                                Only Manager, Admin, and Super Admin roles can receive stock
+                                            </p>
+                                        </div>
+                                    )}
 
                                     <button
                                         onClick={onClose}

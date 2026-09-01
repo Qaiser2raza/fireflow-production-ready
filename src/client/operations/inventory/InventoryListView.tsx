@@ -11,8 +11,15 @@ import {
     TrendingUp,
 } from 'lucide-react';
 import { inventoryService, InventoryItem, InventoryMovement } from '../../../shared/lib/inventoryService';
+import { useAppContext } from '../../contexts/AppContext';
 
-export const InventoryListView: React.FC = () => {
+interface InventoryListViewProps {
+    onReceiveStock?: () => void;
+}
+
+export const InventoryListView: React.FC<InventoryListViewProps> = ({ onReceiveStock }) => {
+    const { currentUser } = useAppContext();
+    const canManageInventory = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role ?? '');
     const [items, setItems] = useState<InventoryItem[]>([]);
     const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
     const [movements, setMovements] = useState<InventoryMovement[]>([]);
@@ -125,13 +132,24 @@ export const InventoryListView: React.FC = () => {
                                 </div>
                             </div>
                         </div>
-                        <button
-                            onClick={loadItems}
-                            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-slate-700"
-                        >
-                            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-                            Refresh
-                        </button>
+                        <div className="flex gap-3">
+                            {canManageInventory && onReceiveStock && (
+                                <button
+                                    onClick={onReceiveStock}
+                                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-emerald-600/20"
+                                >
+                                    <ArrowDown size={14} />
+                                    Receive Stock
+                                </button>
+                            )}
+                            <button
+                                onClick={loadItems}
+                                className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-slate-700"
+                            >
+                                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                                Refresh
+                            </button>
+                        </div>
                     </div>
 
                     <div className="flex gap-3 items-center">

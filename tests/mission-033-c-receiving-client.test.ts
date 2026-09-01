@@ -33,7 +33,7 @@ function assert(testName: string, condition: boolean, expected: string, actual: 
 
 async function cleanupRestaurant(restaurantId: string) {
     await prisma.$transaction([
-        prisma.stock_movements.deleteMany({ where: { restaurant_id: restaurantId } }),
+        prisma.stock_movements.deleteMany({}),
         prisma.journal_entry_lines.deleteMany({}),
         prisma.journal_entries.deleteMany({}),
         prisma.stock_count_lines.deleteMany({}),
@@ -174,11 +174,12 @@ async function runTests() {
     // TEST 3: POST /api/inventory/receive/:poLineId creates movement
     console.log('\n[Test 3] POST /api/inventory/receive/:poLineId creates movement');
     let movementId: string | null = null;
+    const receiveOpKey = `recv-m033c-${Date.now()}`;
     try {
         const res = await fetch(`http://localhost:3001/api/inventory/receive/${s.poLine.id}`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${s.token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quantity: 5, operationKey: `recv-m033c-${Date.now()}` }),
+            body: JSON.stringify({ quantity: 5, operationKey: receiveOpKey }),
         });
         assert('Status 200', res.status === 200, '200', `${res.status}`);
         const data = await res.json();
@@ -207,7 +208,7 @@ async function runTests() {
         const res = await fetch(`http://localhost:3001/api/inventory/receive/${s.poLine.id}`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${s.token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quantity: 5, operationKey: `recv-m033c-${Date.now()}` }),
+            body: JSON.stringify({ quantity: 5, operationKey: receiveOpKey }),
         });
         assert('Status 200 on duplicate', res.status === 200, '200', `${res.status}`);
         const data = await res.json();

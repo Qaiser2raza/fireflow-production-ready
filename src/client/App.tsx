@@ -29,6 +29,7 @@ import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
 import { TransactionsView } from '../operations/transactions/TransactionsView';
 import { InventoryListView } from './operations/inventory/InventoryListView';
+import { StockReceivingView } from './operations/inventory/StockReceivingView';
 import { StockCountListView } from './operations/inventory/StockCountListView';
 import { StockCountDetailView } from './operations/inventory/StockCountDetailView';
 import { StaffView } from '../features/settings/StaffView';
@@ -979,6 +980,7 @@ const AppContent = () => {
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [selectedStockCountId, setSelectedStockCountId] = useState<string | null>(null);
+  const [isReceivingStock, setIsReceivingStock] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
@@ -1123,8 +1125,8 @@ let menuItems: any[] = [];
 
   // Command palette commands
   const commands = [
-    // Navigation
-{ id: 'nav-inventory', label: 'Go to Inventory', shortcut: 'G I', category: 'Navigation', icon: 'ðŸ”’', action: () => setActiveView('INVENTORY') },
+    { id: 'nav-inventory', label: 'Go to Inventory', shortcut: 'G I', category: 'Navigation', icon: '🔒', action: () => { setActiveView('INVENTORY'); setIsReceivingStock(false); } },
+    { id: 'nav-receive-stock', label: 'Go to Receive Stock', shortcut: 'G R S', category: 'Navigation', icon: '📦', action: () => { setActiveView('INVENTORY'); setIsReceivingStock(true); } },
     { id: 'nav-stock-count', label: 'Go to Stock Count', shortcut: 'G S C', category: 'Navigation', action: () => setActiveView('STOCK_COUNT') },
     { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: 'ðŸ“Š', action: () => setActiveView('DASHBOARD') },
     { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: 'ðŸ›’', action: () => setActiveView('POS') },
@@ -1303,7 +1305,19 @@ let menuItems: any[] = [];
         {/* Main Content */}
         <div className={`flex-1 ${activeView === 'POS' ? 'overflow-hidden flex flex-col' : 'overflow-auto'}`}>
 {activeView === 'SUPER_ADMIN' ? <SuperAdminView /> :
-             activeView === 'INVENTORY' ? <InventoryListView /> :
+             activeView === 'INVENTORY' ? (
+               isReceivingStock
+                 ? <StockReceivingView
+                     onClose={() => setIsReceivingStock(false)}
+                     onReceiveComplete={() => {
+                       setIsReceivingStock(false);
+                       fetchInitialData();
+                     }}
+                   />
+                 : <InventoryListView
+                     onReceiveStock={() => setIsReceivingStock(true)}
+                   />
+             ) :
 activeView === 'STOCK_COUNT' ? (
               selectedStockCountId
                 ? <StockCountDetailView
