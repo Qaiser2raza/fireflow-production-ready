@@ -414,11 +414,59 @@ router.patch(
                 countedQuantity: new Decimal(countedQuantity.toString()),
             });
 
-            res.json({ success: true, line });
+            res.json({ success: true, line: {
+                id: line.id,
+                stockCountId: line.stockCountId,
+                inventoryItemId: line.inventoryItemId,
+                expectedQuantity: Number(line.expectedQuantity),
+                countedQuantity: Number(line.countedQuantity),
+                createdAt: line.createdAt,
+            } });
         } catch (e: any) {
             if (e.message?.includes('not found')) {
                 return res.status(404).json({ error: e.message });
             }
+            res.status(400).json({ error: e.message });
+        }
+    }
+);
+
+/**
+ * DELETE /api/inventory/counts/:id/lines/:lineId
+ * Remove a line from an open stock count.
+ */
+router.delete(
+    '/counts/:id/lines/:lineId',
+    requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'),
+    async (req, res) => {
+        try {
+            const { id, lineId } = req.params;
+            const restaurantId = req.restaurantId!;
+
+            const count = await prisma.stock_counts.findFirst({
+                where: { id, restaurant_id: restaurantId }
+            });
+
+            if (!count) {
+                return res.status(404).json({ error: 'Stock count not found' });
+            }
+
+            if (count.status !== 'OPEN') {
+                return res.status(400).json({ error: 'Cannot remove lines from a non-OPEN stock count' });
+            }
+
+            const line = await prisma.stock_count_lines.findFirst({
+                where: { id: lineId, stock_count_id: id }
+            });
+
+            if (!line) {
+                return res.status(404).json({ error: 'Count line not found' });
+            }
+
+            await prisma.stock_count_lines.delete({ where: { id: lineId } });
+
+            res.json({ success: true });
+        } catch (e: any) {
             res.status(400).json({ error: e.message });
         }
     }
@@ -461,7 +509,7 @@ router.post(
             if (e.message?.includes('not found')) {
                 return res.status(404).json({ error: e.message });
             }
-            if (e.message?.includes('already finalized') || e.message?.includes('CAS')) {
+            if (e.message?.includes('already finalized') || e.message?.includes('not in OPEN state') || e.message?.includes('CAS')) {
                 return res.status(409).json({ error: e.message });
             }
             res.status(400).json({ error: e.message });

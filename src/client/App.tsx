@@ -29,6 +29,8 @@ import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
 import { TransactionsView } from '../operations/transactions/TransactionsView';
 import { InventoryListView } from './operations/inventory/InventoryListView';
+import { StockCountListView } from './operations/inventory/StockCountListView';
+import { StockCountDetailView } from './operations/inventory/StockCountDetailView';
 import { StaffView } from '../features/settings/StaffView';
 import { SettingsView } from '../features/settings/SettingsView';
 import { BillingView } from '../features/restaurant/BillingView';
@@ -976,6 +978,7 @@ const AppContent = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [selectedStockCountId, setSelectedStockCountId] = useState<string | null>(null);
   const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
@@ -1069,6 +1072,7 @@ let menuItems: any[] = [];
     } else if (currentUser.role === 'CASHIER' || currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN') {
         menuItems = [
             { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
             { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
             { id: 'POS', icon: Grid, label: 'POS Control' },
             { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
@@ -1081,22 +1085,26 @@ let menuItems: any[] = [];
     } else if (currentUser.role === 'SERVER' || currentUser.role === 'WAITER') {
         menuItems = [
             { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
             { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
             { id: 'POS', icon: Grid, label: 'POS Control' },
         ];
     } else if (currentUser.role === 'CHEF') {
         menuItems = [
             { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
             { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
         ];
     } else if (currentUser.role === 'RIDER') {
         menuItems = [
             { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
             { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
         ];
     } else {
         menuItems = [
             { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
             { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
             { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
             { id: 'POS', icon: Grid, label: 'POS Control' },
@@ -1116,7 +1124,8 @@ let menuItems: any[] = [];
   // Command palette commands
   const commands = [
     // Navigation
-    { id: 'nav-inventory', label: 'Go to Inventory', shortcut: 'G I', category: 'Navigation', icon: 'ðŸ”’', action: () => setActiveView('INVENTORY') },
+{ id: 'nav-inventory', label: 'Go to Inventory', shortcut: 'G I', category: 'Navigation', icon: 'ðŸ”’', action: () => setActiveView('INVENTORY') },
+    { id: 'nav-stock-count', label: 'Go to Stock Count', shortcut: 'G S C', category: 'Navigation', action: () => setActiveView('STOCK_COUNT') },
     { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: 'ðŸ“Š', action: () => setActiveView('DASHBOARD') },
     { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: 'ðŸ›’', action: () => setActiveView('POS') },
     { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: 'ðŸ‘¨â€ ðŸ ³', action: () => setActiveView('KITCHEN') },
@@ -1295,7 +1304,19 @@ let menuItems: any[] = [];
         <div className={`flex-1 ${activeView === 'POS' ? 'overflow-hidden flex flex-col' : 'overflow-auto'}`}>
 {activeView === 'SUPER_ADMIN' ? <SuperAdminView /> :
              activeView === 'INVENTORY' ? <InventoryListView /> :
-             activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
+activeView === 'STOCK_COUNT' ? (
+              selectedStockCountId
+                ? <StockCountDetailView
+                    countId={selectedStockCountId}
+                    onClose={() => setSelectedStockCountId(null)}
+                    onBack={() => setSelectedStockCountId(null)}
+                    onFinalizeComplete={() => setSelectedStockCountId(null)}
+                  />
+                : <StockCountListView
+                    onViewDetail={(count) => setSelectedStockCountId(count.id)}
+                  />
+            ) :
+            activeView === 'ORDER_HUB' ? <OrderCommandHub /> :
              activeView === 'MENU' ? <MenuView /> :
              activeView === 'DASHBOARD' ? <DashboardView /> :
                activeView === 'POS' ? (isMobile ? <POSViewMobile /> : <POSView />) :

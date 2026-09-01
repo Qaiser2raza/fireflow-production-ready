@@ -74,7 +74,7 @@
 | **Tenant root** | VERIFIED — `restaurants` model |
 | **Order model** | VERIFIED — Base `orders` with 1:1 type extensions |
 | **Accounting** | VERIFIED — COA, journal entries, journal entry lines, ledger entries |
-| **Inventory** | PARTIAL — Items, purchase orders, recipes. NO stock movements, batches, or auto-deduction |
+| **Inventory** | VERIFIED — Items, purchase orders, recipes, stock counts, stock movements, WAC tracking; M030-M033 audit suites 171/171 PASS |
 | **Audit** | VERIFIED — `audit_logs`, `approval_logs`, `system_logs`, `security_events` |
 | **SaaS** | VERIFIED — `license_keys`, `subscription_payments`, `restaurant_features` |
 | **QR ordering** | PARTIAL — QR order type added in uncommitted migration |
@@ -92,7 +92,7 @@
 | **Orders** | VERIFIED |
 | **KDS** | VERIFIED |
 | **Menu** | VERIFIED |
-| **Inventory** | PARTIAL — No stock movement tracking |
+| **Inventory** | VERIFIED — Stock counts, stock movements, WAC projections; all Phase A/B/C/D audit suites pass 171/171 |
 | **Accounting/Finance** | VERIFIED — Dual ledger systems need consolidation |
 | **Customers** | VERIFIED |
 | **Delivery/Riders** | VERIFIED |
@@ -125,7 +125,7 @@
 |---|---|
 | **Test runner** | MISSING — `package.json` has placeholder scripts |
 | **CI** | PARTIAL — Runs typecheck + build, no tests |
-| **Project tests** | PARTIAL — 2 integration-style tests exist (`tests/`) but not wired into CI |
+| **Project tests** | VERIFIED — 171 client-contract assertions across M030/M031/M032/M033 suites, all PASS |
 | **Unit tests** | MISSING |
 | **Coverage** | UNKNOWN — No coverage tooling configured |
 
@@ -149,6 +149,13 @@
 |---|---|
 | `prisma/migrations/20260816071149_add_qr_order_type/` | New migration adding `QR` to `OrderType` and `PENDING_APPROVAL` to `OrderStatus` |
 | `src/api/server.ts` | Added `import 'dotenv/config'` at top |
+| `src/api/routes/inventoryRoutes.ts` | M033-D stock count API routes (lines, finalize, delete line) |
+| `src/shared/lib/inventoryService.ts` | M033-D stock count client service methods |
+| `src/shared/types.ts` | M033-D StockCount, StockCountLine, adjustment types |
+| `src/client/App.tsx` | M033-D Stock Count view routing + nav/command palette |
+| `src/client/operations/inventory/StockCountListView.tsx` | M033-D stock count list UI |
+| `src/client/operations/inventory/StockCountDetailView.tsx` | M033-D stock count detail UI |
+| `tests/mission-033-d-stock-count-client.test.ts` | M033-D 33-assertion client contract test |
 | `.env.example` | Contains live Supabase credentials |
 | `prisma/migrations/20260606092315_fix_printers_local_support/migration.sql` | BOM/whitespace fix |
 

@@ -601,6 +601,57 @@ export interface ReceivePOResult {
     isFullReceipt: boolean;
 }
 
+export interface StockCount {
+    id: string;
+    status: 'OPEN' | 'CLOSED';
+    countedBy: string | null;
+    finalizedBy: string | null;
+    finalizedAt: Date | string | null;
+    operationKey: string;
+    createdAt: Date | string;
+    lines?: StockCountLine[];
+}
+
+export interface StockCountLine {
+    id: string;
+    inventoryItemId: string;
+    inventoryItemName?: string | null;
+    expectedQuantity: number;
+    countedQuantity: number;
+    createdAt: Date | string;
+}
+
+export interface CreateStockCountRequest {
+    operationKey?: string;
+    countedBy?: string;
+}
+
+export interface AddStockCountLineRequest {
+    inventoryItemId: string;
+    expectedQuantity: number;
+    countedQuantity: number;
+}
+
+export interface FinalizeStockCountRequest {
+    finalizedBy?: string;
+}
+
+export interface StockCountAdjustment {
+    inventoryItemId: string;
+    inventoryItemName: string;
+    expectedQuantity: number;
+    countedQuantity: number;
+    difference: number;
+    movementId: string | null;
+    movementQuantity: number | null;
+}
+
+export interface FinalizeStockCountResult {
+    success: boolean;
+    stockCount: StockCount;
+    adjustments: StockCountAdjustment[];
+}
+
 export interface Notification {
     id: string;
     type: 'success' | 'error' | 'info' | 'warning';

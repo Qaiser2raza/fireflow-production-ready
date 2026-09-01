@@ -1,7 +1,7 @@
 import { fetchWithAuth } from './authInterceptor';
-import type { InventoryItem, InventoryMovement, NegativeStockItem, RecalcWACResult, POLine, ReceivePOResult } from '../types';
+import type { InventoryItem, InventoryMovement, NegativeStockItem, RecalcWACResult, POLine, ReceivePOResult, StockCount, StockCountLine, StockCountAdjustment, CreateStockCountRequest, FinalizeStockCountRequest, AddStockCountLineRequest } from '../types';
 
-export type { InventoryItem, InventoryMovement, NegativeStockItem, RecalcWACResult, POLine, ReceivePOResult };
+export type { InventoryItem, InventoryMovement, NegativeStockItem, RecalcWACResult, POLine, ReceivePOResult, StockCount, StockCountLine, StockCountAdjustment, CreateStockCountRequest, FinalizeStockCountRequest, AddStockCountLineRequest };
 
 const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
@@ -64,6 +64,63 @@ export const inventoryService = {
         if (!res.ok) {
             const err = await res.json().catch(() => ({ error: res.statusText }));
             throw new Error(err.error || `Failed to receive: ${res.status}`);
+        }
+        return res.json();
+    },
+
+    /** GET /api/inventory/counts - List stock counts for the tenant */
+    async getStockCounts(status?: 'OPEN' | 'CLOSED', limit?: number): Promise<{ success: boolean; stockCounts: StockCount[] }> {
+        const params = new URLSearchParams();
+        if (status) params.set('status', status);
+        if (limit) params.set('limit', String(limit));
+        const url = `${API_URL}/inventory/counts${params.toString() ? `?${params.toString()}` : ''}`;
+        const res = await fetchWithAuth(url);
+        if (!res.ok) throw new Error(`Failed to fetch stock counts: ${res.status}`);
+        return res.json();
+    },
+
+    /** GET /api/inventory/counts/:id - Get a single stock count with lines */
+    async getStockCountById(id: string): Promise<{ success: boolean; stockCount: StockCount }> {
+        const res = await fetchWithAuth(`${API_URL}/inventory/counts/${id}`);
+        if (!res.ok) throw new Error(`Failed to fetch stock count ${id}: ${res.status}`);
+        return res.json();
+    },
+
+    /** POST /api/inventory/counts - Create a new stock count */
+    async createStockCount(payload?: CreateStockCountRequest): Promise<{ success: boolean; stockCount: StockCount }> {
+        const res = await fetchWithAuth(`${API_URL}/inventory/counts`, {
+            method: 'POST',
+            body: JSON.stringify(payload || { operationKey: generateOperationKey() }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            throw new Error(err.error || `Failed to create stock count: ${res.status}`);
+        }
+        return res.json();
+    },
+
+    /** PATCH /api/inventory/counts/:id/lines - Add or update a count line */
+    async addStockCountLine(countId: string, payload: AddStockCountLineRequest): Promise<{ success: boolean; line: StockCountLine }> {
+        const res = await fetchWithAuth(`${API_URL}/inventory/counts/${countId}/lines`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            throw new Error(err.error || `Failed to add count line: ${res.status}`);
+        }
+        return res.json();
+    },
+
+    /** POST /api/inventory/counts/:id/finalize - Finalize stock count and create adjustments */
+    async finalizeStockCount(countId: string, _payload?: FinalizeStockCountRequest): Promise<{ success: boolean; stockCount: StockCount; adjustments: any[] }> {
+        const res = await fetchWithAuth(`${API_URL}/inventory/counts/${countId}/finalize`, {
+            method: 'POST',
+            body: JSON.stringify(_payload || {}),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            throw new Error(err.error || `Failed to finalize stock count: ${res.status}`);
         }
         return res.json();
     },
