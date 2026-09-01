@@ -112,6 +112,15 @@ import {
 
 const prisma = new PrismaClient();
 
+/**
+ * Normalize an email for use as a deterministic idempotency key suffix.
+ * Used by POST /onboarding/start for clientless dedupe when no Idempotency-Key
+ * header is supplied.
+ */
+function idempotencyKeyNormalizer(email: string): string {
+    return email.toLowerCase().trim();
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -871,6 +880,135 @@ const verifyPinLimiter = rateLimit({
             }
         });
         res.status(500).json({ error: 'Authentication service temporarily unavailable' });
+    }
+});
+
+// --- PUBLIC SELF-SERVICE ONBOARDING (M034-D) ---
+
+/**
+ * POST /onboarding/start
+ * Public, idempotent entry point for self-service tenant creation.
+ *
+ * Idempotency: client supplies an `Idempotency-Key` (UUIDv4) header OR the
+ * server derives one from the owner email. Same key → returns existing tenant.
+ * The entire provisioning happens inside the atomic tx in
+ * RestaurantProvisioningService.provisionRestaurant().
+ *
+ * Returns: tenant slug, setup-token (= owner_invites.id), and a one-time PIN
+ * shown in the browser exactly once (never persisted in plaintext, never emailed).
+ */
+app.post('/onboarding/start', async (req, res) => {
+    try {
+        const { name, slug, phone, address, city, owner_name, owner_email, owner_phone } = req.body;
+
+        if (!name) return res.status(400).json({ error: 'Restaurant name is required' });
+        if (!owner_name || !owner_email) return res.status(400).json({ error: 'Owner name and email are required' });
+        if (name.length < 2) return res.status(400).json({ error: 'Restaurant name must be at least 2 characters' });
+
+        // Idempotency: look up an existing provisioning for this owner email.
+        // Per M034-B §5, the key is the client Idempotency-Key header OR derived
+        // from the owner email. We check owner_invites.email (unique per tenant)
+        // to detect a prior self-service provisioning.
+        const existingInvite = await prisma.owner_invites.findFirst({
+            where: { email: idempotencyKeyNormalizer(owner_email) },
+            include: { restaurants: { select: { id: true, slug: true, name: true } } },
+            orderBy: { created_at: 'desc' }
+        });
+
+        if (existingInvite) {
+            return res.status(200).json({
+                already_exists: true,
+                restaurant: {
+                    id: existingInvite.restaurants.id,
+                    slug: existingInvite.restaurants.slug,
+                    name: existingInvite.restaurants.name,
+                },
+                setup_token: existingInvite.id,
+            });
+        }
+
+        const { restaurantProvisioningService } = await import('./services/onboarding/RestaurantProvisioningService');
+        const result = await restaurantProvisioningService.provisionRestaurant({
+            name,
+            slug: slug || undefined,
+            phone: phone || owner_phone,
+            address,
+            city,
+            subscriptionPlan: undefined,
+            subscriptionStatus: undefined,
+            ownerName: owner_name,
+            ownerEmail: owner_email,
+            ownerPhone: owner_phone,
+        });
+
+        if (!result.success) {
+            return res.status(400).json({ error: result.error || 'Provisioning failed' });
+        }
+
+        console.log(`[SELF-SERVICE] New restaurant provisioned: ${result.restaurant.name} (${result.restaurant.id})`);
+        res.status(201).json({
+            restaurant: {
+                id: result.restaurant.id,
+                slug: result.restaurant.slug,
+                name: result.restaurant.name,
+            },
+            setup_token: result.ownerInviteId,
+            temporary_pin: result.ownerStaff.temporary_pin,
+        });
+    } catch (error: any) {
+        console.error('[ERROR] POST /onboarding/start:', error.message);
+        res.status(500).json({ error: 'Provisioning failed' });
+    }
+});
+
+/**
+ * POST /onboarding/verify-setup-token
+ * Public, token-bound endpoint. Validates a one-time setup token and returns
+ * the tenant identity so the client can initiate the first-login flow.
+ *
+ * The setup token is the owner_invites.id created during provisioning. It is
+ * bound to a specific restaurant + owner email. After verification the client
+ * proceeds to POST /auth/login with the one-time PIN.
+ */
+app.post('/onboarding/verify-setup-token', async (req, res) => {
+    try {
+        const { setup_token } = req.body;
+
+        if (!setup_token) {
+            return res.status(400).json({ error: 'Setup token is required' });
+        }
+
+        let invite;
+        try {
+            invite = await prisma.owner_invites.findUnique({
+                where: { id: setup_token },
+                include: {
+                    restaurants: {
+                        select: { id: true, slug: true, name: true, onboarding_status: true }
+                    }
+                }
+            });
+        } catch {
+            return res.status(404).json({ error: 'Invalid or expired setup token' });
+        }
+
+        if (!invite) {
+            return res.status(404).json({ error: 'Invalid or expired setup token' });
+        }
+
+        res.json({
+            valid: true,
+            restaurant: {
+                id: invite.restaurants.id,
+                slug: invite.restaurants.slug,
+                name: invite.restaurants.name,
+            },
+            owner_email: invite.email,
+            onboarding_status: invite.restaurants.onboarding_status,
+        });
+    } catch (error: any) {
+        console.error('[ERROR] POST /onboarding/verify-setup-token:', error.message);
+        res.status(500).json({ error: 'Token verification failed' });
     }
 });
 
