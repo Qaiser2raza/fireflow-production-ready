@@ -83,6 +83,7 @@ implementation_plan.md
 # ============================================================
 !scripts/release-gate.cjs
 !scripts/browser-smoke.cjs
+!scripts/browser-smoke-inventory.cjs
 !scripts/probe-cloud-lockdown.cjs
 !scripts/td12-functional-smokes.cjs
 !scripts/o2-baseline.cjs

@@ -10,12 +10,15 @@ import {
     Lock,
 } from 'lucide-react';
 import { inventoryService, StockCount } from '../../../shared/lib/inventoryService';
+import { useAppContext } from '../../contexts/AppContext';
 
 interface StockCountListViewProps {
     onViewDetail: (count: StockCount) => void;
 }
 
 export const StockCountListView: React.FC<StockCountListViewProps> = ({ onViewDetail }) => {
+    const { currentUser } = useAppContext();
+    const canManageInventory = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role ?? '');
     const [counts, setCounts] = useState<StockCount[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -121,16 +124,18 @@ export const StockCountListView: React.FC<StockCountListViewProps> = ({ onViewDe
                             </div>
                         </div>
                         <div className="flex gap-3">
-                            <button
-                                onClick={handleCreate}
-                                disabled={submittingCreate}
-                                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-emerald-600/20 disabled:opacity-50"
-                            >
-                                {submittingCreate ? (
-                                    <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                                ) : <Plus size={14} />}
-                                New Count
-                            </button>
+                            {canManageInventory && (
+                                <button
+                                    onClick={handleCreate}
+                                    disabled={submittingCreate}
+                                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-emerald-600/20 disabled:opacity-50"
+                                >
+                                    {submittingCreate ? (
+                                        <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                    ) : <Plus size={14} />}
+                                    New Count
+                                </button>
+                            )}
                             <button
                                 onClick={loadCounts}
                                 className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border border-slate-700"

@@ -33,7 +33,7 @@ function assert(testName: string, condition: boolean, expected: string, actual: 
 
 async function cleanupRestaurant(restaurantId: string) {
     await prisma.$transaction([
-        prisma.stock_movements.deleteMany({ where: { restaurant_id: restaurantId } }),
+        prisma.stock_movements.deleteMany({}),
         prisma.journal_entry_lines.deleteMany({}),
         prisma.journal_entries.deleteMany({}),
         prisma.stock_count_lines.deleteMany({}),
