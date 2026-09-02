@@ -897,7 +897,7 @@ const verifyPinLimiter = rateLimit({
  * Returns: tenant slug, setup-token (= owner_invites.id), and a one-time PIN
  * shown in the browser exactly once (never persisted in plaintext, never emailed).
  */
-app.post('/onboarding/start', async (req, res) => {
+app.post('/api/onboarding/start', async (req, res) => {
     try {
         const { name, slug, phone, address, city, owner_name, owner_email, owner_phone } = req.body;
 
@@ -970,7 +970,7 @@ app.post('/onboarding/start', async (req, res) => {
  * bound to a specific restaurant + owner email. After verification the client
  * proceeds to POST /auth/login with the one-time PIN.
  */
-app.post('/onboarding/verify-setup-token', async (req, res) => {
+app.post('/api/onboarding/verify-setup-token', async (req, res) => {
     try {
         const { setup_token } = req.body;
 
