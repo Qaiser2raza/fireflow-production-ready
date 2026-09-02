@@ -24,6 +24,8 @@ import { KDSView } from '../operations/kds/KDSView';
 import { LogisticsHub } from '../operations/logistics/LogisticsHub';
 import { SuperAdminView } from '../features/saas-hq/SuperAdminView';
 import { FirstLoginWizard } from '../features/onboarding/FirstLoginWizard';
+import { RestaurantLanding } from '../features/onboarding/RestaurantLanding';
+import { SetupTokenDisplay } from '../features/onboarding/SetupTokenDisplay';
 import { CustomersView } from '../operations/customers/CustomersView';
 import { MenuView } from '../operations/menu/MenuView';
 import { DashboardView } from '../operations/dashboard/DashboardView';
@@ -58,6 +60,7 @@ export { useAppContext };
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<Staff | null>(null);
   const [setupRequired, setSetupRequired] = useState<{ pinChangeRequired: boolean; onboardingStatus: string } | null>(null);
+  const [onboardingState, setOnboardingState] = useState<{ restaurantId: string; setupToken: string; temporaryPin: string; restaurantName: string } | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [optimisticItemStatus, setOptimisticItemStatus] = useState<Record<string, string>>({});
   const [tables, setTables] = useState<Table[]>([]);
@@ -685,6 +688,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider value={{
       currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, vendors,
       setupRequired, clearSetupRequired: () => setSetupRequired(null),
+      onboardingState, setOnboardingState,
       connectionStatus, lastSyncAt, notifications, activeView, loading, isRestaurantLoading, orderToEdit,
       optimisticItemStatus, setOptimisticItemStatus,
       socket: socketIO,
@@ -970,7 +974,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 // --- 3. THE UI CONTENT WRAPPER ---
 const AppContent = () => {
-  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, activeSession, setupRequired, clearSetupRequired } = useAppContext();
+  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, activeSession, setupRequired, clearSetupRequired, onboardingState, setOnboardingState } = useAppContext();
   const isMobile = useIsMobile();
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [showSessionModal, setShowSessionModal] = useState(false);
@@ -1038,7 +1042,41 @@ const AppContent = () => {
     );
   }
 
-  if (!currentUser) return <LoginView onLogin={login} />;
+  // M034-E: Self-service onboarding flow
+  if (onboardingState) {
+    return (
+        <SetupTokenDisplay
+            restaurantId={onboardingState.restaurantId}
+            setupToken={onboardingState.setupToken}
+            temporaryPin={onboardingState.temporaryPin}
+            restaurantName={onboardingState.restaurantName}
+            onProceed={() => {
+                setOnboardingState(null);
+            }}
+        />
+    );
+  }
+
+  if (!currentUser) {
+    const existingRestaurantId = localStorage.getItem('restaurant_id');
+    if (!existingRestaurantId) {
+      // No tenant context — show self-service onboarding landing page
+      return (
+          <RestaurantLanding
+              onAccountCreated={(data) => {
+                  setOnboardingState({
+                      restaurantId: data.restaurant_id,
+                      setupToken: data.setup_token,
+                      temporaryPin: data.temporary_pin,
+                      restaurantName: '',
+                  });
+              }}
+          />
+      );
+    }
+    // Has a tenant context but no user — show PIN login
+    return <LoginView onLogin={login} />;
+  }
 
   // Phase 2: first-login wizard replaces the entire shell until the server
   // reports setup complete. The server-side gate remains the final authority.

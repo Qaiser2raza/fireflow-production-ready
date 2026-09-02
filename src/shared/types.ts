@@ -682,6 +682,8 @@ export interface AppContextType {
     currentRestaurant: any | null;
     setupRequired: { pinChangeRequired: boolean; onboardingStatus: string } | null;
     clearSetupRequired: () => void;
+    onboardingState: { restaurantId: string; setupToken: string; temporaryPin: string; restaurantName: string } | null;
+    setOnboardingState: React.Dispatch<React.SetStateAction<{ restaurantId: string; setupToken: string; temporaryPin: string; restaurantName: string } | null>>;
     orders: Order[];
     drivers: Staff[];
     servers: Staff[];
