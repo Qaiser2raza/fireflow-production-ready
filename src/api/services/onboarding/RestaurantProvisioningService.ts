@@ -36,7 +36,7 @@ export class RestaurantProvisioningService {
     const trialEndsAt = new Date(now);
     trialEndsAt.setDate(trialEndsAt.getDate() + 30);
 
-const subscriptionExpiresAt = new Date(now);
+    const subscriptionExpiresAt = new Date(now);
     subscriptionExpiresAt.setMonth(subscriptionExpiresAt.getMonth() + 1);
 
     // Pre-compute bcrypt hash outside the transaction to avoid PG transaction
