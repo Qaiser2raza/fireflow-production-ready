@@ -36,8 +36,13 @@ export class RestaurantProvisioningService {
     const trialEndsAt = new Date(now);
     trialEndsAt.setDate(trialEndsAt.getDate() + 30);
 
-    const subscriptionExpiresAt = new Date(now);
+const subscriptionExpiresAt = new Date(now);
     subscriptionExpiresAt.setMonth(subscriptionExpiresAt.getMonth() + 1);
+
+    // Pre-compute bcrypt hash outside the transaction to avoid PG transaction
+    // timeout (default 5s). bcrypt with 12 rounds can take >1s on modest hardware.
+    const ownerPin = this.generateSecurePin();
+    const ownerPinHash = await bcrypt.hash(ownerPin, 12);
 
     try {
       const result = await prisma.$transaction(async (tx) => {
@@ -66,9 +71,6 @@ export class RestaurantProvisioningService {
             updated_at: now,
           },
         });
-
-        const ownerPin = this.generateSecurePin();
-        const ownerPinHash = await bcrypt.hash(ownerPin, 12);
 
         const ownerStaff = await tx.staff.create({
           data: {
