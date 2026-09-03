@@ -1778,7 +1778,7 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
 // ⚙︝ 2. OPERATIONAL ROUTES (SPECIFIC)
 // ==========================================
 
-// Get operations config for a restaurant
+// Get operations config for a restaurant (M034-G2 Unified Endpoint)
 app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res) => {
     const { restaurantId } = req.params;
 
@@ -1788,10 +1788,40 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
     }
 
     try {
-        // Fetch actual order type defaults from DB
-        const dbDefaults = await prisma.order_type_defaults.findMany({
-            where: { restaurant_id: restaurantId }
-        });
+        const [restaurant, dbDefaults, ownerInvite] = await Promise.all([
+            prisma.restaurants.findUnique({
+                where: { id: restaurantId },
+                select: {
+                    name: true,
+                    address: true,
+                    phone: true,
+                    currency: true,
+                    timezone: true,
+                    fbr_ntn: true,
+                    tax_enabled: true,
+                    tax_rate: true,
+                    service_charge_enabled: true,
+                    service_charge_rate: true,
+                    default_guest_count: true,
+                    default_rider_float: true
+                }
+            }),
+            prisma.order_type_defaults.findMany({
+                where: { restaurant_id: restaurantId }
+            }),
+            prisma.owner_invites.findFirst({
+                where: {
+                    restaurant_id: restaurantId,
+                    state: { not: 'REVOKED' }
+                },
+                orderBy: { created_at: 'desc' },
+                select: { email: true }
+            })
+        ]);
+
+        if (!restaurant) {
+            return res.status(404).json({ error: 'Restaurant not found' });
+        }
 
         const order_type_defaults = dbDefaults.reduce((acc, curr) => {
             acc[curr.order_type] = {
@@ -1807,18 +1837,34 @@ app.get('/api/operations/config/:restaurantId', authMiddleware, async (req, res)
             return acc;
         }, {} as any);
 
+        // Derive dynamic delivery fee from order_type_defaults (DELIVERY or DINE_IN)
+        const deliveryDefault = dbDefaults.find(d => d.order_type === 'DELIVERY');
+        const resolvedDeliveryFee = deliveryDefault !== undefined
+            ? Number(deliveryDefault.delivery_fee)
+            : 250;
+
         res.json({
             success: true,
             config: {
-                order_type_defaults,
-                taxEnabled: false,
-                taxRate: 0,
-                serviceChargeEnabled: false,
-                serviceChargeRate: 5,
-                defaultDeliveryFee: 250,
-                defaultGuestCount: 2,
-                defaultRiderFloat: 5000
+                // Core Restaurant Identity
+                business_name: restaurant.name || '',
+                business_address: restaurant.address || '',
+                business_phone: restaurant.phone || '',
+                business_email: ownerInvite?.email || '',
+                ntn_number: restaurant.fbr_ntn || '',
+                currency: restaurant.currency || 'PKR',
+                timezone: restaurant.timezone || 'Asia/Karachi',
 
+                // Operational Defaults
+                order_type_defaults,
+                taxEnabled: restaurant.tax_enabled,
+                taxRate: Number(restaurant.tax_rate || 0),
+                serviceChargeEnabled: restaurant.service_charge_enabled,
+                serviceChargeRate: Number(restaurant.service_charge_rate || 0),
+                defaultDeliveryFee: resolvedDeliveryFee,
+                default_delivery_fee: resolvedDeliveryFee,
+                defaultGuestCount: restaurant.default_guest_count || 2,
+                defaultRiderFloat: Number(restaurant.default_rider_float || 5000)
             }
         });
     } catch (e: any) {
@@ -1872,8 +1918,11 @@ app.patch('/api/restaurants/:restaurantId/profile',
   }
 );
 
-// Save operations config for a restaurant
-app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, res) => {
+// Save operations config for a restaurant (M034-G2 Unified Endpoint)
+app.patch('/api/operations/config/:restaurantId',
+  authMiddleware,
+  requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'),
+  async (req, res) => {
     const { restaurantId } = req.params;
 
     // SaaS Security: Only allow updating own restaurant config
@@ -1882,47 +1931,94 @@ app.patch('/api/operations/config/:restaurantId', authMiddleware, async (req, re
     }
 
     try {
-        const {
-            taxEnabled,
-            taxRate,
-            serviceChargeEnabled,
-            serviceChargeRate,
-            defaultDeliveryFee,
-            defaultGuestCount,
-            defaultRiderFloat,
-            // Floor Management
-            allowOverCapacity,
-            maxOverCapacityGuests,
-            enableTableMerging
-        } = req.body;
-
-        // Verify restaurant exists
-        const restaurant = await prisma.restaurants.findUnique({
+        const existing = await prisma.restaurants.findUnique({
             where: { id: restaurantId },
             select: { id: true }
         });
 
-        if (!restaurant) {
+        if (!existing) {
             return res.status(404).json({ error: 'Restaurant not found' });
         }
 
-        // TODO: When adding operations_config table, save config there
-        // For now, just acknowledge the save
+        // Strict Allowlist for restaurants table
+        const restaurantData: any = {};
+        if (typeof req.body.business_name === 'string' && req.body.business_name.trim().length >= 2) {
+            restaurantData.name = req.body.business_name.trim();
+        } else if (typeof req.body.name === 'string' && req.body.name.trim().length >= 2) {
+            restaurantData.name = req.body.name.trim();
+        }
+
+        if (typeof req.body.business_address === 'string') {
+            restaurantData.address = req.body.business_address.trim();
+        } else if (typeof req.body.address === 'string') {
+            restaurantData.address = req.body.address.trim();
+        }
+
+        if (typeof req.body.business_phone === 'string') {
+            restaurantData.phone = req.body.business_phone.trim();
+        } else if (typeof req.body.phone === 'string') {
+            restaurantData.phone = req.body.phone.trim();
+        }
+
+        if (typeof req.body.ntn_number === 'string') {
+            restaurantData.fbr_ntn = req.body.ntn_number.trim();
+        } else if (typeof req.body.tax_number === 'string') {
+            restaurantData.fbr_ntn = req.body.tax_number.trim();
+        }
+
+        if (typeof req.body.currency === 'string') {
+            restaurantData.currency = req.body.currency.trim();
+        }
+        if (typeof req.body.timezone === 'string') {
+            restaurantData.timezone = req.body.timezone.trim();
+        }
+
+        if (req.body.taxEnabled !== undefined) restaurantData.tax_enabled = Boolean(req.body.taxEnabled);
+        if (req.body.taxRate !== undefined) restaurantData.tax_rate = Number(req.body.taxRate) || 0;
+        if (req.body.serviceChargeEnabled !== undefined) restaurantData.service_charge_enabled = Boolean(req.body.serviceChargeEnabled);
+        if (req.body.serviceChargeRate !== undefined) restaurantData.service_charge_rate = Number(req.body.serviceChargeRate) || 0;
+        if (req.body.defaultGuestCount !== undefined) {
+            restaurantData.default_guest_count = Math.max(1, Math.min(20, Number(req.body.defaultGuestCount) || 2));
+        }
+        if (req.body.defaultRiderFloat !== undefined) {
+            restaurantData.default_rider_float = Number(req.body.defaultRiderFloat) || 5000;
+        }
+
+        const updatedRestaurant = Object.keys(restaurantData).length > 0
+            ? await prisma.restaurants.update({
+                where: { id: restaurantId },
+                data: { ...restaurantData, updated_at: new Date() }
+            })
+            : await prisma.restaurants.findUnique({ where: { id: restaurantId } });
+
+        const deliveryDefault = await prisma.order_type_defaults.findFirst({
+            where: { restaurant_id: restaurantId, order_type: 'DELIVERY' }
+        });
+        const resolvedDeliveryFee = req.body.defaultDeliveryFee !== undefined
+            ? Number(req.body.defaultDeliveryFee)
+            : (deliveryDefault ? Number(deliveryDefault.delivery_fee) : 250);
+
         const config = {
-            taxEnabled: Boolean(taxEnabled),
-            taxRate: Number(taxRate) || 0,
-            serviceChargeEnabled: Boolean(serviceChargeEnabled),
-            serviceChargeRate: Number(serviceChargeRate) || 0,
-            defaultDeliveryFee: Number(defaultDeliveryFee) || 250,
-            defaultGuestCount: Math.max(1, Math.min(20, Number(defaultGuestCount) || 2)),
-            defaultRiderFloat: Number(defaultRiderFloat) || 5000,
-            // Floor Management
-            allowOverCapacity: allowOverCapacity !== undefined ? Boolean(allowOverCapacity) : true,
-            maxOverCapacityGuests: Number(maxOverCapacityGuests) || 3,
-            enableTableMerging: Boolean(enableTableMerging)
+            business_name: updatedRestaurant?.name || '',
+            business_address: updatedRestaurant?.address || '',
+            business_phone: updatedRestaurant?.phone || '',
+            ntn_number: updatedRestaurant?.fbr_ntn || '',
+            currency: updatedRestaurant?.currency || 'PKR',
+            timezone: updatedRestaurant?.timezone || 'Asia/Karachi',
+            taxEnabled: Boolean(updatedRestaurant?.tax_enabled),
+            taxRate: Number(updatedRestaurant?.tax_rate || 0),
+            serviceChargeEnabled: Boolean(updatedRestaurant?.service_charge_enabled),
+            serviceChargeRate: Number(updatedRestaurant?.service_charge_rate || 0),
+            defaultDeliveryFee: resolvedDeliveryFee,
+            default_delivery_fee: resolvedDeliveryFee,
+            defaultGuestCount: updatedRestaurant?.default_guest_count || 2,
+            defaultRiderFloat: Number(updatedRestaurant?.default_rider_float || 5000),
+            allowOverCapacity: req.body.allowOverCapacity !== undefined ? Boolean(req.body.allowOverCapacity) : true,
+            maxOverCapacityGuests: Number(req.body.maxOverCapacityGuests) || 3,
+            enableTableMerging: Boolean(req.body.enableTableMerging)
         };
 
-        io.to(`restaurant:${req.restaurantId}`).emit('config:updated', { restaurantId, config });
+        io.to(`restaurant:${restaurantId}`).emit('config:updated', { restaurantId, config });
 
         res.json({
             success: true,
