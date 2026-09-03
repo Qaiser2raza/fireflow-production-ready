@@ -2,6 +2,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { platformAuthService } from '../platform/PlatformAuthService';
+import { EmailVerificationService } from '../EmailVerificationService';
 import { prisma } from '../../../shared/lib/prisma';
 
 export interface ProvisioningResult {
@@ -93,6 +94,20 @@ export class RestaurantProvisioningService {
             restaurant_id: restaurant.id,
             email: normalizedEmail,
             state: 'INVITE_PENDING',
+          },
+        });
+
+        // M035 Phase 1: Create 48-hour email verification token for the owner
+        const verificationToken = EmailVerificationService.generateToken();
+        const verificationExpiresAt = EmailVerificationService.getTokenExpiry();
+        await tx.email_verification_tokens.create({
+          data: {
+            email: normalizedEmail,
+            staff_id: ownerStaff.id,
+            restaurant_id: restaurant.id,
+            token: verificationToken,
+            expires_at: verificationExpiresAt,
+            used: false,
           },
         });
 

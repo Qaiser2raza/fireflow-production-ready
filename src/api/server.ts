@@ -32,6 +32,7 @@ import platformRoutes from './routes/platformRoutes';
 import { platformAuthMiddleware, requirePlatformRole } from './middleware/platformAuthMiddleware';
 import { platformAuthService } from './services/platform/PlatformAuthService';
 import { platformJwtService } from './services/platform/PlatformJwtService';
+import { EmailVerificationService } from './services/EmailVerificationService';
 import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { refreshTokenService } from './services/auth/RefreshTokenService';
@@ -1136,6 +1137,112 @@ app.post('/api/auth/change-pin', verifyPinLimiter, authMiddleware, async (req, r
     } catch (e: any) {
         console.error('[ERROR] POST /api/auth/change-pin:', e.message);
         res.status(500).json({ error: 'PIN change failed' });
+    }
+});
+
+// ==========================================
+// ✉️ EMAIL VERIFICATION ENDPOINTS (M035-Phase1)
+// ==========================================
+
+const resendVerificationTracker = new Map<string, number[]>();
+
+/**
+ * POST /api/auth/verify-email
+ * Verifies an email token (48h expiry).
+ * If owner invite matches, marks owner_invites state as VERIFIED.
+ * If staff record matches, sets staff.is_email_verified = true.
+ */
+app.post('/api/auth/verify-email', async (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!token || typeof token !== 'string') {
+            return res.status(400).json({ error: 'Verification token is required' });
+        }
+
+        const result = await EmailVerificationService.verifyToken(token);
+        if (!result.valid || !result.email) {
+            return res.status(400).json({ error: result.error || 'Invalid or expired verification token' });
+        }
+
+        // Update matching owner_invites
+        await prisma.owner_invites.updateMany({
+            where: {
+                email: result.email.toLowerCase(),
+                state: 'INVITE_PENDING'
+            },
+            data: {
+                state: 'VERIFIED',
+                updated_at: new Date()
+            }
+        });
+
+        // Update matching staff record if staffId is attached or by email
+        if (result.staffId) {
+            await prisma.staff.update({
+                where: { id: result.staffId },
+                data: { is_email_verified: true }
+            }).catch(() => {});
+        }
+
+        res.json({
+            success: true,
+            message: 'Email verified successfully',
+            email: result.email
+        });
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/auth/verify-email:', e.message);
+        res.status(500).json({ error: 'Email verification failed' });
+    }
+});
+
+/**
+ * POST /api/auth/resend-verification
+ * Rate limit: max 3 requests per hour per email.
+ * Invalidates old unused tokens and creates a new 48h verification token.
+ * Never leaks account/email existence.
+ */
+app.post('/api/auth/resend-verification', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email || typeof email !== 'string' || !email.includes('@')) {
+            return res.status(400).json({ error: 'A valid email address is required' });
+        }
+
+        const normalizedEmail = email.toLowerCase().trim();
+        const now = Date.now();
+        const oneHourAgo = now - 60 * 60 * 1000;
+
+        // In-memory rate limiting: max 3 requests per hour per email
+        const timestamps = (resendVerificationTracker.get(normalizedEmail) || []).filter(ts => ts > oneHourAgo);
+        if (timestamps.length >= 3) {
+            return res.status(429).json({
+                error: 'Too many verification requests. Please wait an hour before requesting another email.'
+            });
+        }
+        timestamps.push(now);
+        resendVerificationTracker.set(normalizedEmail, timestamps);
+
+        // Check if an invite exists for this email
+        const invite = await prisma.owner_invites.findFirst({
+            where: { email: normalizedEmail }
+        });
+
+        if (invite) {
+            await EmailVerificationService.createVerificationEmail(
+                normalizedEmail,
+                null,
+                invite.restaurant_id
+            );
+        }
+
+        // Generic success response to avoid leaking account existence
+        res.json({
+            success: true,
+            message: 'Verification email resent'
+        });
+    } catch (e: any) {
+        console.error('[ERROR] POST /api/auth/resend-verification:', e.message);
+        res.status(500).json({ error: 'Failed to process resend request' });
     }
 });
 
