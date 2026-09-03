@@ -140,13 +140,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchWithAuth(`${API_URL}/vendors?restaurant_id=${restaurantId}`),
         fetchWithAuth(`${API_URL}/stations?restaurant_id=${restaurantId}`),
         fetchWithAuth(`${API_URL}/cashier/current?restaurantId=${restaurantId}&staffId=${user.id}`),
-        fetchWithAuth(`${API_URL}/operations/config/${restaurantId}`),
-        fetchWithAuth(`${API_URL}/restaurants/${restaurantId}/profile`)
+        fetchWithAuth(`${API_URL}/operations/config/${restaurantId}`)
       ];
       
-      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, vendDataRes, stationRes, sessionRes, opsCfgRes, profileRes] = await Promise.all(fetches);
+      const [ordersRes, tablesRes, sectionsRes, menuRes, catRes, staffRes, trxRes, custDataRes, vendDataRes, stationRes, sessionRes, opsCfgRes] = await Promise.all(fetches);
 
-      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, vendData, stationData, sessionData, opsCfgData, profileData] = await Promise.all([
+      const [ordersData, tablesData, sectionsData, menuData, catData, staffData, trxData, custData, vendData, stationData, sessionData, opsCfgData] = await Promise.all([
         ordersRes.ok ? ordersRes.json() : [],
         tablesRes.ok ? tablesRes.json() : [],
         sectionsRes.ok ? sectionsRes.json() : [],
@@ -158,8 +157,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         vendDataRes.ok ? vendDataRes.json() : [],
         stationRes.ok ? stationRes.json() : [],
         sessionRes.ok ? sessionRes.json() : { success: false },
-        opsCfgRes.ok ? opsCfgRes.json() : null,
-        (profileRes && profileRes.ok) ? profileRes.json() : null
+        opsCfgRes.ok ? opsCfgRes.json() : null
       ]);
 
       // Session is set after all state below — see authoritative call near end of fetchInitialData
@@ -222,22 +220,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setReservations([]); // TODO: Implement fetch
 
       // Store operations config (tax/svc settings) in state + localStorage cache
-      // API returns { success: true, config: { order_type_defaults, ... } } — unwrap .config
+      // API returns { success: true, config: { business_name, order_type_defaults, ... } } — unwrap .config
       const resolvedCfg = opsCfgData?.config || opsCfgData || {};
-      
-      const finalCfg = {
-        ...resolvedCfg,
-        business_name: profileData?.restaurant?.name || resolvedCfg.business_name,
-        business_address: profileData?.restaurant?.address || resolvedCfg.business_address,
-        business_phone: profileData?.restaurant?.phone || resolvedCfg.business_phone,
-        ntn_number: profileData?.restaurant?.fbr_ntn || resolvedCfg.ntn_number
-      };
 
-      if (finalCfg && typeof finalCfg === 'object' && !Array.isArray(finalCfg)) {
-        setOperationsConfig(finalCfg);
-        localStorage.setItem('fireflow_ops_cfg', JSON.stringify(finalCfg));
+      if (resolvedCfg && typeof resolvedCfg === 'object' && !Array.isArray(resolvedCfg)) {
+        setOperationsConfig(resolvedCfg);
+        localStorage.setItem('fireflow_ops_cfg', JSON.stringify(resolvedCfg));
         // Legacy key used by calculateOrderTotal fallback
-        localStorage.setItem(`fireflow_operations_config_${restaurantId}`, JSON.stringify(finalCfg));
+        localStorage.setItem(`fireflow_operations_config_${restaurantId}`, JSON.stringify(resolvedCfg));
       }
       
       if (sessionData.success && sessionData.session) {

@@ -51,7 +51,7 @@ export const BusinessProfilePanel: React.FC = () => {
         
         const handleUpdate = (data: any) => {
             if (data.restaurantId === restaurantId) {
-                setConfig(data.config);
+                setConfig((prev: any) => ({ ...prev, ...data.config }));
                 cacheSet('configs', cacheKey, data.config);
             }
         };
@@ -65,16 +65,22 @@ export const BusinessProfilePanel: React.FC = () => {
 
         setIsSaving(true);
         try {
-            // Send only identity fields to the new profile endpoint
+            // M034-G2: Save unified identity & operational fields directly to operations config endpoint
             const payload = {
-                name: config.business_name,
-                address: config.business_address,
-                phone: config.business_phone,
-                email: config.business_email,
-                tax_number: config.ntn_number
+                business_name: config.business_name,
+                business_address: config.business_address,
+                business_phone: config.business_phone,
+                ntn_number: config.ntn_number,
+                currency: config.currency,
+                timezone: config.timezone,
+                business_type: config.business_type,
+                business_name_urdu: config.business_name_urdu,
+                business_city: config.business_city,
+                business_area: config.business_area,
+                strn_number: config.strn_number
             };
 
-            const response = await fetchWithAuth(`${API_BASE_URL}/restaurants/${restaurantId}/profile`, {
+            const response = await fetchWithAuth(`${API_BASE_URL}/operations/config/${restaurantId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -86,7 +92,7 @@ export const BusinessProfilePanel: React.FC = () => {
             if (data.success) {
                 addNotification('success', 'Business profile updated successfully');
                 
-                // Refresh global state so dashboard picks up new name
+                // Refresh global state so all app components pick up updated profile
                 if (fetchInitialData) {
                     await fetchInitialData();
                 }
