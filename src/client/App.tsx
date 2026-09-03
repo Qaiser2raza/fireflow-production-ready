@@ -1109,8 +1109,24 @@ let menuItems: any[] = [];
         menuItems = [
             { id: 'SUPER_ADMIN', icon: Shield, label: 'Vault Control' },
         ];
-    } else if (currentUser.role === 'CASHIER' || currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN') {
+    } else if (currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN') {
         menuItems = [
+            { id: 'DASHBOARD', icon: Layout, label: 'Dashboard' },
+            { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
+            { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
+            { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
+            { id: 'POS', icon: Grid, label: 'POS Control' },
+            { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+            { id: 'STAFF', icon: Users, label: 'Staff' },
+            { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
+            { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
+            { id: 'BILLING', icon: CreditCard, label: 'Billing' },
+            { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
+            { id: 'SETTINGS', icon: Settings, label: 'System' },
+        ];
+    } else if (currentUser.role === 'CASHIER') {
+        menuItems = [
+            { id: 'DASHBOARD', icon: Layout, label: 'Dashboard' },
             { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
             { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
             { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
@@ -1143,18 +1159,18 @@ let menuItems: any[] = [];
         ];
     } else {
         menuItems = [
+            { id: 'DASHBOARD', icon: Layout, label: 'Dashboard' },
             { id: 'INVENTORY', icon: Boxes, label: 'Inventory' },
             { id: 'STOCK_COUNT', icon: Boxes, label: 'Stock Count' },
-            { id: 'DASHBOARD', icon: Layout, label: 'Aura Dash' },
             { id: 'ORDER_HUB', icon: Utensils, label: 'Dine-In Order Hub' },
             { id: 'POS', icon: Grid, label: 'POS Control' },
             { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
+            { id: 'STAFF', icon: Users, label: 'Staff' },
             { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
             { id: 'FINANCE', icon: CreditCard, label: 'Finance' },
             { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
             { id: 'REGISTER', icon: CreditCard, label: 'Register' },
             { id: 'BILLING', icon: CreditCard, label: 'Billing' },
-            { id: 'STAFF', icon: Users, label: 'Personnel' },
             { id: 'CUSTOMERS', icon: Users, label: 'Patrons' },
             { id: 'MENU', icon: Coffee, label: 'Menu Lab' },
             { id: 'SETTINGS', icon: Settings, label: 'System' },
@@ -1163,22 +1179,25 @@ let menuItems: any[] = [];
 
   // Command palette commands
   const commands = [
+    { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: '📊', action: () => setActiveView('DASHBOARD') },
     { id: 'nav-inventory', label: 'Go to Inventory', shortcut: 'G I', category: 'Navigation', icon: '🔒', action: () => { setActiveView('INVENTORY'); setIsReceivingStock(false); } },
     { id: 'nav-receive-stock', label: 'Go to Receive Stock', shortcut: 'G R S', category: 'Navigation', icon: '📦', action: () => { setActiveView('INVENTORY'); setIsReceivingStock(true); } },
     { id: 'nav-stock-count', label: 'Go to Stock Count', shortcut: 'G S C', category: 'Navigation', action: () => setActiveView('STOCK_COUNT') },
-    { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: 'ðŸ“Š', action: () => setActiveView('DASHBOARD') },
-    { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: 'ðŸ›’', action: () => setActiveView('POS') },
-    { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: 'ðŸ‘¨â€ ðŸ ³', action: () => setActiveView('KITCHEN') },
-    { id: 'nav-orders', label: 'Go to Dine-In Order Hub', shortcut: 'G O', category: 'Navigation', icon: 'ðŸ ½ï¸ ', action: () => setActiveView('ORDER_HUB') },
-    { id: 'nav-logistics', label: 'Go to Logistics', shortcut: 'G L', category: 'Navigation', icon: 'ðŸšš', action: () => setActiveView('LOGISTICS') },
-    { id: 'nav-billing', label: 'Go to Billing', shortcut: 'G B', category: 'Navigation', icon: 'ðŸ’³', action: () => setActiveView('BILLING') },
-    { id: 'nav-settlement', label: 'Go to Settlement', shortcut: 'G $', category: 'Navigation', icon: 'ðŸ’°', action: () => setActiveView('SETTLEMENT') },
-    { id: 'nav-menu', label: 'Go to Menu', shortcut: 'G M', category: 'Navigation', icon: 'â˜•', action: () => setActiveView('MENU') },
-    { id: 'nav-settings', label: 'Go to Settings', shortcut: 'G S', category: 'Navigation', icon: 'âš™ï¸ ', action: () => setActiveView('SETTINGS') },
+    { id: 'nav-pos', label: 'Go to POS', shortcut: 'G P', category: 'Navigation', icon: '🛒', action: () => setActiveView('POS') },
+    { id: 'nav-kitchen', label: 'Go to Kitchen', shortcut: 'G K', category: 'Navigation', icon: '👨‍🍳', action: () => setActiveView('KITCHEN') },
+    { id: 'nav-orders', label: 'Go to Dine-In Order Hub', shortcut: 'G O', category: 'Navigation', icon: '🍽️', action: () => setActiveView('ORDER_HUB') },
+    { id: 'nav-logistics', label: 'Go to Logistics', shortcut: 'G L', category: 'Navigation', icon: '🚚', action: () => setActiveView('LOGISTICS') },
+    ...(['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(currentUser?.role || '')
+      ? [{ id: 'nav-staff', label: 'Go to Staff Management', shortcut: 'G U', category: 'Navigation', icon: '👥', action: () => setActiveView('STAFF') }]
+      : []),
+    { id: 'nav-billing', label: 'Go to Billing', shortcut: 'G B', category: 'Navigation', icon: '💳', action: () => setActiveView('BILLING') },
+    { id: 'nav-settlement', label: 'Go to Settlement', shortcut: 'G $', category: 'Navigation', icon: '💰', action: () => setActiveView('SETTLEMENT') },
+    { id: 'nav-menu', label: 'Go to Menu', shortcut: 'G M', category: 'Navigation', icon: '☕', action: () => setActiveView('MENU') },
+    { id: 'nav-settings', label: 'Go to Settings', shortcut: 'G S', category: 'Navigation', icon: '⚙️', action: () => setActiveView('SETTINGS') },
     // Actions
-    { id: 'action-refresh', label: 'Refresh Data', shortcut: 'Ctrl+R', category: 'Actions', icon: 'ðŸ”„', action: () => fetchInitialData() },
-    { id: 'action-theme', label: 'Toggle Theme', shortcut: 'Ctrl+T', category: 'Actions', icon: 'ðŸŒ™', action: toggleTheme },
-    { id: 'action-logout', label: 'Logout', shortcut: 'Ctrl+Q', category: 'Actions', icon: 'ðŸšª', action: logout },
+    { id: 'action-refresh', label: 'Refresh Data', shortcut: 'Ctrl+R', category: 'Actions', icon: '🔄', action: () => fetchInitialData() },
+    { id: 'action-theme', label: 'Toggle Theme', shortcut: 'Ctrl+T', category: 'Actions', icon: '🌙', action: toggleTheme },
+    { id: 'action-logout', label: 'Logout', shortcut: 'Ctrl+Q', category: 'Actions', icon: '🚪', action: logout },
   ];
   return (
     <div className="flex h-screen bg-[#020617] text-slate-200 overflow-hidden">
