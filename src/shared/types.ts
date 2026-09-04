@@ -126,6 +126,8 @@ export interface Staff {
     name: string;
     role: UserRole;
     pin: string;
+    email?: string | null;
+    is_email_verified?: boolean;
     image?: string | null;
     status: string;
     active_tables?: number;
@@ -700,7 +702,7 @@ export interface AppContextType {
     orderToEdit?: Order;
     setActiveView: (view: string) => void;
     setOrderToEdit: (order: Order | null) => void;
-    login: (pin: string) => Promise<boolean>;
+    login: (credentials: { email: string; password?: string; pin?: string }) => Promise<boolean>;
     logout: () => void;
     addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string, action?: { label: string, onClick: () => void }) => void;
     removeNotification: (id: string) => void;

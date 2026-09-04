@@ -26,6 +26,8 @@ export const StaffView: React.FC = () => {
     name: '',
     role: 'SERVER',
     pin: '',
+    email: '',
+    password: '',
     active_tables: 0,
     image: ''
   });
@@ -53,6 +55,8 @@ export const StaffView: React.FC = () => {
         name: staff.name,
         role: staff.role,
         pin: '', // F-V5: hashes are never returned to the client; empty = unchanged
+        email: staff.email || '',
+        password: '',
         active_tables: staff.active_tables || 0,
         image: staff.image || '' // Load existing image
       });
@@ -62,6 +66,8 @@ export const StaffView: React.FC = () => {
         name: '',
         role: 'SERVER',
         pin: Math.floor(100000 + Math.random() * 900000).toString(), // 6-digit: login enforces exactly 6
+        email: '',
+        password: '',
         active_tables: 0,
         image: ''
       });
@@ -73,23 +79,28 @@ export const StaffView: React.FC = () => {
     e.preventDefault();
 
     // F-V5: the API authenticates 6-digit PINs only — enforce client-side too
-    if (!/^\d{6}$/.test(formData.pin)) {
-      alert('Access PIN must be exactly 6 digits.');
+    if (!/^\S+@\S+\.\S+$/.test(formData.email)) {
+      alert('Enter a valid email address.');
+      return;
+    }
+    if (!editingStaff && !/(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}/.test(formData.password)) {
+      alert('Password must be at least 8 characters and include uppercase, lowercase, and a number.');
       return;
     }
 
     // Payload Construction
     const payload = {
-      restaurant_id: currentUser?.restaurant_id,
       name: formData.name,
       role: formData.role,
       pin: formData.pin,
+      email: formData.email,
+      password: formData.password,
       active_tables: formData.active_tables,
       status: 'active',
       image: formData.image // Ensure this is sent!
     };
 
-    const url = `${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}/staff`;
+    const url = `${typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api'}${editingStaff ? '/staff' : '/auth/register'}`;
     const headers = { 'Content-Type': 'application/json' };
 
     if (editingStaff) {
@@ -125,6 +136,17 @@ export const StaffView: React.FC = () => {
       body: JSON.stringify({ id: staff.id, status: newStatus })
     });
     if (fetchInitialData) fetchInitialData();
+  };
+
+  const resendVerification = async (email: string) => {
+    const response = await fetchWithAuth(`${API_URL}/auth/resend-verification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    if (!response.ok) {
+      alert('Unable to resend verification email.');
+    }
   };
 
   return (
@@ -166,7 +188,7 @@ export const StaffView: React.FC = () => {
       <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
           {filteredStaff.map((staff: any) => (
-            <StaffCard key={staff.id} staff={staff} onEdit={handleOpenModal} onDelete={handleDelete} onToggleStatus={toggleStaffStatus} />
+            <StaffCard key={staff.id} staff={staff} onEdit={handleOpenModal} onDelete={handleDelete} onToggleStatus={toggleStaffStatus} onResendVerification={resendVerification} />
           ))}
 
           {filteredStaff.length === 0 && (
@@ -216,6 +238,8 @@ export const StaffView: React.FC = () => {
               onChange={e => setFormData({ ...formData, name: e.target.value })}
               required
             />
+            <Input label="Email" type="email" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} required />
+            {!editingStaff && <Input label="Temporary Password" type="password" value={formData.password} onChange={e => setFormData({ ...formData, password: e.target.value })} required />}
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
@@ -262,7 +286,7 @@ export const StaffView: React.FC = () => {
 
 // --- NEW CARD COMPONENT ---
 
-const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus }: any) => {
+const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus, onResendVerification }: any) => {
   const getRoleStyle = (role: string) => {
     switch (role) {
       case 'SUPER_ADMIN':
@@ -317,6 +341,10 @@ const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus }: any) => {
           <div className="text-white font-bold text-lg truncate leading-tight mb-2">
             {staff.name}
           </div>
+          <div className="text-xs text-slate-400 truncate">{staff.email || 'No email address'}</div>
+          <div className={`mt-2 text-[9px] font-bold uppercase ${staff.is_email_verified ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {staff.is_email_verified ? 'Email verified' : 'Email pending'}
+          </div>
           <div className="flex items-center gap-2 bg-slate-950/50 p-1.5 rounded-lg w-fit border border-slate-800">
             <span className="text-[10px] text-slate-500 font-bold uppercase px-1">PIN</span>
             <span className="text-xs font-mono text-white tracking-widest">••••••</span>
@@ -335,6 +363,11 @@ const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus }: any) => {
           </div>
           <span className="text-[10px] font-bold uppercase tracking-widest">Edit</span>
         </button>
+        {!staff.is_email_verified && staff.email && (
+          <button onClick={() => onResendVerification(staff.email)} className="text-[10px] font-bold text-gold-400 hover:text-gold-300">
+            Resend verification
+          </button>
+        )}
 
         {staff.role !== 'SUPER_ADMIN' && (
           <>

@@ -33,6 +33,7 @@ import { platformAuthMiddleware, requirePlatformRole } from './middleware/platfo
 import { platformAuthService } from './services/platform/PlatformAuthService';
 import { platformJwtService } from './services/platform/PlatformJwtService';
 import { EmailVerificationService } from './services/EmailVerificationService';
+import { AuthController } from './controllers/AuthController';
 import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { refreshTokenService } from './services/auth/RefreshTokenService';
@@ -126,6 +127,9 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 app.set('io', io);
+
+// M035 Phase 2: Instantiate AuthController with dependency injection
+const authController = new AuthController(prisma, jwtService, EmailVerificationService);
 
 const eventBus = EventBus.getInstance();
 const outboxReader = new OutboxReader(1000);
@@ -589,300 +593,14 @@ const verifyPinLimiter = rateLimit({
  *   }
  * }
  */
-    // Anti-timing-oracle constant (#3): a valid cost-12 hash of an
-    // unreachable value. Fast-fail paths compare against it so unknown
-    // tenants/accounts cost the same as a real bcrypt verification.
-    const DUMMY_PIN_HASH = '$2b$12$GYLhc.xEurgMkyT0l46AZumEF7vrGJ0zgcZPyfk3OvFc6d0jY2CJy';
-
-    app.post('/api/auth/login', loginLimiter, async (req, res) => {
-    const { pin, restaurant_id, staff_name } = req.body;
-    const startTime = Date.now();
-    const ipAddress = req.ip || req.connection.remoteAddress || 'unknown';
-
-    // Mission 016B (F-SEC-1/F-SEC-2): tenant context is REQUIRED and every
-    // identity lookup is scoped to it. The plaintext `pin` column is never
-    // read; authentication verifies exclusively against stored bcrypt hashes.
-    if (!pin || typeof pin !== 'string' || !/^\d{6}$/.test(pin)) {
-        return res.status(400).json({ error: 'Invalid credentials' });
-    }
-    if (!restaurant_id || typeof restaurant_id !== 'string') {
-        logger.log({
-            level: LogLevel.WARN,
-            service: 'auth',
-            action: 'login_missing_tenant_context',
-            metadata: { ip_address: ipAddress }
-        });
-        return res.status(400).json({ error: 'Invalid credentials' });
-    }
-
-    try {
-        const tenantRow = await prisma.restaurants.findUnique({
-            where: { id: restaurant_id },
-            select: { id: true, is_active: true }
-        });
-
-        // Identical response for unknown and inactive tenants: no existence oracle.
-        // Audit rows use a null tenant FK when the tenant itself is unknown.
-        if (!tenantRow || !tenantRow.is_active) {
-            // Timing equalization: burn one bcrypt compare so this 401 costs
-            // the same as a real verification attempt (anti-enumeration).
-            await bcrypt.compare(pin, DUMMY_PIN_HASH).catch(() => false);
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: null,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'RESTAURANT',
-                    entity_id: null,
-                    details: {
-                        reason: !tenantRow ? 'tenant_unknown' : 'tenant_inactive',
-                        attempted_tenant_id: restaurant_id,
-                        ip_address: ipAddress
-                    }
-                }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const nameFilter = typeof staff_name === 'string' && staff_name.trim().length > 0 ? staff_name.trim() : undefined;
-
-        const candidates = await prisma.staff.findMany({
-            where: {
-                restaurant_id: restaurant_id,
-                status: 'active',
-                hashed_pin: { not: null },
-                ...(nameFilter ? { name: nameFilter } : {})
-            },
-            select: {
-                id: true,
-                name: true,
-                role: true,
-                status: true,
-                restaurant_id: true,
-                hashed_pin: true,
-                failed_login_count: true,
-                locked_until: true,
-                must_change_pin: true,
-                pin_expires_at: true
-            }
-        });
-
-        const now = Date.now();
-        const eligible = candidates.filter(c => !c.locked_until || c.locked_until.getTime() <= now);
-
-        if (eligible.length === 0) {
-            // Timing equalization: match the cost of the candidate-compare loop.
-            await bcrypt.compare(pin, DUMMY_PIN_HASH).catch(() => false);
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: restaurant_id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'RESTAURANT',
-                    entity_id: restaurant_id,
-                    details: {
-                        reason: 'no_eligible_staff',
-                        ip_address: ipAddress
-                    }
-                }
-            });
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        let user: (typeof eligible)[number] | null = null;
-        for (const candidate of eligible) {
-            try {
-                if (candidate.hashed_pin && await bcrypt.compare(pin, candidate.hashed_pin)) {
-                    user = candidate;
-                    break;
-                }
-            } catch (e) {
-                await prisma.audit_logs.create({
-                    data: {
-                        restaurant_id: restaurant_id,
-                        staff_id: candidate.id,
-                        action_type: 'STAFF_LOGIN_FAILED',
-                        entity_type: 'STAFF',
-                        entity_id: candidate.id,
-                        details: {
-                            reason: 'bcrypt_error',
-                            error: (e as Error).message,
-                            ip_address: ipAddress
-                        }
-                    }
-                });
-            }
-        }
-
-        // Phase 2: expired one-time PINs authenticate NOTHING. Check runs only
-        // after a successful bcrypt match, so the code leaks nothing to callers
-        // who cannot already produce the PIN. No session or tokens are issued.
-        if (user && user.pin_expires_at && user.pin_expires_at.getTime() <= Date.now()) {
-            await prisma.audit_logs.create({
-                data: {
-                    restaurant_id: restaurant_id,
-                    staff_id: user.id,
-                    action_type: 'STAFF_LOGIN_FAILED',
-                    entity_type: 'STAFF',
-                    entity_id: user.id,
-                    details: { reason: 'pin_expired', ip_address: ipAddress }
-                }
-            });
-            return res.status(403).json({
-                error: 'This PIN has expired and can no longer be used. Request a new PIN via FireFlow Vault support.',
-                code: 'PIN_EXPIRED'
-            });
-        }
-
-        if (!user) {
-            // Failure accounting: per-staff lockout requires an unambiguous
-            // target. With a single eligible candidate we preserve the existing
-            // counter/lockout behavior; with several we record the event without
-            // punishing unrelated accounts.
-            if (eligible.length === 1) {                const c = eligible[0];
-                const newFailedCount = (c.failed_login_count || 0) + 1;
-                const updateData: any = { failed_login_count: newFailedCount };
-
-                if (newFailedCount >= 5) {
-                    updateData.locked_until = new Date(now + 30 * 60 * 1000); // 30 minutes
-                    await prisma.audit_logs.create({
-                        data: {
-                            restaurant_id: restaurant_id,
-                            staff_id: c.id,
-                            action_type: 'STAFF_LOCKED',
-                            entity_type: 'STAFF',
-                            entity_id: c.id,
-                            details: {
-                                failed_count: newFailedCount,
-                                locked_until: updateData.locked_until.toISOString(),
-                                ip_address: ipAddress
-                            }
-                        }
-                    });
-                }
-
-                await prisma.staff.update({ where: { id: c.id }, data: updateData });
-
-                await prisma.audit_logs.create({
-                    data: {
-                        restaurant_id: restaurant_id,
-                        staff_id: c.id,
-                        action_type: 'STAFF_LOGIN_FAILED',
-                        entity_type: 'STAFF',
-                        entity_id: c.id,
-                        details: {
-                            reason: 'invalid_pin',
-                            failed_count: newFailedCount,
-                            ip_address: ipAddress
-                        }
-                    }
-                });
-            } else {
-                await prisma.audit_logs.create({
-                    data: {
-                        restaurant_id: restaurant_id,
-                        action_type: 'STAFF_LOGIN_FAILED',
-                        entity_type: 'RESTAURANT',
-                        entity_id: restaurant_id,
-                        details: {
-                            reason: 'invalid_pin_multi_candidate',
-                            candidates: eligible.length,
-                            ip_address: ipAddress
-                        }
-                    }
-                });
-            }
-
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const lastLoginAt = new Date();
-        await prisma.staff.update({
-            where: { id: user.id },
-            data: { last_login: lastLoginAt, failed_login_count: 0, locked_until: null }
-        });
-
-        const restaurant = await prisma.restaurants.findUnique({
-            where: { id: user.restaurant_id },
-            select: { id: true, name: true, slug: true, logo_url: true as any, onboarding_status: true }
-        });
-
-        const accessToken = jwtService.generateAccessToken(
-            user.id,
-            user.restaurant_id,
-            user.role,
-            user.name
-        );
-
-        const { token: refreshToken } = await refreshTokenService.createStaffRefreshToken(
-            user.id,
-            user.restaurant_id
-        );
-
-        await prisma.$transaction(async (tx) => {
-            await tx.audit_logs.create({
-                data: {
-                    restaurant_id: user.restaurant_id,
-                    staff_id: user.id,
-                    action_type: 'STAFF_LOGIN',
-                    entity_type: 'STAFF',
-                    entity_id: user.id,
-                    details: {
-                        timestamp: lastLoginAt.toISOString(),
-                    }
-                }
-            });
-        });
-
-        const duration = Date.now() - startTime;
-        logger.log({
-            level: LogLevel.INFO,
-            service: 'auth',
-            action: 'login_success',
-            duration_ms: duration,
-            staff_id: user.id,
-            restaurant_id: user.restaurant_id,
-            metadata: { role: user.role }
-        });
-
-        const sanitizedUser = {
-            id: user.id,
-            name: user.name,
-            role: user.role,
-            restaurant_id: user.restaurant_id,
-            status: user.status,
-            must_change_pin: user.must_change_pin === true,
-            last_login: lastLoginAt
-        };
-
-        res.json({
-            success: true,
-            staff: sanitizedUser,
-            restaurant: restaurant,
-            tokens: {
-                access_token: accessToken,
-                refresh_token: refreshToken,
-                expires_in: 15 * 60
-            }
-        });
-
-    } catch (e: any) {
-        const duration = Date.now() - startTime;
-        captureException(e, {
-            endpoint: '/api/auth/login',
-            duration_ms: duration
-        });
-        logger.log({
-            level: LogLevel.ERROR,
-            service: 'auth',
-            action: 'login_error',
-            duration_ms: duration,
-            error: {
-                message: e.message,
-                code: e.code
-            }
-        });
-        res.status(500).json({ error: 'Authentication service temporarily unavailable' });
-    }
-});
+// M035 Phase 2: Delegated to AuthController (supports Email+Password primary mode and PIN fast-auth)
+app.post('/api/auth/login', loginLimiter, authController.login.bind(authController));
+app.post('/api/auth/register', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), authController.register.bind(authController));
+app.post('/api/auth/verify-email', authController.verifyEmail.bind(authController));
+app.post('/api/auth/resend-verification', authController.resendVerification.bind(authController));
+app.post('/api/auth/change-password', authMiddleware, authController.changePassword.bind(authController));
+app.post('/api/auth/password-reset/request', authController.requestPasswordReset.bind(authController));
+app.post('/api/auth/password-reset/complete', authController.resetPassword.bind(authController));
 
 // --- PUBLIC SELF-SERVICE ONBOARDING (M034-D) ---
 
@@ -1152,7 +870,7 @@ const resendVerificationTracker = new Map<string, number[]>();
  * If owner invite matches, marks owner_invites state as VERIFIED.
  * If staff record matches, sets staff.is_email_verified = true.
  */
-app.post('/api/auth/verify-email', async (req, res) => {
+app.post('/api/auth/legacy/verify-email', async (req, res) => {
     try {
         const { token } = req.body;
         if (!token || typeof token !== 'string') {
@@ -1201,7 +919,7 @@ app.post('/api/auth/verify-email', async (req, res) => {
  * Invalidates old unused tokens and creates a new 48h verification token.
  * Never leaks account/email existence.
  */
-app.post('/api/auth/resend-verification', async (req, res) => {
+app.post('/api/auth/legacy/resend-verification', async (req, res) => {
     try {
         const { email } = req.body;
         if (!email || typeof email !== 'string' || !email.includes('@')) {

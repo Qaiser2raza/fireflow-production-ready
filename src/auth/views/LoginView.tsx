@@ -4,11 +4,14 @@ import { QRCodeSVG } from 'qrcode.react';
 
 
 interface LoginViewProps {
-  onLogin: (pin: string) => Promise<boolean | void> | void;
+  onLogin: (credentials: { email: string; password?: string; pin?: string }) => Promise<boolean | void> | void;
   restaurantName?: string;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName }) => {
+  const [mode, setMode] = useState<'password' | 'pin'>('password');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -35,12 +38,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isProcessing) return;
 
-      if (/^[0-9]$/.test(e.key)) {
+      if (mode === 'pin' && /^[0-9]$/.test(e.key)) {
         if (pin.length < 6) {
           setPin(prev => prev + e.key);
           setError(false);
         }
-      } else if (e.key === 'Backspace') {
+      } else if (mode === 'pin' && e.key === 'Backspace') {
         setPin(prev => prev.slice(0, -1));
         setError(false);
       } else if (e.key === 'Enter') {
@@ -52,13 +55,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pin, isProcessing]);
+  }, [pin, mode, isProcessing]);
 
   useEffect(() => {
-    if (pin.length === 6) {
+    if (mode === 'pin' && pin.length === 6) {
       handleSubmit();
     }
-  }, [pin]);
+  }, [pin, mode]);
 
   const handleNumberClick = (num: string) => {
     if (pin.length < 6 && !isProcessing) {
@@ -73,13 +76,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
   };
 
   const handleSubmit = async () => {
-    if (pin.length < 4 || isProcessing) return;
+    if (isProcessing || !email.trim() || (mode === 'password' ? !password : pin.length < 4)) return;
 
     setIsProcessing(true);
     setError(false);
     await new Promise(resolve => setTimeout(resolve, 300));
     try {
-      const success = await onLogin(pin);
+      const success = await onLogin({
+        email: email.trim(),
+        ...(mode === 'password' ? { password } : { pin })
+      });
       if (success === false) {
           throw new Error("Login failed");
       }
@@ -87,6 +93,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
       console.error("Login component error:", err);
       setError(true);
       setPin('');
+      setPassword('');
       setIsProcessing(false);
       return;
     }
@@ -142,10 +149,20 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
             <h2 className="text-white text-lg font-bold tracking-wide">
               {restaurantName ? `Terminal: ${restaurantName}` : 'Terminal Access'}
             </h2>
-            <p className="text-slate-500 text-[9px] uppercase font-black tracking-widest mt-1">Enter 4-6 Digit Security PIN</p>
+            <p className="text-slate-500 text-[9px] uppercase font-black tracking-widest mt-1">Choose a secure sign-in method</p>
           </div>
 
-          <div className="mb-6 flex justify-center gap-2.5 h-10 items-center">
+          <div className="grid grid-cols-2 gap-2 mb-4 rounded-xl bg-slate-950 p-1 border border-slate-800">
+            <button type="button" onClick={() => { setMode('password'); setError(false); }} className={`rounded-lg py-2 text-xs font-bold ${mode === 'password' ? 'bg-gold-500 text-slate-950' : 'text-slate-400'}`}>Email & Password</button>
+            <button type="button" onClick={() => { setMode('pin'); setError(false); }} className={`rounded-lg py-2 text-xs font-bold ${mode === 'pin' ? 'bg-gold-500 text-slate-950' : 'text-slate-400'}`}>PIN</button>
+          </div>
+
+          <div className="space-y-3 mb-5">
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" autoComplete="email" className="w-full rounded-xl bg-slate-950 border border-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-gold-500" />
+            {mode === 'password' && <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" autoComplete="current-password" className="w-full rounded-xl bg-slate-950 border border-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-gold-500" />}
+          </div>
+
+          {mode === 'pin' && <><div className="mb-6 flex justify-center gap-2.5 h-10 items-center">
             {[...Array(6)].map((_, i) => (
               <div
                 key={i}
@@ -182,12 +199,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
             >
               <Delete size={20} />
             </button>
-          </div>
+          </div></>}
 
           <button
             onClick={handleSubmit}
-            disabled={pin.length < 4 || isProcessing}
-            className={`w-full py-3 rounded-xl font-bold uppercase tracking-widest text-sm flex items-center justify-center gap-2 transition-all ${pin.length >= 4
+            disabled={!email.trim() || (mode === 'password' ? !password : pin.length < 4) || isProcessing}
+            className={`w-full py-3 rounded-xl font-bold uppercase tracking-widest text-sm flex items-center justify-center gap-2 transition-all ${email.trim() && (mode === 'password' ? password : pin.length >= 4)
               ? 'bg-gold-500 text-slate-950 hover:bg-gold-400 shadow-lg'
               : 'bg-slate-800 text-slate-600 cursor-not-allowed'
               }`}

@@ -891,6 +891,9 @@ model staff {
   pin_expires_at                                          DateTime?
   previous_hashed_pin                                     String?
   is_email_verified                                       Boolean           @default(false)
+  email                                                   String?           @db.VarChar(255)
+  password_hash                                           String?           @db.VarChar(255)
+  must_change_password                                    Boolean           @default(false)
   approval_logs_approval_logs_approved_by_user_idTostaff  approval_logs[]      @relation("approval_logs_approved_by_user_idTostaff")
   approval_logs_approval_logs_requested_by_user_idTostaff approval_logs[]      @relation("approval_logs_requested_by_user_idTostaff")
   audit_logs                                              audit_logs[]
@@ -915,6 +918,7 @@ model staff {
 
   @@unique([restaurant_id, name, role])
   @@index([pin])
+  @@index([email])
   @@index([restaurant_id])
 }
 
@@ -1620,5 +1624,21 @@ model email_verification_tokens {
   @@index([token])
   @@index([staff_id])
   @@index([restaurant_id])
+  @@index([used, expires_at])
+}
+
+model staff_password_reset_tokens {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  staff_id   String    @db.Uuid
+  email      String    @db.VarChar(255)
+  token      String    @unique @db.VarChar(255)
+  expires_at DateTime  @db.Timestamp(6)
+  used       Boolean   @default(false)
+  created_at DateTime  @default(now()) @db.Timestamp(6)
+  updated_at DateTime  @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([staff_id])
+  @@index([email])
+  @@index([token])
   @@index([used, expires_at])
 }

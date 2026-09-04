@@ -262,12 +262,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 300);
   };
 
-  const login = async (pin: string) => {
+  const login = async (credentials: { email: string; password?: string; pin?: string }) => {
     try {
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin, restaurant_id: localStorage.getItem('restaurant_id') || undefined })
+        body: JSON.stringify(credentials)
       });
 
       if (!res.ok) {
@@ -275,7 +275,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (errData?.code === 'PIN_EXPIRED') {
           addNotification('error', 'This PIN has expired and can no longer be used. Request a new PIN from FireFlow support.');
         }
-        throw new Error('Invalid PIN');
+        throw new Error(errData?.error || 'Invalid credentials');
       }
       const data = await res.json();
       const user = data.staff;
@@ -291,10 +291,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setContextRestaurant(restaurant || null);
 
       // ✅ Phase 2b: Store JWT tokens if present
-      if (data.tokens) {
-        localStorage.setItem('accessToken', data.tokens.access_token);
-        localStorage.setItem('refreshToken', data.tokens.refresh_token);
-        const expiryTime = Date.now() + (data.tokens.expires_in * 1000);
+      if (data.accessToken && data.refreshToken) {
+        localStorage.setItem('accessToken', data.accessToken);
+        localStorage.setItem('refreshToken', data.refreshToken);
+        localStorage.setItem('staff', JSON.stringify(data.staff));
+        const expiryTime = Date.now() + (15 * 60 * 1000);
         localStorage.setItem('accessTokenExpiry', expiryTime.toString());
       }
 
@@ -325,7 +326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       return true;
     } catch (err) {
-      addNotification('error', "Authentication Failed: Invalid PIN");
+      addNotification('error', err instanceof Error ? `Authentication Failed: ${err.message}` : 'Authentication failed');
       return false;
     }
   };
