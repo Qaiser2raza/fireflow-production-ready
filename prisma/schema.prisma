@@ -662,6 +662,25 @@ model registered_devices {
   @@index([staff_id])
 }
 
+// Tenant-authentication device trust. This is intentionally separate from
+// registered_devices, which represents licensing/device-pairing sessions.
+model staff_devices {
+  id                 String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  staff_id           String      @db.Uuid
+  restaurant_id      String      @db.Uuid
+  device_fingerprint String      @db.VarChar(255)
+  device_name        String?     @db.VarChar(100)
+  last_used_at       DateTime?   @db.Timestamp(6)
+  created_at         DateTime    @default(now()) @db.Timestamp(6)
+  updated_at         DateTime    @default(now()) @updatedAt @db.Timestamp(6)
+  staff              staff       @relation(fields: [staff_id], references: [id], onDelete: Cascade)
+  restaurants        restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@unique([staff_id, device_fingerprint])
+  @@index([restaurant_id])
+  @@index([staff_id])
+}
+
 model reservation_orders {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   order_id         String   @unique @db.Uuid
@@ -776,6 +795,7 @@ model restaurants {
   printers                printers[]
   purchase_orders         purchase_orders[]
   registered_devices      registered_devices[]
+  staff_devices           staff_devices[]
   reservations            reservations[]
   restaurant_features     restaurant_features?
   rider_settlements       rider_settlements[]
@@ -909,6 +929,7 @@ model staff {
   orders_orders_assigned_driver_idTostaff                 orders[]             @relation("orders_assigned_driver_idTostaff")
   orders_orders_assigned_waiter_idTostaff                 orders[]             @relation("orders_assigned_waiter_idTostaff")
   registered_devices                                      registered_devices[]
+  staff_devices                                            staff_devices[]
   rider_settlements                                       rider_settlements[]
   rider_shifts                                            rider_shifts[]
   security_events                                         security_events[]

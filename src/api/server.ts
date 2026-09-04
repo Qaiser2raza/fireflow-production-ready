@@ -10,7 +10,7 @@ import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { logger, LogLevel, requestLoggerMiddleware } from '../shared/lib/logger';
 import { config, isCloudEnabled } from '../config/env';
-import { initializeSentry, setupGlobalErrorHandlers, captureException } from '../monitoring/errorTracking';
+import { initializeSentry, setupGlobalErrorHandlers } from '../monitoring/errorTracking';
 import HealthMonitor from '../monitoring/HealthMonitor';
 
 import { OrderServiceFactory } from './services/orders/OrderServiceFactory';
@@ -601,6 +601,8 @@ app.post('/api/auth/resend-verification', authController.resendVerification.bind
 app.post('/api/auth/change-password', authMiddleware, authController.changePassword.bind(authController));
 app.post('/api/auth/password-reset/request', authController.requestPasswordReset.bind(authController));
 app.post('/api/auth/password-reset/complete', authController.resetPassword.bind(authController));
+app.get('/api/auth/staff/:staffId/devices', authMiddleware, authController.listDevices.bind(authController));
+app.delete('/api/auth/staff/:staffId/devices/:deviceId', authMiddleware, authController.revokeDevice.bind(authController));
 
 // --- PUBLIC SELF-SERVICE ONBOARDING (M034-D) ---
 

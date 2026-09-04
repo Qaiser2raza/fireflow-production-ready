@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { JwtService } from '../services/auth/JwtService';
 import { EmailVerificationService } from '../services/EmailVerificationService';
 import { refreshTokenService } from '../services/auth/RefreshTokenService';
+import { StaffDeviceService } from '../services/auth/StaffDeviceService';
 
 const BCRYPT_COST = 14;
 const DUMMY_PIN_HASH = '$2b$12$GYLhc.xEurgMkyT0l46AZumEF7vrGJ0zgcZPyfk3OvFc6d0jY2CJy';
@@ -19,6 +20,7 @@ export class AuthController {
   private prisma: PrismaClient;
   private jwtService: JwtService;
   private emailVerificationService: typeof EmailVerificationService;
+  private staffDeviceService: StaffDeviceService;
 
   constructor(
     prisma: PrismaClient,
@@ -28,6 +30,7 @@ export class AuthController {
     this.prisma = prisma;
     this.jwtService = jwtService;
     this.emailVerificationService = emailVerificationService;
+    this.staffDeviceService = new StaffDeviceService(prisma);
 
     // Bind methods to preserve `this` context when passed directly as Express handlers
     this.register = this.register.bind(this);
@@ -37,6 +40,8 @@ export class AuthController {
     this.changePassword = this.changePassword.bind(this);
     this.requestPasswordReset = this.requestPasswordReset.bind(this);
     this.resetPassword = this.resetPassword.bind(this);
+    this.listDevices = this.listDevices.bind(this);
+    this.revokeDevice = this.revokeDevice.bind(this);
   }
 
   /**
@@ -187,11 +192,10 @@ export class AuthController {
    * Fast-auth mode: email + PIN (requires trusted device)
    */
   async login(req: Request, res: Response): Promise<void> {
-    const startTime = Date.now();
     const ipAddress = req.ip || (req.headers['x-forwarded-for'] as string) || 'unknown';
 
     try {
-      const { email, password, pin } = req.body;
+      const { email, password, pin, device_fingerprint, device_name } = req.body;
 
       if (!email || typeof email !== 'string') {
         res.status(400).json({ error: 'Email is required' });
@@ -220,6 +224,12 @@ export class AuthController {
         res.status(400).json({ error: 'Password or PIN is required' });
         return;
       }
+      if (isPasswordMode && isPinMode) {
+        res.status(400).json({ error: 'Choose either password or PIN authentication' });
+        return;
+      }
+
+      const device = StaffDeviceService.normalize({ fingerprint: device_fingerprint, name: device_name });
 
       // Look up staff by email
       const staff = await this.prisma.staff.findFirst({
@@ -286,25 +296,7 @@ export class AuthController {
 
       // Handle FAST-AUTH MODE (Email + PIN)
       if (isPinMode) {
-        // Device trust check: must have registered trusted device
-        const deviceFingerprint = (req.headers['x-device-fingerprint'] as string) || req.body.device_fingerprint;
-
-        let isDeviceTrusted = false;
-        if (deviceFingerprint) {
-          const registeredDevice = await this.prisma.registered_devices.findFirst({
-            where: {
-              staff_id: staff.id,
-              restaurant_id: staff.restaurant_id,
-              device_fingerprint: deviceFingerprint,
-              is_active: true
-            }
-          });
-          if (registeredDevice) {
-            isDeviceTrusted = true;
-          }
-        }
-
-        if (!isDeviceTrusted) {
+        if (!device || !await this.staffDeviceService.isTrusted(staff.id, staff.restaurant_id, device.fingerprint)) {
           res.status(403).json({
             error: 'PIN login is only permitted on paired, trusted devices. Please sign in with email and password.',
             code: 'DEVICE_NOT_TRUSTED'
@@ -329,6 +321,14 @@ export class AuthController {
           res.status(401).json({ error: 'Invalid credentials' });
           return;
         }
+      }
+
+      // A successful full credential login is the only enrollment path. A
+      // client fingerprint is never sufficient to create trust by itself.
+      if (isPasswordMode && device) {
+        await this.staffDeviceService.trust(staff.id, staff.restaurant_id, device);
+      } else if (isPinMode && device) {
+        await this.staffDeviceService.touch(staff.id, staff.restaurant_id, device.fingerprint);
       }
 
       // Successful Authentication -> reset failure count and update last_login
@@ -385,6 +385,7 @@ export class AuthController {
           is_email_verified: staff.is_email_verified,
           last_login: lastLoginAt
         },
+        device: { trusted: Boolean(device), enrolled: isPasswordMode && Boolean(device) },
         restaurant: staff.restaurants,
         tokens: {
           access_token: accessToken,
@@ -396,6 +397,49 @@ export class AuthController {
       console.error('[AUTH_CONTROLLER] login error:', err);
       res.status(500).json({ error: 'Login failed' });
     }
+  }
+
+  /** List trusted devices for the authenticated staff member or a manager's tenant staff. */
+  async listDevices(req: Request, res: Response): Promise<void> {
+    const actorId = (req as any).staffId;
+    const restaurantId = (req as any).restaurantId;
+    const targetStaffId = req.params.staffId;
+    if (!actorId || !restaurantId || !targetStaffId) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+    if (actorId !== targetStaffId && !['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(String((req as any).role).toUpperCase())) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    const target = await this.prisma.staff.findFirst({ where: { id: targetStaffId, restaurant_id: restaurantId }, select: { id: true } });
+    if (!target) {
+      res.status(404).json({ error: 'Staff member not found' });
+      return;
+    }
+    res.json({ devices: await this.staffDeviceService.list(targetStaffId, restaurantId) });
+  }
+
+  /** Revoke a trusted device within the authenticated tenant only. */
+  async revokeDevice(req: Request, res: Response): Promise<void> {
+    const actorId = (req as any).staffId;
+    const restaurantId = (req as any).restaurantId;
+    const targetStaffId = req.params.staffId;
+    const deviceId = req.params.deviceId;
+    if (!actorId || !restaurantId || !targetStaffId || !deviceId) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+    if (actorId !== targetStaffId && !['MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(String((req as any).role).toUpperCase())) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
+    }
+    if (!await this.staffDeviceService.revoke(deviceId, targetStaffId, restaurantId)) {
+      res.status(404).json({ error: 'Trusted device not found' });
+      return;
+    }
+    await this.prisma.audit_logs.create({ data: { restaurant_id: restaurantId, staff_id: actorId, action_type: 'STAFF_DEVICE_REVOKED', entity_type: 'STAFF_DEVICE', entity_id: deviceId, details: { target_staff_id: targetStaffId } } });
+    res.json({ success: true });
   }
 
   /**

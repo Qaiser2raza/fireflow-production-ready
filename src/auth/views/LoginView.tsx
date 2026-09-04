@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Delete, ArrowRight, Lock, User, Smartphone, X, RefreshCcw, Wifi } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { getTrustedDeviceFingerprint, getDeviceName } from '../../shared/lib/deviceFingerprint';
 
 
 interface LoginViewProps {
-  onLogin: (credentials: { email: string; password?: string; pin?: string }) => Promise<boolean | void> | void;
+  onLogin: (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string }) => Promise<boolean | void> | void;
   restaurantName?: string;
 }
 
@@ -12,6 +13,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
   const [mode, setMode] = useState<'password' | 'pin'>('password');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [deviceFingerprint, setDeviceFingerprint] = useState<string | null>(null);
+  const [deviceTrusted, setDeviceTrusted] = useState(false);
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -33,6 +36,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
       setLoadingConnectivity(false);
     }
   };
+
+  useEffect(() => {
+    getTrustedDeviceFingerprint().then(setDeviceFingerprint).catch(() => setDeviceFingerprint(null));
+  }, []);
+
+  useEffect(() => {
+    setDeviceTrusted(Boolean(email.trim()) && localStorage.getItem(`trusted-pin:${email.trim().toLowerCase()}`) === 'true');
+  }, [email]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -84,10 +95,15 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
     try {
       const success = await onLogin({
         email: email.trim(),
-        ...(mode === 'password' ? { password } : { pin })
+        ...(mode === 'password' ? { password } : { pin }),
+        ...(deviceFingerprint ? { device_fingerprint: deviceFingerprint, device_name: getDeviceName() } : {})
       });
       if (success === false) {
           throw new Error("Login failed");
+      }
+      if (mode === 'password' && deviceFingerprint) {
+        localStorage.setItem(`trusted-pin:${email.trim().toLowerCase()}`, 'true');
+        setDeviceTrusted(true);
       }
     } catch (err) {
       console.error("Login component error:", err);
@@ -154,8 +170,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
 
           <div className="grid grid-cols-2 gap-2 mb-4 rounded-xl bg-slate-950 p-1 border border-slate-800">
             <button type="button" onClick={() => { setMode('password'); setError(false); }} className={`rounded-lg py-2 text-xs font-bold ${mode === 'password' ? 'bg-gold-500 text-slate-950' : 'text-slate-400'}`}>Email & Password</button>
-            <button type="button" onClick={() => { setMode('pin'); setError(false); }} className={`rounded-lg py-2 text-xs font-bold ${mode === 'pin' ? 'bg-gold-500 text-slate-950' : 'text-slate-400'}`}>PIN</button>
+            <button type="button" disabled={!deviceTrusted} onClick={() => { setMode('pin'); setError(false); }} className={`rounded-lg py-2 text-xs font-bold ${mode === 'pin' ? 'bg-gold-500 text-slate-950' : deviceTrusted ? 'text-slate-400' : 'text-slate-600 cursor-not-allowed'}`}>PIN</button>
           </div>
+          {!deviceTrusted && <p className="mb-4 text-center text-[10px] text-slate-500">Sign in with email and password to trust this device before using PIN fast-auth.</p>}
 
           <div className="space-y-3 mb-5">
             <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" autoComplete="email" className="w-full rounded-xl bg-slate-950 border border-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-gold-500" />

@@ -262,7 +262,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 300);
   };
 
-  const login = async (credentials: { email: string; password?: string; pin?: string }) => {
+  const login = async (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string }) => {
     try {
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',

@@ -702,7 +702,7 @@ export interface AppContextType {
     orderToEdit?: Order;
     setActiveView: (view: string) => void;
     setOrderToEdit: (order: Order | null) => void;
-    login: (credentials: { email: string; password?: string; pin?: string }) => Promise<boolean>;
+    login: (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string }) => Promise<boolean>;
     logout: () => void;
     addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string, action?: { label: string, onClick: () => void }) => void;
     removeNotification: (id: string) => void;
@@ -780,4 +780,11 @@ export interface AppContextType {
     operationsConfig: any;
     optimisticItemStatus: Record<string, string>;
     setOptimisticItemStatus: (val: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => void;
+}
+
+export interface StaffDevice {
+    id: string;
+    device_name?: string | null;
+    last_used_at?: Date | string | null;
+    created_at: Date | string;
 }

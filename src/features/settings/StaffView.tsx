@@ -14,7 +14,7 @@ import { fetchWithAuth } from '../../shared/lib/authInterceptor';
 const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 export const StaffView: React.FC = () => {
-  const { servers, currentUser, fetchInitialData } = useAppContext();
+  const { servers, fetchInitialData } = useAppContext();
 
   // State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -287,6 +287,8 @@ export const StaffView: React.FC = () => {
 // --- NEW CARD COMPONENT ---
 
 const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus, onResendVerification }: any) => {
+  const [devices, setDevices] = useState<any[] | null>(null);
+  const [devicesError, setDevicesError] = useState('');
   const getRoleStyle = (role: string) => {
     switch (role) {
       case 'SUPER_ADMIN':
@@ -300,6 +302,25 @@ const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus, onResendVerificati
 
   const style = getRoleStyle(staff.role);
   const Icon = style.icon;
+
+  const loadDevices = async () => {
+    const response = await fetchWithAuth(`${API_URL}/auth/staff/${staff.id}/devices`);
+    if (!response.ok) {
+      setDevicesError('Unable to load trusted devices.');
+      return;
+    }
+    const data = await response.json();
+    setDevices(data.devices || []);
+  };
+
+  const revokeDevice = async (deviceId: string) => {
+    const response = await fetchWithAuth(`${API_URL}/auth/staff/${staff.id}/devices/${deviceId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      setDevicesError('Unable to revoke trusted device.');
+      return;
+    }
+    setDevices(current => current?.filter(device => device.id !== deviceId) || []);
+  };
 
   return (
     <Card className={`relative overflow-hidden border-0 bg-slate-900 shadow-xl group hover:-translate-y-1 transition-all duration-300`}>
@@ -368,6 +389,9 @@ const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus, onResendVerificati
             Resend verification
           </button>
         )}
+        <button onClick={loadDevices} className="text-[10px] font-bold text-sky-300 hover:text-sky-200">
+          Trusted devices
+        </button>
 
         {staff.role !== 'SUPER_ADMIN' && (
           <>
@@ -392,6 +416,18 @@ const StaffCard = ({ staff, onEdit, onDelete, onToggleStatus, onResendVerificati
           </>
         )}
       </div>
+      {devices !== null && (
+        <div className="absolute inset-x-4 bottom-4 z-10 rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs text-slate-300">
+          <div className="mb-2 flex justify-between font-bold text-white"><span>Trusted devices</span><button onClick={() => setDevices(null)}>Close</button></div>
+          {devicesError && <p className="text-red-400">{devicesError}</p>}
+          {devices.length === 0 ? <p>No trusted devices.</p> : devices.map(device => (
+            <div key={device.id} className="flex items-center justify-between border-t border-slate-800 py-2">
+              <span className="truncate pr-2">{device.device_name || 'Unnamed device'}</span>
+              <button onClick={() => revokeDevice(device.id)} className="text-red-300 hover:text-red-200">Revoke</button>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 };
