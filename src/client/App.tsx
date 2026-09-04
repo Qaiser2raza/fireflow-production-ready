@@ -35,6 +35,7 @@ import { StockReceivingView } from './operations/inventory/StockReceivingView';
 import { StockCountListView } from './operations/inventory/StockCountListView';
 import { StockCountDetailView } from './operations/inventory/StockCountDetailView';
 import { StaffView } from '../features/settings/StaffView';
+import { ShiftDashboard } from '../features/settings/ShiftDashboard';
 import { SettingsView } from '../features/settings/SettingsView';
 import { BillingView } from '../features/restaurant/BillingView';
 import FinancialCommandCenter from '../operations/finance/FinancialCommandCenter';
@@ -1109,6 +1110,7 @@ let menuItems: any[] = [];
             { id: 'POS', icon: Grid, label: 'POS Control' },
             { id: 'KITCHEN', icon: Coffee, label: 'KDS Feed' },
             { id: 'STAFF', icon: Users, label: 'Staff' },
+            { id: 'SHIFT', icon: Clock, label: 'Shift' },
             { id: 'ACTIVITY', icon: ShoppingBag, label: 'Flow Ops' },
             { id: 'LOGISTICS', icon: Bike, label: 'Logistics Hub' },
             { id: 'BILLING', icon: CreditCard, label: 'Billing' },
@@ -1170,6 +1172,9 @@ let menuItems: any[] = [];
 
   // Command palette commands
   const commands = [
+    ...(['MANAGER', 'ADMIN'].includes(currentUser?.role || '')
+      ? [{ id: 'nav-shift', label: 'Go to Shift Control', shortcut: 'G H', category: 'Navigation', icon: 'Shift', action: () => setActiveView('SHIFT') }]
+      : []),
     { id: 'nav-dashboard', label: 'Go to Dashboard', shortcut: 'G D', category: 'Navigation', icon: '📊', action: () => setActiveView('DASHBOARD') },
     { id: 'nav-inventory', label: 'Go to Inventory', shortcut: 'G I', category: 'Navigation', icon: '🔒', action: () => { setActiveView('INVENTORY'); setIsReceivingStock(false); } },
     { id: 'nav-receive-stock', label: 'Go to Receive Stock', shortcut: 'G R S', category: 'Navigation', icon: '📦', action: () => { setActiveView('INVENTORY'); setIsReceivingStock(true); } },
@@ -1389,6 +1394,7 @@ activeView === 'STOCK_COUNT' ? (
                activeView === 'BILLING' ? <BillingView /> :
                activeView === 'FINANCE' ? <FinancialCommandCenter /> :
                activeView === 'STAFF' ? <StaffView /> :
+               activeView === 'SHIFT' ? <ShiftDashboard /> :
                activeView === 'CUSTOMERS' ? <CustomersView /> :
                activeView === 'SETTINGS' ? <SettingsView /> :
                <div className="p-20 text-slate-700 font-black uppercase tracking-[0.3em]">SECURE SECTOR NOT SELECTED</div>}

@@ -662,6 +662,31 @@ model registered_devices {
   @@index([staff_id])
 }
 
+model shift_sessions {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id   String      @db.Uuid
+  business_date   DateTime    @db.Date
+  day_start       DateTime    @db.Timestamp(6)
+  day_end         DateTime?   @db.Timestamp(6)
+  status          ShiftStatus @default(DRAFT)
+  opening_float   Decimal     @default(0) @db.Decimal(10, 2)
+  expected_cash   Decimal     @default(0) @db.Decimal(10, 2)
+  actual_cash     Decimal?    @db.Decimal(10, 2)
+  difference      Decimal?    @db.Decimal(10, 2)
+  terminal_id     String?     @db.VarChar(100)
+  notes           String?
+  opened_by       String      @db.Uuid
+  closed_by       String?     @db.Uuid
+  created_at      DateTime    @default(now()) @db.Timestamp(6)
+  updated_at      DateTime    @default(now()) @updatedAt @db.Timestamp(6)
+  restaurants     restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  opened_by_staff staff       @relation("shift_sessions_opened_by", fields: [opened_by], references: [id])
+  closed_by_staff staff?      @relation("shift_sessions_closed_by", fields: [closed_by], references: [id])
+
+  @@index([restaurant_id, business_date])
+  @@index([restaurant_id, status])
+}
+
 // Tenant-authentication device trust. This is intentionally separate from
 // registered_devices, which represents licensing/device-pairing sessions.
 model staff_devices {
@@ -771,9 +796,12 @@ model restaurants {
   refund_window_days      Int                     @default(7)
   subscription_expires_at DateTime?               @db.Timestamp(6)
   trial_ends_at           DateTime?               @db.Timestamp(6)
+  day_start               String                  @default("11:00") @db.VarChar(5)
+  day_end                 String                  @default("01:00") @db.VarChar(5)
   approval_logs           approval_logs[]
   audit_logs              audit_logs[]
   cashier_sessions        cashier_sessions[]
+  shift_sessions          shift_sessions[]
   cashier_shift_logs      cashier_shift_logs[]
   chart_of_accounts       chart_of_accounts[]
   customer_ledgers        customer_ledgers[]
@@ -919,6 +947,8 @@ model staff {
   audit_logs                                              audit_logs[]
   cashier_sessions_cashier_sessions_closed_byTostaff      cashier_sessions[]   @relation("cashier_sessions_closed_byTostaff")
   cashier_sessions_cashier_sessions_opened_byTostaff      cashier_sessions[]   @relation("cashier_sessions_opened_byTostaff")
+  shift_sessions_opened                                 shift_sessions[]     @relation("shift_sessions_opened_by")
+  shift_sessions_closed                                 shift_sessions[]     @relation("shift_sessions_closed_by")
   cashier_shift_logs                                      cashier_shift_logs[]
   delivery_orders                                         delivery_orders[]
   dine_in_orders                                          dine_in_orders[]
@@ -1138,6 +1168,13 @@ enum AccountType {
   EQUITY
   REVENUE
   EXPENSE
+}
+
+enum ShiftStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  ARCHIVED
 }
 
 enum CustomerLedgerEntryType {
