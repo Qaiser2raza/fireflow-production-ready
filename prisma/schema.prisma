@@ -682,9 +682,35 @@ model shift_sessions {
   restaurants     restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   opened_by_staff staff       @relation("shift_sessions_opened_by", fields: [opened_by], references: [id])
   closed_by_staff staff?      @relation("shift_sessions_closed_by", fields: [closed_by], references: [id])
+  finance_entries finance_entries[]
 
   @@index([restaurant_id, business_date])
   @@index([restaurant_id, status])
+}
+
+model finance_entries {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  shift_id           String        @db.Uuid
+  restaurant_id      String        @db.Uuid
+  business_date      DateTime      @db.Date
+  opening_float      Decimal       @db.Decimal(10, 2)
+  expected_cash      Decimal       @db.Decimal(10, 2)
+  actual_cash        Decimal?      @db.Decimal(10, 2)
+  difference         Decimal?      @db.Decimal(10, 2)
+  status             FinanceStatus @default(PENDING_REVIEW)
+  confirmed_by       String?       @db.Uuid
+  confirmed_at       DateTime?     @db.Timestamp(6)
+  rejected_by        String?       @db.Uuid
+  rejected_reason    String?
+  created_at         DateTime      @default(now()) @db.Timestamp(6)
+  updated_at         DateTime      @default(now()) @updatedAt @db.Timestamp(6)
+  shift              shift_sessions @relation(fields: [shift_id], references: [id], onDelete: Restrict)
+  restaurants        restaurants    @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  confirmed_by_staff staff?         @relation("finance_entries_confirmed_by", fields: [confirmed_by], references: [id])
+  rejected_by_staff  staff?         @relation("finance_entries_rejected_by", fields: [rejected_by], references: [id])
+
+  @@index([restaurant_id, business_date])
+  @@index([shift_id, status])
 }
 
 // Tenant-authentication device trust. This is intentionally separate from
@@ -801,6 +827,7 @@ model restaurants {
   approval_logs           approval_logs[]
   audit_logs              audit_logs[]
   cashier_sessions        cashier_sessions[]
+  finance_entries         finance_entries[]
   shift_sessions          shift_sessions[]
   cashier_shift_logs      cashier_shift_logs[]
   chart_of_accounts       chart_of_accounts[]
@@ -949,6 +976,8 @@ model staff {
   cashier_sessions_cashier_sessions_opened_byTostaff      cashier_sessions[]   @relation("cashier_sessions_opened_byTostaff")
   shift_sessions_opened                                 shift_sessions[]     @relation("shift_sessions_opened_by")
   shift_sessions_closed                                 shift_sessions[]     @relation("shift_sessions_closed_by")
+  finance_entries_confirmed                             finance_entries[]    @relation("finance_entries_confirmed_by")
+  finance_entries_rejected                              finance_entries[]    @relation("finance_entries_rejected_by")
   cashier_shift_logs                                      cashier_shift_logs[]
   delivery_orders                                         delivery_orders[]
   dine_in_orders                                          dine_in_orders[]
@@ -1175,6 +1204,12 @@ enum ShiftStatus {
   OPEN
   CLOSED
   ARCHIVED
+}
+
+enum FinanceStatus {
+  PENDING_REVIEW
+  CONFIRMED
+  REJECTED
 }
 
 enum CustomerLedgerEntryType {

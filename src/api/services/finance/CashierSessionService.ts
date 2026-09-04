@@ -1,7 +1,105 @@
 import { prisma } from '../../../shared/lib/prisma';
+import { FinanceStatus, ShiftStatus } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 
 export class CashierSessionService {
+    private static async calculateShiftExpectedCash(restaurantId: string, shift: { day_start: Date; day_end: Date | null; opening_float: Decimal }) {
+        if (!shift.day_end) throw new Error('SHIFT_NOT_CLOSED');
+        const transactions = await prisma.transactions.findMany({
+            where: {
+                restaurant_id: restaurantId,
+                payment_method: 'CASH',
+                status: { in: ['COMPLETED', 'REFUNDED'] },
+                created_at: { gte: shift.day_start, lte: shift.day_end },
+            },
+            select: { amount: true, status: true },
+        });
+        return transactions.reduce((total, transaction) => (
+            transaction.status === 'REFUNDED' ? total.minus(transaction.amount) : total.plus(transaction.amount)
+        ), new Decimal(shift.opening_float.toString()));
+    }
+
+    private static async assertFinanceManager(restaurantId: string, staffId: string) {
+        const staff = await prisma.staff.findFirst({
+            where: { id: staffId, restaurant_id: restaurantId, role: { in: ['MANAGER', 'ADMIN', 'SUPER_ADMIN'] }, status: 'active' },
+            select: { id: true },
+        });
+        if (!staff) throw new Error('FINANCE_MANAGER_REQUIRED');
+    }
+
+    static async createFinanceEntry(restaurantId: string, shiftId: string) {
+        try {
+            return await prisma.$transaction(async (tx) => {
+                const shift = await tx.shift_sessions.findFirst({
+                    where: { id: shiftId, restaurant_id: restaurantId, status: ShiftStatus.CLOSED },
+                });
+                if (!shift) throw new Error('CLOSED_SHIFT_NOT_FOUND');
+                const pending = await tx.finance_entries.findFirst({
+                    where: { shift_id: shiftId, status: FinanceStatus.PENDING_REVIEW }, select: { id: true },
+                });
+                if (pending) throw new Error('PENDING_FINANCE_ENTRY_EXISTS');
+                const confirmed = await tx.finance_entries.findFirst({
+                    where: { shift_id: shiftId, status: FinanceStatus.CONFIRMED }, select: { id: true },
+                });
+                if (confirmed) throw new Error('FINANCE_ENTRY_ALREADY_CONFIRMED');
+                const expected = await this.calculateShiftExpectedCash(restaurantId, shift);
+                return tx.finance_entries.create({ data: {
+                    shift_id: shift.id, restaurant_id: restaurantId, business_date: shift.business_date,
+                    opening_float: shift.opening_float, expected_cash: expected,
+                    actual_cash: shift.actual_cash, difference: shift.actual_cash ? shift.actual_cash.minus(expected) : null,
+                    status: FinanceStatus.PENDING_REVIEW,
+                } });
+            });
+        } catch (error: any) {
+            if (error?.code === 'P2002') throw new Error('PENDING_FINANCE_ENTRY_EXISTS');
+            throw error;
+        }
+    }
+
+    static async confirmFinanceEntry(restaurantId: string, financeEntryId: string, confirmedBy: string) {
+        await this.assertFinanceManager(restaurantId, confirmedBy);
+        return prisma.$transaction(async (tx) => {
+            const entry = await tx.finance_entries.findFirst({ where: { id: financeEntryId, restaurant_id: restaurantId } });
+            if (!entry) throw new Error('FINANCE_ENTRY_NOT_FOUND');
+            if (entry.status !== FinanceStatus.PENDING_REVIEW) throw new Error('FINANCE_ENTRY_NOT_ACTIONABLE');
+            return tx.finance_entries.update({ where: { id: entry.id }, data: { status: FinanceStatus.CONFIRMED, confirmed_by: confirmedBy, confirmed_at: new Date() } });
+        });
+    }
+
+    static async rejectFinanceEntry(restaurantId: string, financeEntryId: string, rejectedBy: string, reason: string) {
+        if (!reason.trim()) throw new Error('REJECTION_REASON_REQUIRED');
+        await this.assertFinanceManager(restaurantId, rejectedBy);
+        try {
+            return await prisma.$transaction(async (tx) => {
+                const entry = await tx.finance_entries.findFirst({ where: { id: financeEntryId, restaurant_id: restaurantId } });
+                if (!entry) throw new Error('FINANCE_ENTRY_NOT_FOUND');
+                if (entry.status !== FinanceStatus.PENDING_REVIEW) throw new Error('FINANCE_ENTRY_NOT_ACTIONABLE');
+                const rejected = await tx.finance_entries.update({ where: { id: entry.id }, data: { status: FinanceStatus.REJECTED, rejected_by: rejectedBy, rejected_reason: reason.trim() } });
+                const resubmission = await tx.finance_entries.create({ data: {
+                    shift_id: entry.shift_id, restaurant_id: entry.restaurant_id, business_date: entry.business_date,
+                    opening_float: entry.opening_float, expected_cash: entry.expected_cash, actual_cash: entry.actual_cash,
+                    difference: entry.difference, status: FinanceStatus.PENDING_REVIEW,
+                } });
+                return { rejected, resubmission };
+            });
+        } catch (error: any) {
+            if (error?.code === 'P2002') throw new Error('PENDING_FINANCE_ENTRY_EXISTS');
+            throw error;
+        }
+    }
+
+    static async getFinanceReport(restaurantId: string, from?: Date, to?: Date, status?: FinanceStatus) {
+        return prisma.finance_entries.findMany({
+            where: { restaurant_id: restaurantId, ...(status ? { status } : {}), ...(from || to ? { business_date: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}) },
+            include: { shift: { select: { business_date: true, opened_by: true, closed_by: true, status: true } } },
+            orderBy: { created_at: 'desc' },
+        });
+    }
+
+    static async getLatestFinanceEntry(restaurantId: string, shiftId: string) {
+        return prisma.finance_entries.findFirst({ where: { restaurant_id: restaurantId, shift_id: shiftId }, orderBy: [{ created_at: 'desc' }, { id: 'desc' }] });
+    }
+
     static async openSession(restaurantId: string, staffId: string, openingFloat: number, expectedFloat: number = 0, terminalId?: string) {
         // Check for existing open session for this restaurant
         // Note: For multi-terminal enterprise, we might allow multiple open sessions, 
