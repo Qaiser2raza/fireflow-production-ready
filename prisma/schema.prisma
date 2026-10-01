@@ -274,18 +274,19 @@ model inventory_items {
   purchase_order_items purchase_order_items[]
   recipe_items         recipe_items[]
   stock_count_lines    stock_count_lines[]
+  stock_movements      stock_movements[]
 }
 
 model journal_entries {
   id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   restaurant_id       String                @db.Uuid
   reference_type      String                @db.VarChar(50)
-  reference_id        String?               @db.VarChar(100)
+  reference_id        String?
   date                DateTime              @db.Timestamp(6)
   description         String?
   processed_by        String?
   created_at          DateTime              @default(now()) @db.Timestamp(6)
-  restaurants         restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  restaurants         restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
   journal_entry_lines journal_entry_lines[]
 }
 
@@ -300,7 +301,7 @@ model journal_entry_lines {
   reference_id      String            @db.VarChar(100)
   reference_type    String            @db.VarChar(50)
   chart_of_accounts chart_of_accounts @relation(fields: [account_id], references: [id])
-  journal_entries   journal_entries   @relation(fields: [journal_entry_id], references: [id], onDelete: Cascade)
+  journal_entries   journal_entries   @relation(fields: [journal_entry_id], references: [id], onDelete: Restrict)
 }
 
 model ledger_entries {
@@ -679,9 +680,9 @@ model shift_sessions {
   closed_by       String?     @db.Uuid
   created_at      DateTime    @default(now()) @db.Timestamp(6)
   updated_at      DateTime    @default(now()) @updatedAt @db.Timestamp(6)
-  restaurants     restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  opened_by_staff staff       @relation("shift_sessions_opened_by", fields: [opened_by], references: [id])
-  closed_by_staff staff?      @relation("shift_sessions_closed_by", fields: [closed_by], references: [id])
+  restaurants     restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
+  opened_by_staff staff       @relation("shift_sessions_opened_by", fields: [opened_by], references: [id], onDelete: Restrict)
+  closed_by_staff staff?      @relation("shift_sessions_closed_by", fields: [closed_by], references: [id], onDelete: Restrict)
   finance_entries finance_entries[]
 
   @@index([restaurant_id, business_date])
@@ -705,9 +706,9 @@ model finance_entries {
   created_at         DateTime      @default(now()) @db.Timestamp(6)
   updated_at         DateTime      @default(now()) @updatedAt @db.Timestamp(6)
   shift              shift_sessions @relation(fields: [shift_id], references: [id], onDelete: Restrict)
-  restaurants        restaurants    @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  confirmed_by_staff staff?         @relation("finance_entries_confirmed_by", fields: [confirmed_by], references: [id])
-  rejected_by_staff  staff?         @relation("finance_entries_rejected_by", fields: [rejected_by], references: [id])
+  restaurants        restaurants    @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
+  confirmed_by_staff staff?         @relation("finance_entries_confirmed_by", fields: [confirmed_by], references: [id], onDelete: Restrict)
+  rejected_by_staff  staff?         @relation("finance_entries_rejected_by", fields: [rejected_by], references: [id], onDelete: Restrict)
 
   @@index([restaurant_id, business_date])
   @@index([shift_id, status])
@@ -874,6 +875,8 @@ model restaurants {
   fiscal_attempts         fiscal_attempts[]
   stock_movements         stock_movements[]
   stock_counts            stock_counts[]
+  memberships             memberships[]
+  outbox                  outbox[]
 
   @@index([slug])
 }
@@ -961,7 +964,7 @@ model staff {
   current_lng                                             Decimal?             @db.Decimal(11, 8)
   is_available                                            Boolean?             @default(true)
   locked_until                                            DateTime?
-  failed_login_count                                      Int?              @default(0)
+  failed_login_count                                      Int               @default(0)
   must_change_pin                                         Boolean           @default(false)
   pin_expires_at                                          DateTime?
   previous_hashed_pin                                     String?
@@ -995,6 +998,7 @@ model staff {
   restaurants                                             restaurants          @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   staff_wallet_logs                                       staff_wallet_logs[]
   refresh_tokens                                         refresh_tokens[]
+  memberships                                             memberships[]
 
   @@unique([restaurant_id, name, role])
   @@index([pin])
@@ -1244,6 +1248,7 @@ model stock_movements {
   purchase_order_items purchase_order_items? @relation(fields: [po_line_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   stock_count_lines   stock_count_lines?  @relation(fields: [stock_count_line_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   restaurants         restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  inventory_items     inventory_items     @relation(fields: [inventory_item_id], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([restaurant_id, operation_key])
   @@index([restaurant_id, inventory_item_id, created_at])
@@ -1418,6 +1423,7 @@ model outbox {
   @@index([event_type])
   @@unique([aggregate_type, aggregate_id, event_type], name: "outbox_idempotency_key")
   integration_deliveries integration_deliveries[]
+  restaurants            restaurants             @relation(fields: [restaurant_id], references: [id], onDelete: Restrict, onUpdate: Cascade)
 }
 
 enum IntegrationStatus {
@@ -1502,8 +1508,8 @@ model payments {
   created_at             DateTime              @default(now()) @db.Timestamp(6)
   updated_at             DateTime              @default(now()) @db.Timestamp(6)
 
-  restaurants            restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  orders                 orders                @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  restaurants            restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
+  orders                 orders                @relation(fields: [order_id], references: [id], onDelete: Restrict)
   payment_attempts       payment_attempts[]
 
   @@index([restaurant_id])
@@ -1526,8 +1532,8 @@ model payment_attempts {
   updated_at              DateTime              @default(now()) @db.Timestamp(6)
   completed_at            DateTime?             @db.Timestamp(6)
 
-  payments                payments              @relation(fields: [payment_id], references: [id], onDelete: Cascade)
-  restaurants             restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  payments                payments              @relation(fields: [payment_id], references: [id], onDelete: Restrict)
+  restaurants             restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
 
   @@index([payment_id])
   @@index([restaurant_id])
@@ -1570,8 +1576,8 @@ model fiscal_documents {
   created_at        DateTime             @default(now()) @db.Timestamp(6)
   updated_at        DateTime             @default(now()) @db.Timestamp(6)
 
-  restaurants       restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  orders            orders                @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  restaurants       restaurants           @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
+  orders            orders                @relation(fields: [order_id], references: [id], onDelete: Restrict)
   fiscal_attempts   fiscal_attempts[]
 
   @@index([restaurant_id])
@@ -1594,8 +1600,8 @@ model fiscal_attempts {
   updated_at          DateTime            @default(now()) @db.Timestamp(6)
   completed_at        DateTime?           @db.Timestamp(6)
 
-  fiscal_documents    fiscal_documents    @relation(fields: [fiscal_document_id], references: [id], onDelete: Cascade)
-  restaurants         restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  fiscal_documents    fiscal_documents    @relation(fields: [fiscal_document_id], references: [id], onDelete: Restrict)
+  restaurants         restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
 
   @@index([fiscal_document_id])
   @@index([restaurant_id])
@@ -1735,3 +1741,71 @@ model staff_password_reset_tokens {
   @@index([token])
   @@index([used, expires_at])
 }
+
+// ==========================================
+// CLOUD USER & WORKSPACE MEMBERSHIP DOMAIN
+// ==========================================
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MANAGER
+  VIEWER
+}
+
+model users {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                 String              @unique @db.VarChar(255)
+  password_hash         String              @db.VarChar(255)
+  name                  String              @db.VarChar(255)
+  phone                 String?             @db.VarChar(50)
+  email_verified_at     DateTime?           @db.Timestamp(6)
+  is_active             Boolean             @default(true)
+  failed_login_count    Int                 @default(0)
+  locked_until          DateTime?           @db.Timestamp(6)
+  last_login_at         DateTime?           @db.Timestamp(6)
+  created_at            DateTime            @default(now()) @db.Timestamp(6)
+  updated_at            DateTime            @default(now()) @updatedAt @db.Timestamp(6)
+
+  memberships           memberships[]
+  user_sessions         user_sessions[]
+}
+
+model memberships {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id               String              @db.Uuid
+  restaurant_id         String              @db.Uuid
+  role                  MembershipRole      @default(VIEWER)
+  staff_id              String?             @db.Uuid
+  created_at            DateTime            @default(now()) @db.Timestamp(6)
+  updated_at            DateTime            @default(now()) @updatedAt @db.Timestamp(6)
+
+  user                  users               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  restaurant            restaurants         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  staff                 staff?              @relation(fields: [staff_id], references: [id], onDelete: SetNull)
+
+  @@unique([user_id, restaurant_id])
+  @@index([user_id])
+  @@index([restaurant_id])
+  @@index([staff_id])
+}
+
+model user_sessions {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id               String              @db.Uuid
+  jti                   String              @unique @db.VarChar(36)
+  refresh_token_hash    String              @db.VarChar(64)
+  token_family_id       String              @db.VarChar(36)
+  expires_at            DateTime            @db.Timestamp(6)
+  revoked_at            DateTime?           @db.Timestamp(6)
+  created_at            DateTime            @default(now()) @db.Timestamp(6)
+  user_agent            String?             @db.VarChar(255)
+  ip_address            String?             @db.VarChar(45)
+
+  user                  users               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([token_family_id])
+  @@index([refresh_token_hash])
+}
+
