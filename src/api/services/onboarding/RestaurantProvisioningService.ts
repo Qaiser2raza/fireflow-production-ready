@@ -67,10 +67,11 @@ export class RestaurantProvisioningService {
     actorId?: string;
     /**
      * Owner-chosen password (self-service signup). When provided, the same
-     * transaction also creates the `users` + `memberships` identity rows and
-     * dual-writes credentials onto `staff` for the current login path.
-     * Provisioning paths that do not collect a password (super admin vault,
-     * demo tenant) keep their PIN-only behaviour.
+     * transaction also creates the `users` + `memberships` identity rows.
+     * Credentials live on `users` only; login resolves the tenant through
+     * `memberships` and `user_sessions`. Provisioning paths that do not
+     * collect a password (super admin vault, demo tenant) keep their PIN-only
+     * behaviour.
      */
     ownerPassword?: string;
   }): Promise<ProvisioningResult> {
@@ -143,15 +144,6 @@ export class RestaurantProvisioningService {
             pin_expires_at: pinExpiresAt,
             status: 'active',
             created_at: now,
-            // TEMP: remove in Task 03 — credential dual-write onto `staff`.
-            // Login still reads `staff.email`; Task 03 moves it to `users`.
-            ...(ownsIdentity
-              ? {
-                  email: normalizedEmail,
-                  password_hash: ownerPasswordHash,
-                  is_email_verified: false,
-                }
-              : {}),
           },
         });
 

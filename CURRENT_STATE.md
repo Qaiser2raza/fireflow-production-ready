@@ -151,14 +151,95 @@
 | `src/features/onboarding/RestaurantLanding.tsx` | Task 02 — signup form collects Password + Confirm password. |
 | `src/features/onboarding/SetupTokenDisplay.tsx` | Task 02 — "Check your email" confirmation, PIN relabelled as the POS PIN for staff devices. |
 | `src/api/server.ts` | Task 02 — `/api/onboarding/start` requires a password, rejects duplicate account emails with 409, per-IP signup limiter, `GET /api/auth/verify-email` link endpoint. |
-| `src/api/services/onboarding/RestaurantProvisioningService.ts` | Task 02 — `ownerPassword` support, `users` + `memberships` creation, TEMP `staff` credential dual-write, duplicate-email rejection, sanitized owner projection. |
-| `src/api/controllers/AuthController.ts` | Task 02 — exported `BCRYPT_COST`, shared `applyVerification` (sets `users.email_verified_at` and `staff.is_email_verified`), `verifyEmailLink` GET handler. |
+| `src/api/services/onboarding/RestaurantProvisioningService.ts` | Task 02 — `ownerPassword` support, `users` + `memberships` creation, duplicate-email rejection, sanitized owner projection. Task 03 removed the TEMP `staff` credential dual-write. |
+| `src/api/controllers/AuthController.ts` | Task 02 — exported `BCRYPT_COST`, shared `applyVerification`, `verifyEmailLink` GET handler. Task 03 — `users` login path, `loginOwner`, `selectRestaurant`, `issueOwnerSession`. |
 | `src/api/services/EmailVerificationService.ts` | Task 02 — `logDevVerificationLink` (local dev only, silent in staging/production and when an email provider is configured). |
-| `tests/signup-owner-password.test.ts` | Task 02 — 46 assertions, self-cleaning by id. |
+| `tests/signup-owner-password.test.ts` | Task 02 — 43 assertions, self-cleaning by id. |
+| `src/api/services/auth/UserSessionService.ts` | Task 03 — NEW. `user_sessions` issue/rotate/revoke, sha256 hashes only, httpOnly cookie helpers, lockout constants. |
+| `src/api/services/auth/JwtService.ts` | Task 03 — 5-minute `selection` token (sign + verify); never accepted as an access token. |
+| `src/api/server.ts` | Task 03 — `/api/auth/select-restaurant`, cookie-driven owner refresh (`handleUserSessionRefresh`), logout revokes the user session, `USER_SESSION_ROTATED` audit. |
+| `src/auth/views/LoginView.tsx` | Task 03 — restaurant picker for multi-workspace accounts. |
+| `src/client/App.tsx`, `src/shared/types.ts`, `src/shared/lib/authInterceptor.ts` | Task 03 — selection hand-off, `LoginResult` type, cookie-based silent refresh. |
+| `tests/owner-login-sessions.test.ts` | Task 03 — 65 assertions, self-cleaning by id. |
+| `tests/_test-db-guard.ts`, `scripts/run-tests.ts` | Task 03c — NEW. Global disposable-test-database guard and sequential suite runner used by `npm test` / `npm run test:safe`. |
 
-**TEMP markers to remove in Task 03**: the `staff.email` / `staff.password_hash` / `staff.is_email_verified`
-dual-write in `RestaurantProvisioningService`, and the `staff.is_email_verified` write in
-`AuthController.applyVerification`.
+---
+
+## 2026-10-02 — Task 03c: test-database safety boundary + non-destructive seed
+
+**Why**: suites and the seed sweep data with broad `deleteMany` calls (`tests/mission-031-b-wac.test.ts`
+wipes every restaurant, `prisma/seed.ts` wiped ~35 tables), so a misdirected run destroyed real
+development data in `fireflow_local`.
+
+**Global guard**: `tests/_test-db-guard.ts` is imported as the FIRST import by every suite that must be
+protected, and is loaded once globally by the runner. It refuses to start when `NODE_ENV=production`,
+loads `.env.test` when `DATABASE_URL` is unset (never overriding an exported value), and hard-fails
+unless the target database satisfies the same disposable policy the release gate enforces (TD-14b):
+`*_test`, `*_verify`, or `fireflow_gate`. The predicates are reused from `scripts/release-gate.cjs`
+(`extractDbName`, `isAllowedGateDb`) rather than duplicated, so gate and suites cannot drift.
+`tests/mission-031-b-wac.test.ts` keeps its unconditional tenant wipe; the guard is what makes it safe.
+
+**Runner**: `npm test` / `npm run test:safe` run `scripts/run-tests.ts` (global setup = guard, then each
+`tests/*.test.ts` suite sequentially in its own process). `npm run pretest[:safe]` runs the guard alone.
+Single suite: `npm run test:safe -- tests/owner-login-sessions.test.ts`. `.env.test` (git-ignored, holds
+the local password) points at `fireflow_test`, which the owner created and migrated (55 migrations, last
+`20261001080100_financial_fk_hardening_and_drift_cleanup`). The guard applies only to suites; other
+suites still load `.env` through `dotenv/config`, which cannot override the guard's value.
+
+**Seed**: `prisma/seed.ts` no longer wipes by default. `shouldWipe()` wipes only when
+`CONFIRM_WIPE` is exactly the target database name and `NODE_ENV` is not `production`; the deletes moved
+into `wipeAll()`. Otherwise the seed is additive: the restaurant is upserted by its fixed id
+(order-type defaults are upserts already) and each child group (stations, categories, menu items,
+sections + tables, staff, customers, vendors) is created only when that table has no rows for the
+restaurant. Re-running is therefore a no-op instead of a duplicate-key crash.
+
+**Verified**: guard refuses `fireflow_local` (exit 1, names the database, before Prisma connects), refuses
+`NODE_ENV=production`, accepts `fireflow_test` from `.env.test`; `npm run test:safe --
+tests/owner-login-sessions.test.ts tests/signup-owner-password.test.ts` = 65/65 and 43/43 on
+`fireflow_test`, "All 2 suite(s) passed"; `tests/mission-031-b-wac.test.ts` aborts on `fireflow_local`
+without touching a row; seed prints `Skipping wipe: CONFIRM_WIPE is not set to ...` by default and wipes
+only after an exact-name confirmation (both proven against a non-existent database, so no real data was
+touched); `scratch/verify-seed-refactor.cjs` confirms no BOM, no replacement characters, and all 14
+Urdu `name_urdu` strings unchanged. No migration was added or changed.
+
+**Known limitation**: only the three suites listed above import the guard so far. Other suites are safe
+when run through `npm test` / `npm run test:safe` (the runner guards globally) but a direct
+`npx tsx tests/<other>.test.ts` still relies on `dotenv/config`; adding `import './_test-db-guard';` as
+the first line of each remaining suite is the follow-up.
+
+---
+
+## 2026-10-02 — Task 03: owner login on users + memberships + user_sessions
+
+**Flow now**: `POST /api/auth/login` (password mode) looks up `users` by lowercased email first. A hit
+takes the owner path: lockout check, bcrypt compare against a cost-14 dummy hash for unknown emails
+(identical 401 "Invalid credentials" either way), `is_active`, `email_verified_at`, then memberships.
+0 -> 403 `NO_MEMBERSHIP`; 1 -> session; 2+ -> `requires_restaurant_selection` plus a 5-minute signed
+`selection_token` and no session. `POST /api/auth/select-restaurant` verifies that token and that the
+user holds a membership for the requested restaurant. Session issuance resolves `memberships.staff_id`
+to the staff row and returns the exact staff-login response shape with an access token carrying the
+same claims and 15-minute expiry, so the rest of the app is unchanged. The refresh token (32 random
+bytes) is stored only as a SHA-256 hash in `user_sessions` and travels only in the httpOnly
+`ff_user_refresh` cookie (secure in production, sameSite lax, path `/api/auth`). `POST /api/auth/refresh`
+routes a cookie to family rotation with theft detection (a revoked token revokes the family); logout
+revokes the cookie's session. Staff PIN login and the legacy staff email/password path are untouched.
+
+**Verified**: `npx prisma validate` passes; `npx tsc --noEmit -p tsconfig.json` reports 0 errors;
+`tests/owner-login-sessions.test.ts` = 65/65; `tests/signup-owner-password.test.ts` = 43/43 (its three
+dual-write assertions were inverted because Task 03 removed the dual-write); zero rows left behind
+(`scratch/check-login-residue.cjs`). Pre-existing failure unchanged:
+`tests/onboarding-saas.test.ts` "PIN is hashed in DB".
+
+**Known limitations for the next tasks**:
+- `user_sessions` has no `restaurant_id`, so a refresh re-resolves the tenant from memberships
+  (most recently updated) — a multi-workspace account needs a schema decision.
+- Selection tokens are stateless: choosing the same restaurant twice mints two sessions.
+- `scripts/dev-set-owner-password.ts` now only serves legacy `staff` accounts; signup owners are set up
+  through the browser flow.
+
+**Next**: Task 04 — the tenant status / trial check belongs in `AuthController.issueOwnerSession`
+(marked `TODO(Task 04)`, after the membership is resolved and before the session is issued); the same
+check is needed in `handleUserSessionRefresh` in `server.ts`.
 
 ---
 
@@ -184,8 +265,8 @@ existing account remains a later task.
 `tests/onboarding-saas.test.ts` "PIN is hashed in DB" expects the plaintext PIN in `staff.pin`, which
 the Phase 1 hash-only design deliberately does not store.
 
-**Next**: Task 03 — move login onto `users` + `user_sessions`, delete the TEMP `staff` dual-writes,
-and decide how staff sessions and user sessions relate.
+**Next**: superseded by Task 03 below (owner login now runs on `users` + `memberships` +
+`user_sessions`, and the TEMP `staff` dual-writes were removed).
 
 ---
 

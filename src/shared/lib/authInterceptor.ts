@@ -18,14 +18,18 @@ async function refreshAccessToken(): Promise<string | null> {
     try {
       const refreshToken = localStorage.getItem('refreshToken');
 
-      if (!refreshToken) {
+      // Owner sessions keep the refresh token in an httpOnly cookie, so there
+      // is nothing in storage for them: the request is made without a body and
+      // the browser attaches the cookie.
+      if (!refreshToken && !localStorage.getItem('accessToken')) {
         return null;
       }
 
       const response = await fetch(`${API_URL}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken })
+        credentials: 'include',
+        body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {})
       });
 
       if (!response.ok) {

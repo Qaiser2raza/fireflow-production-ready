@@ -5,7 +5,10 @@
 // email and restaurant name, and teardown deletes by recorded id in dependency
 // order (memberships, tokens, invites, staff, users, restaurant).
 //
-// Run: npx tsx tests/signup-owner-password.test.ts
+// Run: npm run test:safe -- tests/signup-owner-password.test.ts
+// FIRST import: the global test-DB guard refuses to start against anything but a
+// disposable test database, and loads .env.test when DATABASE_URL is unset.
+import './_test-db-guard';
 import 'dotenv/config';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
@@ -159,14 +162,12 @@ async function main() {
     assert('membership linked to the owner staff row', membership?.staff_id === ok.ownerStaff.id, membership?.staff_id);
     assert('owner staff belongs to the new restaurant', staff?.restaurant_id === restaurantId);
 
-    // TEMP dual-write (removed in Task 03)
-    assert('TEMP staff.email dual-written', staff?.email === email.toLowerCase(), staff?.email || 'null');
-    assert('TEMP staff.password_hash dual-written', !!staff?.password_hash);
-    assert('TEMP staff starts unverified', staff?.is_email_verified === false, String(staff?.is_email_verified));
+    // Credentials live on `users` only (Task 03 removed the staff dual-write).
+    assert('staff row carries no owner email', staff?.email === null, staff?.email || 'null');
+    assert('staff row carries no password hash', staff?.password_hash === null, 'null');
 
     // ---------- 3. HASHING, NOT PLAINTEXT ----------
     assert('users.password_hash is bcrypt at the shared cost', !!user?.password_hash && user.password_hash.startsWith('$2') && user.password_hash !== STRONG_PASSWORD);
-    assert('staff.password_hash matches the users hash (same dual-write)', staff?.password_hash === user?.password_hash);
     assert('bcrypt compare succeeds for the chosen password', !!user?.password_hash && await bcrypt.compare(STRONG_PASSWORD, user.password_hash));
     assert('bcrypt cost constant shared with AuthController', BCRYPT_COST === 14, String(BCRYPT_COST));
     const costOf = (hash: string) => Number(hash.split('$')[2]);
@@ -215,9 +216,9 @@ async function main() {
     assert('Verification response has no token', !JSON.stringify(verifyRes.body || {}).includes(token));
 
     const userAfter = await prisma.users.findUnique({ where: { email } });
-    const staffAfter = await prisma.staff.findUnique({ where: { id: ok.ownerStaff.id } });
     assert('users.email_verified_at set', !!userAfter?.email_verified_at);
-    assert('staff.is_email_verified set (TEMP dual-write)', staffAfter?.is_email_verified === true, String(staffAfter?.is_email_verified));
+    // The signup token carries a staff_id, so the staff flag moves with it. The
+    // cloud identity (`users.email_verified_at`) is what owner login reads.
 
     const replayRes = makeRes();
     await controller.verifyEmail({ body: { token } } as any, replayRes as any);

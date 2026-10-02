@@ -1,12 +1,44 @@
 import { PrismaClient, OrderStatus, OrderType, TableStatus, ItemStatus } from '@prisma/client'
 const prisma = new PrismaClient()
 
-async function main() {
-  console.log('🔄 Starting Database Reset and Seed...')
+/**
+ * Destructive reset is opt-in.
+ *
+ * A bare `prisma db seed` used to wipe every table, which destroyed real
+ * development data when it was run by mistake. It now happens only when the
+ * operator sets CONFIRM_WIPE to the exact name of the target database, and
+ * never in production. Otherwise the seed is additive: the restaurant is
+ * upserted by its fixed id and each child group is created only when missing.
+ */
+function shouldWipe(): { wipe: boolean; reason: string } {
+  if (process.env.NODE_ENV === 'production') {
+    return { wipe: false, reason: 'NODE_ENV is production' }
+  }
 
+  const url = process.env.DATABASE_URL
+  if (!url) {
+    return { wipe: false, reason: 'DATABASE_URL is not set' }
+  }
+
+  let databaseName: string
+  try {
+    databaseName = decodeURIComponent(new URL(url).pathname.replace(/^\//, ''))
+  } catch {
+    return { wipe: false, reason: 'DATABASE_URL is not a valid URL' }
+  }
+
+  if (process.env.CONFIRM_WIPE !== databaseName) {
+    return {
+      wipe: false,
+      reason: `CONFIRM_WIPE is not set to "${databaseName}" (set it to that exact name to wipe)`,
+    }
+  }
+
+  return { wipe: true, reason: `confirmed for database "${databaseName}"` }
+}
+
+async function wipeAll(): Promise<void> {
   // 1. Clear Existing Data (Order matters due to foreign keys)
-  console.log('🗑️  Clearing existing data...')
-
   // Detail/Transaction tables first
   await prisma.order_items.deleteMany({})
   await prisma.dine_in_orders.deleteMany({})
@@ -50,6 +82,19 @@ async function main() {
   await prisma.restaurants.deleteMany({})
 
   console.log('✅ Database cleared.')
+}
+
+async function main() {
+  console.log('🔄 Starting Database Seed...')
+
+  const { wipe, reason } = shouldWipe()
+
+  if (wipe) {
+    console.log(`🗑️  Clearing existing data (${reason})...`)
+    await wipeAll()
+  } else {
+    console.log(`ℹ️  Skipping wipe: ${reason}. Seeding additively (existing rows are kept).`)
+  }
 
   // 2. Create Restaurant
   console.log('🏗️  Seeding Restaurant...')
@@ -138,185 +183,213 @@ async function main() {
 
   // 3. Create Stations
   console.log('🏗️  Seeding Stations...')
-  const kitchen = await prisma.stations.create({
-    data: { restaurant_id: restaurant.id, name: 'KITCHEN' }
-  })
-  const tandoor = await prisma.stations.create({
-    data: { restaurant_id: restaurant.id, name: 'TANDOOR' }
-  })
-  const bar = await prisma.stations.create({
-    data: { restaurant_id: restaurant.id, name: 'BAR' }
-  })
-  const dessert = await prisma.stations.create({
-    data: { restaurant_id: restaurant.id, name: 'DESSERT' }
-  })
-
-  // 4. Create Menu Categories
-  console.log('🏗️  Seeding Categories...')
-  const catStarters = await prisma.menu_categories.create({
-    data: { restaurant_id: restaurant.id, name: 'Starters', priority: 1 }
-  })
-  const catMains = await prisma.menu_categories.create({
-    data: { restaurant_id: restaurant.id, name: 'Mains', priority: 2 }
-  })
-  const catBBQ = await prisma.menu_categories.create({
-    data: { restaurant_id: restaurant.id, name: 'BBQ Special', priority: 3 }
-  })
-  const catDrinks = await prisma.menu_categories.create({
-    data: { restaurant_id: restaurant.id, name: 'Beverages', priority: 4 }
-  })
-  const catBreads = await prisma.menu_categories.create({
-    data: { restaurant_id: restaurant.id, name: 'Fresh Breads', priority: 5 }
-  })
-
-  // 5. Create Menu Items
-  console.log('🏗️  Seeding Menu Items...')
-  const menuItems = [
-    // Starters
-    { name: 'Chicken Corn Soup', name_urdu: 'چکن کارن سوپ', price: 450, category_id: catStarters.id, station_id: kitchen.id },
-    { name: 'Finger Fish', name_urdu: 'فنگر فش', price: 1200, category_id: catStarters.id, station_id: kitchen.id },
-
-    // Mains
-    { name: 'Chicken Karahi (Full)', name_urdu: 'چکن کڑاہی (فل)', price: 2800, category_id: catMains.id, station_id: kitchen.id },
-    { name: 'Mutton Handi', name_urdu: 'مٹن ہانڈی', price: 3500, category_id: catMains.id, station_id: kitchen.id },
-    { name: 'Chicken Jalfrezi', name_urdu: 'چکن جلفریزی', price: 1800, category_id: catMains.id, station_id: kitchen.id },
-
-    // BBQ
-    { name: 'Chicken Tikka', name_urdu: 'چکن تکہ', price: 450, category_id: catBBQ.id, station_id: tandoor.id },
-    { name: 'Seekh Kabab (4 pcs)', name_urdu: 'سیخ کباب (4 عدد)', price: 1100, category_id: catBBQ.id, station_id: tandoor.id },
-    { name: 'Malai Boti', name_urdu: 'ملائی بوٹی', price: 1400, category_id: catBBQ.id, station_id: tandoor.id },
-
-    // Breads
-    { name: 'Roti (Tandoori)', name_urdu: 'روٹی (تندوری)', price: 40, category_id: catBreads.id, station_id: tandoor.id },
-    { name: 'Naan (Plain)', name_urdu: 'نان (سادہ)', price: 60, category_id: catBreads.id, station_id: tandoor.id },
-    { name: 'Garlic Naan', name_urdu: 'گارلک نان', price: 120, category_id: catBreads.id, station_id: tandoor.id },
-
-    // Drinks
-    { name: 'Mint Margarita', name_urdu: 'منٹ مارگریٹا', price: 550, category_id: catDrinks.id, station_id: bar.id },
-    { name: 'Fresh Lime', name_urdu: 'فریش لائم', price: 250, category_id: catDrinks.id, station_id: bar.id },
-    { name: 'Coke/Pepsi', name_urdu: 'کوک/پیپسی', price: 120, category_id: catDrinks.id, station_id: bar.id },
-  ]
-
-  for (const item of menuItems) {
-    const categoryName = [catStarters, catMains, catBBQ, catDrinks, catBreads].find(c => c.id === item.category_id)?.name || 'General';
-    await prisma.menu_items.create({
-      data: {
-        ...item,
-        restaurant_id: restaurant.id,
-        category: categoryName,
-        is_available: true,
-        requires_prep: categoryName !== 'Beverages',
-      }
+  if ((await prisma.stations.count({ where: { restaurant_id: restaurant.id } })) > 0) {
+    console.log('ℹ️  Stations already present — skipped.')
+  } else {
+    const kitchen = await prisma.stations.create({
+      data: { restaurant_id: restaurant.id, name: 'KITCHEN' }
     })
+    const tandoor = await prisma.stations.create({
+      data: { restaurant_id: restaurant.id, name: 'TANDOOR' }
+    })
+    const bar = await prisma.stations.create({
+      data: { restaurant_id: restaurant.id, name: 'BAR' }
+    })
+    const dessert = await prisma.stations.create({
+      data: { restaurant_id: restaurant.id, name: 'DESSERT' }
+    })
+
+    // 4. Create Menu Categories
+    console.log('🏗️  Seeding Categories...')
+    if ((await prisma.menu_categories.count({ where: { restaurant_id: restaurant.id } })) > 0) {
+      console.log('ℹ️  Menu categories already present — skipped.')
+    } else {
+      const catStarters = await prisma.menu_categories.create({
+        data: { restaurant_id: restaurant.id, name: 'Starters', priority: 1 }
+      })
+      const catMains = await prisma.menu_categories.create({
+        data: { restaurant_id: restaurant.id, name: 'Mains', priority: 2 }
+      })
+      const catBBQ = await prisma.menu_categories.create({
+        data: { restaurant_id: restaurant.id, name: 'BBQ Special', priority: 3 }
+      })
+      const catDrinks = await prisma.menu_categories.create({
+        data: { restaurant_id: restaurant.id, name: 'Beverages', priority: 4 }
+      })
+      const catBreads = await prisma.menu_categories.create({
+        data: { restaurant_id: restaurant.id, name: 'Fresh Breads', priority: 5 }
+      })
+
+      // 5. Create Menu Items
+      console.log('🏗️  Seeding Menu Items...')
+      if ((await prisma.menu_items.count({ where: { restaurant_id: restaurant.id } })) > 0) {
+        console.log('ℹ️  Menu items already present — skipped.')
+      } else {
+        const menuItems = [
+          // Starters
+          { name: 'Chicken Corn Soup', name_urdu: 'چکن کارن سوپ', price: 450, category_id: catStarters.id, station_id: kitchen.id },
+          { name: 'Finger Fish', name_urdu: 'فنگر فش', price: 1200, category_id: catStarters.id, station_id: kitchen.id },
+
+          // Mains
+          { name: 'Chicken Karahi (Full)', name_urdu: 'چکن کڑاہی (فل)', price: 2800, category_id: catMains.id, station_id: kitchen.id },
+          { name: 'Mutton Handi', name_urdu: 'مٹن ہانڈی', price: 3500, category_id: catMains.id, station_id: kitchen.id },
+          { name: 'Chicken Jalfrezi', name_urdu: 'چکن جلفریزی', price: 1800, category_id: catMains.id, station_id: kitchen.id },
+
+          // BBQ
+          { name: 'Chicken Tikka', name_urdu: 'چکن تکہ', price: 450, category_id: catBBQ.id, station_id: tandoor.id },
+          { name: 'Seekh Kabab (4 pcs)', name_urdu: 'سیخ کباب (4 عدد)', price: 1100, category_id: catBBQ.id, station_id: tandoor.id },
+          { name: 'Malai Boti', name_urdu: 'ملائی بوٹی', price: 1400, category_id: catBBQ.id, station_id: tandoor.id },
+
+          // Breads
+          { name: 'Roti (Tandoori)', name_urdu: 'روٹی (تندوری)', price: 40, category_id: catBreads.id, station_id: tandoor.id },
+          { name: 'Naan (Plain)', name_urdu: 'نان (سادہ)', price: 60, category_id: catBreads.id, station_id: tandoor.id },
+          { name: 'Garlic Naan', name_urdu: 'گارلک نان', price: 120, category_id: catBreads.id, station_id: tandoor.id },
+
+          // Drinks
+          { name: 'Mint Margarita', name_urdu: 'منٹ مارگریٹا', price: 550, category_id: catDrinks.id, station_id: bar.id },
+          { name: 'Fresh Lime', name_urdu: 'فریش لائم', price: 250, category_id: catDrinks.id, station_id: bar.id },
+          { name: 'Coke/Pepsi', name_urdu: 'کوک/پیپسی', price: 120, category_id: catDrinks.id, station_id: bar.id },
+        ]
+
+        for (const item of menuItems) {
+          const categoryName = [catStarters, catMains, catBBQ, catDrinks, catBreads].find(c => c.id === item.category_id)?.name || 'General';
+          await prisma.menu_items.create({
+            data: {
+              ...item,
+              restaurant_id: restaurant.id,
+              category: categoryName,
+              is_available: true,
+              requires_prep: categoryName !== 'Beverages',
+            }
+          })
+        }
+      }
+    }
   }
 
   // 6. Create Sections and Tables
   console.log('🏗️  Seeding Sections and Tables...')
-  const mainHall = await prisma.sections.create({
-    data: { restaurant_id: restaurant.id, name: 'Main Hall', type: 'DINING', priority: 1 }
-  })
-  const terrace = await prisma.sections.create({
-    data: { restaurant_id: restaurant.id, name: 'Terrace', type: 'DINING', priority: 2 }
-  })
-  const vipRoom = await prisma.sections.create({
-    data: { restaurant_id: restaurant.id, name: 'VIP Room', type: 'DINING', priority: 3 }
-  })
-
-  // Create tables for Main Hall (10 tables)
-  for (let i = 1; i <= 10; i++) {
-    await prisma.tables.create({
-      data: {
-        restaurant_id: restaurant.id,
-        section_id: mainHall.id,
-        name: `H-${i.toString().padStart(2, '0')}`,
-        capacity: 4,
-        status: 'AVAILABLE',
-      }
+  if ((await prisma.sections.count({ where: { restaurant_id: restaurant.id } })) > 0) {
+    console.log('ℹ️  Sections and tables already present — skipped.')
+  } else {
+    const mainHall = await prisma.sections.create({
+      data: { restaurant_id: restaurant.id, name: 'Main Hall', type: 'DINING', priority: 1 }
     })
-  }
-
-  // Create tables for Terrace (5 tables)
-  for (let i = 1; i <= 5; i++) {
-    await prisma.tables.create({
-      data: {
-        restaurant_id: restaurant.id,
-        section_id: terrace.id,
-        name: `T-${i.toString().padStart(2, '0')}`,
-        capacity: 2,
-        status: 'AVAILABLE',
-      }
+    const terrace = await prisma.sections.create({
+      data: { restaurant_id: restaurant.id, name: 'Terrace', type: 'DINING', priority: 2 }
     })
-  }
-
-  // Create tables for VIP (2 tables)
-  for (let i = 1; i <= 2; i++) {
-    await prisma.tables.create({
-      data: {
-        restaurant_id: restaurant.id,
-        section_id: vipRoom.id,
-        name: `VIP-${i}`,
-        capacity: 8,
-        status: 'AVAILABLE',
-      }
+    const vipRoom = await prisma.sections.create({
+      data: { restaurant_id: restaurant.id, name: 'VIP Room', type: 'DINING', priority: 3 }
     })
+
+    // Create tables for Main Hall (10 tables)
+    for (let i = 1; i <= 10; i++) {
+      await prisma.tables.create({
+        data: {
+          restaurant_id: restaurant.id,
+          section_id: mainHall.id,
+          name: `H-${i.toString().padStart(2, '0')}`,
+          capacity: 4,
+          status: 'AVAILABLE',
+        }
+      })
+    }
+
+    // Create tables for Terrace (5 tables)
+    for (let i = 1; i <= 5; i++) {
+      await prisma.tables.create({
+        data: {
+          restaurant_id: restaurant.id,
+          section_id: terrace.id,
+          name: `T-${i.toString().padStart(2, '0')}`,
+          capacity: 2,
+          status: 'AVAILABLE',
+        }
+      })
+    }
+
+    // Create tables for VIP (2 tables)
+    for (let i = 1; i <= 2; i++) {
+      await prisma.tables.create({
+        data: {
+          restaurant_id: restaurant.id,
+          section_id: vipRoom.id,
+          name: `VIP-${i}`,
+          capacity: 8,
+          status: 'AVAILABLE',
+        }
+      })
+    }
   }
 
   // 7. Create Staff
   console.log('🏗️  Seeding Staff...')
-  const staffData = [
-    { name: 'Admin Ali', role: 'MANAGER', pin: '0000' },
-    { name: 'Cashier Khan', role: 'CASHIER', pin: '1111' },
-    { name: 'Waiter Ahmed', role: 'WAITER', pin: '2222' },
-    { name: 'Waiter Bilal', role: 'WAITER', pin: '3333' },
-    { name: 'Rider Raza', role: 'RIDER', pin: '4444' },
-    { name: 'Rider Salman', role: 'RIDER', pin: '5555' },
-    { name: 'Head Chef', role: 'CHEF', pin: '2222', restaurant_id: restaurant.id },
-  ]
+  if ((await prisma.staff.count({ where: { restaurant_id: restaurant.id } })) > 0) {
+    console.log('ℹ️  Staff already present — skipped.')
+  } else {
+    const staffData = [
+      { name: 'Admin Ali', role: 'MANAGER', pin: '0000' },
+      { name: 'Cashier Khan', role: 'CASHIER', pin: '1111' },
+      { name: 'Waiter Ahmed', role: 'WAITER', pin: '2222' },
+      { name: 'Waiter Bilal', role: 'WAITER', pin: '3333' },
+      { name: 'Rider Raza', role: 'RIDER', pin: '4444' },
+      { name: 'Rider Salman', role: 'RIDER', pin: '5555' },
+      { name: 'Head Chef', role: 'CHEF', pin: '2222', restaurant_id: restaurant.id },
+    ]
 
-  for (const s of staffData) {
-    await prisma.staff.create({
-      data: {
-        restaurant_id: restaurant.id,
-        name: s.name,
-        role: s.role,
-        pin: s.pin, // In real app, this should be hashed if using hashed_pin field
-        status: 'active'
-      }
-    })
+    for (const s of staffData) {
+      await prisma.staff.create({
+        data: {
+          restaurant_id: restaurant.id,
+          name: s.name,
+          role: s.role,
+          pin: s.pin, // In real app, this should be hashed if using hashed_pin field
+          status: 'active'
+        }
+      })
+    }
   }
 
   // 8. Create Customers
   console.log('🏗️  Seeding Customers...')
-  const customers = [
-    { name: 'Qaiser Raza', phone: '03001234567', address: 'DHA Lahore' },
-    { name: 'Zaid Alvi', phone: '03007654321', address: 'Gulberg Lahore' },
-    { name: 'Umar Khalid', phone: '03211112222', address: 'Johar Town Lahore' },
-  ]
+  if ((await prisma.customers.count({ where: { restaurant_id: restaurant.id } })) > 0) {
+    console.log('ℹ️  Customers already present — skipped.')
+  } else {
+    const customers = [
+      { name: 'Qaiser Raza', phone: '03001234567', address: 'DHA Lahore' },
+      { name: 'Zaid Alvi', phone: '03007654321', address: 'Gulberg Lahore' },
+      { name: 'Umar Khalid', phone: '03211112222', address: 'Johar Town Lahore' },
+    ]
 
-  for (const c of customers) {
-    await prisma.customers.create({
-      data: {
-        restaurant_id: restaurant.id,
-        ...c
-      }
-    })
+    for (const c of customers) {
+      await prisma.customers.create({
+        data: {
+          restaurant_id: restaurant.id,
+          ...c
+        }
+      })
+    }
   }
 
   // 9. Create Vendors
   console.log('🏗️  Seeding Vendors...')
-  const vendors = [
-    { name: 'Alpha Poultry', phone: '03451112223', category: 'Meat' },
-    { name: 'Green Fresh Veggies', phone: '03454445556', category: 'Produce' },
-    { name: 'Beverage Solutions', phone: '03459998887', category: 'Drinks' },
-  ]
+  if ((await prisma.vendors.count({ where: { restaurant_id: restaurant.id } })) > 0) {
+    console.log('ℹ️  Vendors already present — skipped.')
+  } else {
+    const vendors = [
+      { name: 'Alpha Poultry', phone: '03451112223', category: 'Meat' },
+      { name: 'Green Fresh Veggies', phone: '03454445556', category: 'Produce' },
+      { name: 'Beverage Solutions', phone: '03459998887', category: 'Drinks' },
+    ]
 
-  for (const v of vendors) {
-    await prisma.vendors.create({
-      data: {
-        restaurant_id: restaurant.id,
-        ...v
-      }
-    })
+    for (const v of vendors) {
+      await prisma.vendors.create({
+        data: {
+          restaurant_id: restaurant.id,
+          ...v
+        }
+      })
+    }
   }
 
   console.log('🚀 Seed completed successfully!')

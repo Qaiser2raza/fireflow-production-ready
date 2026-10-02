@@ -234,6 +234,7 @@ export async function authMiddleware(
         p.startsWith('/api/auth/refresh') ||
         p.startsWith('/api/auth/logout') ||
         p.startsWith('/api/auth/change-pin') ||
+        p.startsWith('/api/auth/select-restaurant') ||
         p.startsWith('/api/onboarding') ||
         (req.method === 'GET' && /^\/api\/restaurants\/[0-9a-fA-F-]+\/profile$/.test(p));
       if (!setupAllowed) {

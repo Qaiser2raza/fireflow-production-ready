@@ -7,16 +7,30 @@ import { JwtService } from '../services/auth/JwtService';
 import { EmailVerificationService } from '../services/EmailVerificationService';
 import { refreshTokenService } from '../services/auth/RefreshTokenService';
 import { StaffDeviceService } from '../services/auth/StaffDeviceService';
+import { userSessionService, MAX_FAILED_LOGINS, ACCOUNT_LOCK_MINUTES } from '../services/auth/UserSessionService';
 
 // Shared bcrypt cost for every credential hash in the system (login, reset,
 // provisioning). Provisioning imports this so identity hashes cannot drift.
 export const BCRYPT_COST = 14;
 const DUMMY_PIN_HASH = '$2b$12$GYLhc.xEurgMkyT0l46AZumEF7vrGJ0zgcZPyfk3OvFc6d0jY2CJy';
+// Cost-14 hash of a random throwaway value. Comparing against it keeps the
+// "email does not exist" path the same length as a real failed comparison.
+const DUMMY_PASSWORD_HASH = '$2b$14$5Fb3WNZWDzVivHBXPkbexehd37QUDPeKXzP0Jxb8h1aWty9k8znxO';
 
 // In-memory rate limiting trackers
 const loginRateLimitTracker = new Map<string, number[]>();
 const resendVerificationTracker = new Map<string, number[]>();
 const resetPasswordRateLimitTracker = new Map<string, number[]>();
+
+/**
+ * Clears the in-memory auth rate-limit trackers.
+ * Exported for regression tests only; the application never calls it.
+ */
+export function resetLoginRateLimitTrackersForTests(): void {
+  loginRateLimitTracker.clear();
+  resendVerificationTracker.clear();
+  resetPasswordRateLimitTracker.clear();
+}
 
 export class AuthController {
   private prisma: PrismaClient;
@@ -37,6 +51,7 @@ export class AuthController {
     // Bind methods to preserve `this` context when passed directly as Express handlers
     this.register = this.register.bind(this);
     this.login = this.login.bind(this);
+    this.selectRestaurant = this.selectRestaurant.bind(this);
     this.verifyEmail = this.verifyEmail.bind(this);
     this.verifyEmailLink = this.verifyEmailLink.bind(this);
     this.resendVerification = this.resendVerification.bind(this);
@@ -234,6 +249,30 @@ export class AuthController {
 
       const device = StaffDeviceService.normalize({ fingerprint: device_fingerprint, name: device_name });
 
+      // Cloud identity first: an owner account lives in `users` + `memberships`
+      // and its session in `user_sessions`. Staff accounts that only exist in
+      // `staff` (PIN or legacy email/password) fall through to the path below.
+      if (isPasswordMode) {
+        const user = await this.prisma.users.findUnique({
+          where: { email: normalizedEmail },
+          select: { id: true, email: true, name: true, is_active: true, email_verified_at: true, password_hash: true, failed_login_count: true, locked_until: true }
+        });
+
+        if (user) {
+          await this.loginOwner(req, res, {
+            user,
+            password: password as string,
+            device,
+            ipAddress,
+          });
+          return;
+        }
+
+        // Unknown account: burn an equivalent bcrypt compare so response time
+        // does not reveal whether the email exists.
+        await bcrypt.compare(password as string, DUMMY_PASSWORD_HASH).catch(() => false);
+      }
+
       // Look up staff by email
       const staff = await this.prisma.staff.findFirst({
         where: { email: normalizedEmail },
@@ -402,6 +441,300 @@ export class AuthController {
     }
   }
 
+  /**
+   * Cloud-identity login: `users` + `memberships` + `user_sessions`.
+   *
+   * Runs only when a `users` row exists for the email. Staff-only accounts are
+   * untouched and keep using the legacy staff path in `login`.
+   */
+  private async loginOwner(
+    req: Request,
+    res: Response,
+    ctx: {
+      user: {
+        id: string;
+        email: string;
+        name: string;
+        is_active: boolean;
+        email_verified_at: Date | null;
+        password_hash: string;
+        failed_login_count: number;
+        locked_until: Date | null;
+      };
+      password: string;
+      device: { fingerprint: string; name?: string } | null;
+      ipAddress: string;
+    }
+  ): Promise<void> {
+    const { user, password, device, ipAddress } = ctx;
+    const now = Date.now();
+
+    if (user.locked_until && user.locked_until.getTime() > now) {
+      res.status(403).json({
+        error: 'Account is temporarily locked due to multiple failed attempts. Please try again later.',
+        code: 'ACCOUNT_LOCKED',
+      });
+      return;
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+      const failed = (user.failed_login_count || 0) + 1;
+      await this.prisma.users.update({
+        where: { id: user.id },
+        data: {
+          failed_login_count: failed,
+          locked_until: failed >= MAX_FAILED_LOGINS ? new Date(now + ACCOUNT_LOCK_MINUTES * 60 * 1000) : null,
+        },
+      });
+      // Identical response for a wrong password and an unknown account.
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    if (!user.is_active) {
+      res.status(403).json({ error: 'Account is inactive', code: 'ACCOUNT_INACTIVE' });
+      return;
+    }
+
+    if (!user.email_verified_at) {
+      res.status(403).json({
+        error: 'Please verify your email address before logging in.',
+        code: 'EMAIL_NOT_VERIFIED',
+      });
+      return;
+    }
+
+    const memberships = await this.prisma.memberships.findMany({
+      where: { user_id: user.id },
+      include: {
+        restaurant: {
+          select: { id: true, name: true, slug: true, is_active: true, onboarding_status: true },
+        },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    if (memberships.length === 0) {
+      res.status(403).json({
+        error: 'This account is not a member of any restaurant yet.',
+        code: 'NO_MEMBERSHIP',
+      });
+      return;
+    }
+
+    await this.prisma.users.update({
+      where: { id: user.id },
+      data: { failed_login_count: 0, locked_until: null, last_login_at: new Date() },
+    });
+
+    // Two or more workspaces: no session yet, only a short-lived
+    // single-purpose selection token.
+    if (memberships.length > 1) {
+      const selectionToken = this.jwtService.generateSelectionToken(user.id);
+      res.status(200).json({
+        requires_restaurant_selection: true,
+        restaurants: memberships.map((m) => ({
+          restaurant_id: m.restaurant_id,
+          name: m.restaurant.name,
+          slug: m.restaurant.slug,
+          role: m.role,
+        })),
+        selection_token: selectionToken,
+      });
+      return;
+    }
+
+    await this.issueOwnerSession(req, res, user, memberships[0], device, ipAddress);
+  }
+
+  /**
+   * POST /api/auth/select-restaurant
+   * Second step for accounts that belong to more than one restaurant.
+   */
+  async selectRestaurant(req: Request, res: Response): Promise<void> {
+    try {
+      const { selection_token, restaurant_id, device_fingerprint, device_name } = req.body;
+      const ipAddress = req.ip || (req.headers['x-forwarded-for'] as string) || 'unknown';
+
+      if (!selection_token || typeof selection_token !== 'string') {
+        res.status(400).json({ error: 'selection_token is required' });
+        return;
+      }
+      if (!restaurant_id || typeof restaurant_id !== 'string') {
+        res.status(400).json({ error: 'restaurant_id is required' });
+        return;
+      }
+
+      const decoded = this.jwtService.verifySelectionToken(selection_token);
+      if (!decoded.valid || !decoded.payload) {
+        res.status(401).json({
+          error: 'Restaurant selection is invalid or has expired. Please sign in again.',
+          code: 'INVALID_SELECTION_TOKEN',
+        });
+        return;
+      }
+
+      const user = await this.prisma.users.findUnique({
+        where: { id: decoded.payload.userId },
+        select: { id: true, email: true, name: true, is_active: true, email_verified_at: true },
+      });
+
+      if (!user || !user.is_active || !user.email_verified_at) {
+        res.status(401).json({
+          error: 'Restaurant selection is invalid or has expired. Please sign in again.',
+          code: 'INVALID_SELECTION_TOKEN',
+        });
+        return;
+      }
+
+      // Membership is the authority: a foreign restaurant_id is rejected.
+      const membership = await this.prisma.memberships.findFirst({
+        where: { user_id: user.id, restaurant_id },
+        include: {
+          restaurant: {
+            select: { id: true, name: true, slug: true, is_active: true, onboarding_status: true },
+          },
+        },
+      });
+
+      if (!membership) {
+        res.status(403).json({
+          error: 'You do not have access to this restaurant.',
+          code: 'NO_MEMBERSHIP_FOR_RESTAURANT',
+        });
+        return;
+      }
+
+      const device = StaffDeviceService.normalize({ fingerprint: device_fingerprint, name: device_name });
+      await this.issueOwnerSession(req, res, user, membership, device, ipAddress);
+    } catch (err: any) {
+      console.error('[AUTH_CONTROLLER] selectRestaurant error:', err.message);
+      res.status(500).json({ error: 'Restaurant selection failed' });
+    }
+  }
+
+  /**
+   * Issues the owner session: an access token with the exact staff claims the
+   * app already expects, plus a `user_sessions` row whose raw token only ever
+   * travels in an httpOnly cookie.
+   */
+  private async issueOwnerSession(
+    req: Request,
+    res: Response,
+    user: { id: string; email: string; name: string },
+    membership: { restaurant_id: string; staff_id: string | null; role: string; restaurant: { id: string; name: string; slug: string | null; is_active: boolean; onboarding_status: string } },
+    device: { fingerprint: string; name?: string } | null,
+    ipAddress: string
+  ): Promise<void> {
+    if (!membership.staff_id) {
+      res.status(403).json({
+        error: 'This account is not linked to a staff profile in this restaurant yet.',
+        code: 'STAFF_LINK_MISSING',
+      });
+      return;
+    }
+
+    const staff = await this.prisma.staff.findUnique({
+      where: { id: membership.staff_id },
+      select: {
+        id: true,
+        restaurant_id: true,
+        name: true,
+        role: true,
+        status: true,
+        must_change_pin: true,
+        is_email_verified: true,
+        last_login: true,
+      },
+    });
+
+    if (!staff || staff.restaurant_id !== membership.restaurant_id) {
+      res.status(403).json({
+        error: 'The staff profile linked to this membership is no longer available.',
+        code: 'STAFF_LINK_MISSING',
+      });
+      return;
+    }
+
+    if (staff.status !== 'active') {
+      res.status(403).json({ error: 'Account is inactive', code: 'STAFF_INACTIVE' });
+      return;
+    }
+
+    if (!membership.restaurant.is_active) {
+      res.status(403).json({ error: 'Restaurant is inactive', code: 'RESTAURANT_INACTIVE' });
+      return;
+    }
+
+    // TODO(Task 04): single tenant status / trial check belongs here — after the
+    // membership is resolved, before any session is issued.
+
+    const accessToken = this.jwtService.generateAccessToken(
+      staff.id,
+      membership.restaurant_id,
+      staff.role,
+      staff.name
+    );
+
+    const issued = await userSessionService.createUserSession({
+      userId: user.id,
+      userAgent: (req.headers['user-agent'] as string) || null,
+      ipAddress,
+    });
+
+    // Raw refresh token: cookie only, never in the response body.
+    userSessionService.setRefreshCookie(res, issued.token);
+
+    // Mirror the staff login device enrolment so PIN fast-auth keeps working.
+    if (device) {
+      await this.staffDeviceService.trust(staff.id, membership.restaurant_id, device).catch(() => { });
+    }
+
+    const lastLogin = new Date();
+    await this.prisma.staff.update({
+      where: { id: staff.id },
+      data: { last_login: lastLogin, failed_login_count: 0, locked_until: null },
+    });
+
+    await this.prisma.audit_logs.create({
+      data: {
+        restaurant_id: membership.restaurant_id,
+        staff_id: staff.id,
+        action_type: 'USER_LOGIN',
+        entity_type: 'USER',
+        entity_id: user.id,
+        details: {
+          membership_role: membership.role,
+          ip_address: ipAddress,
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      accessToken,
+      staff: {
+        id: staff.id,
+        name: staff.name,
+        email: user.email,
+        role: staff.role,
+        restaurant_id: membership.restaurant_id,
+        status: staff.status,
+        must_change_password: false,
+        must_change_pin: staff.must_change_pin === true,
+        is_email_verified: staff.is_email_verified,
+        last_login: lastLogin,
+      },
+      device: { trusted: Boolean(device), enrolled: Boolean(device) },
+      restaurant: membership.restaurant,
+      tokens: {
+        access_token: accessToken,
+        expires_in: 15 * 60,
+      },
+    });
+  }
+
   /** List trusted devices for the authenticated staff member or a manager's tenant staff. */
   async listDevices(req: Request, res: Response): Promise<void> {
     const actorId = (req as any).staffId;
@@ -448,9 +781,9 @@ export class AuthController {
   /**
    * Applies the result of a successful token verification.
    *
-   * A verified email means BOTH the cloud identity row (`users`) and the
-   * tenant row (`staff`) are marked verified, so Email + Password login works
-   * whichever of them the next auth layer reads.
+   * A verified email is recorded on the cloud identity row (`users`), which is
+   * what the owner login path reads. The `staff` flag is kept in step for
+   * staff-only accounts registered through /api/auth/register.
    */
   private async applyVerification(email: string, staffId?: string | null): Promise<void> {
     const normalizedEmail = email.toLowerCase();
@@ -467,8 +800,13 @@ export class AuthController {
       }
     });
 
-    // TEMP: staff.is_email_verified dual-write — remove in Task 03 when login
-    // moves to users + user_sessions.
+    await this.prisma.users.update({
+      where: { email: normalizedEmail },
+      data: { email_verified_at: new Date() }
+    }).catch(() => {});
+
+    // Staff rows registered through the tenant-scoped registration route have
+    // no `users` identity, so the staff flag still has to move for them.
     if (staffId) {
       await this.prisma.staff.update({
         where: { id: staffId },
@@ -480,11 +818,6 @@ export class AuthController {
         data: { is_email_verified: true }
       }).catch(() => {});
     }
-
-    await this.prisma.users.update({
-      where: { email: normalizedEmail },
-      data: { email_verified_at: new Date() }
-    }).catch(() => {});
   }
 
   /**

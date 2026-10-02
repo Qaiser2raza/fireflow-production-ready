@@ -46,11 +46,34 @@ export interface DecodedJwt {
   error?: string;
 }
 
+/**
+ * Restaurant-selection token: a short-lived, single-purpose proof that a user
+ * passed the password check. Signed with the same key as access tokens but it
+ * carries no tenant claims, so authMiddleware (which requires `staffId` +
+ * `restaurantId` and rejects anything that is not `type: 'access'`) can never
+ * accept it as an access token.
+ */
+export interface SelectionJwtPayload {
+  userId: string;
+  type: 'selection';
+  iat: number;
+  exp: number;
+  jti: string;
+}
+
+export interface DecodedSelectionJwt {
+  valid: boolean;
+  payload?: SelectionJwtPayload;
+  error?: string;
+}
+
 // ==========================================
 // CONFIG
 // ==========================================
 
 const JWT_ACCESS_EXPIRY_MINUTES = 15;
+/** Restaurant-selection token lifetime. Short and single purpose. */
+const JWT_SELECTION_EXPIRY_MINUTES = 5;
 const JWT_ALGORITHM = 'HS256';
 
 /**
@@ -111,6 +134,54 @@ export class JwtService {
     };
 
     return this.sign(payload);
+  }
+
+  /**
+   * Generate a short-lived restaurant-selection token (5 minutes).
+   * Never usable as an access token: no staffId/restaurantId claims and a
+   * distinct type that authMiddleware rejects.
+   */
+  generateSelectionToken(userId: string, expiresInSeconds?: number): string {
+    const now = Math.floor(Date.now() / 1000);
+    const payload: SelectionJwtPayload = {
+      userId,
+      type: 'selection',
+      iat: now,
+      exp: expiresInSeconds ? now + expiresInSeconds : now + JWT_SELECTION_EXPIRY_MINUTES * 60,
+      jti: crypto.randomUUID(),
+    };
+    return this.sign(payload as unknown as JwtPayload);
+  }
+
+  /**
+   * Verify a selection token. Expiry and signature are checked exactly as for
+   * an access token; the type must be `selection`.
+   */
+  verifySelectionToken(token: string): DecodedSelectionJwt {
+    try {
+      const parts = (token || '').split('.');
+      if (parts.length !== 3) {
+        return { valid: false, error: 'Invalid token format' };
+      }
+      const [headerB64, payloadB64, signatureB64] = parts;
+      const payload = JSON.parse(Buffer.from(payloadB64, 'base64').toString('utf-8')) as SelectionJwtPayload;
+
+      if (payload.type !== 'selection') {
+        return { valid: false, error: 'Invalid token type' };
+      }
+      if (!payload.userId) {
+        return { valid: false, error: 'Missing required claims' };
+      }
+      if (payload.exp < Math.floor(Date.now() / 1000)) {
+        return { valid: false, error: 'Token expired' };
+      }
+      if (signatureB64 !== this.createSignature(headerB64, payloadB64)) {
+        return { valid: false, error: 'Invalid token signature' };
+      }
+      return { valid: true, payload };
+    } catch (error: any) {
+      return { valid: false, error: error.message || 'Token verification failed' };
+    }
   }
 
   /**

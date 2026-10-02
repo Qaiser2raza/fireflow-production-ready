@@ -263,11 +263,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 300);
   };
 
-  const login = async (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string }) => {
+  const login = async (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string; selection_token?: string; restaurant_id?: string }) => {
     try {
-      const res = await fetch(`${API_URL}/auth/login`, {
+      // Owner accounts with more than one restaurant finish in a second step:
+      // the password check returns a short-lived selection token, not a session.
+      const selectingRestaurant = Boolean(credentials.selection_token && credentials.restaurant_id);
+      const res = await fetch(`${API_URL}/auth/${selectingRestaurant ? 'select-restaurant' : 'login'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(credentials)
       });
 
@@ -279,6 +283,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error(errData?.error || 'Invalid credentials');
       }
       const data = await res.json();
+
+      if (data.requires_restaurant_selection) {
+        return {
+          requiresRestaurantSelection: true as const,
+          restaurants: data.restaurants || [],
+          selectionToken: data.selection_token,
+        };
+      }
+
       const user = data.staff;
       const restaurant = data.restaurant;
 
@@ -291,12 +304,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // storage. Overwrites any previous tenant on account switch.
       setContextRestaurant(restaurant || null);
 
-      // ✅ Phase 2b: Store JWT tokens if present
-      if (data.accessToken && data.refreshToken) {
+      // ✅ Phase 2b: Store JWT tokens if present. Owner sessions keep their
+      // refresh token in an httpOnly cookie, so `refreshToken` is absent there
+      // and the interceptor refreshes with the cookie instead.
+      if (data.accessToken) {
         localStorage.setItem('accessToken', data.accessToken);
-        localStorage.setItem('refreshToken', data.refreshToken);
+        if (data.refreshToken) {
+          localStorage.setItem('refreshToken', data.refreshToken);
+        }
         localStorage.setItem('staff', JSON.stringify(data.staff));
-        const expiryTime = Date.now() + (15 * 60 * 1000);
+        const expiryTime = Date.now() + ((data.tokens?.expires_in || 15 * 60) * 1000);
         localStorage.setItem('accessTokenExpiry', expiryTime.toString());
       }
 

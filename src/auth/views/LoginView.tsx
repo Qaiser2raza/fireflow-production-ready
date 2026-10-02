@@ -1,12 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Delete, ArrowRight, Lock, User, Smartphone, X, RefreshCcw, Wifi } from 'lucide-react';
+import { Shield, Delete, ArrowRight, Lock, User, Smartphone, X, RefreshCcw, Wifi, Store } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { getTrustedDeviceFingerprint, getDeviceName } from '../../shared/lib/deviceFingerprint';
+import type { LoginResult } from '../../shared/types';
 
 
 interface LoginViewProps {
-  onLogin: (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string }) => Promise<boolean | void> | void;
+  onLogin: (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string; selection_token?: string; restaurant_id?: string }) => Promise<LoginResult | void> | void;
   restaurantName?: string;
+}
+
+/** Owner accounts with more than one workspace pick a restaurant after the password check. */
+interface RestaurantChoice {
+  restaurant_id: string;
+  name: string;
+  slug: string;
+  role: string;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName }) => {
@@ -21,6 +30,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [connectivity, setConnectivity] = useState<any>(null);
   const [loadingConnectivity, setLoadingConnectivity] = useState(false);
+  const [selection, setSelection] = useState<{ restaurants: RestaurantChoice[]; selectionToken: string } | null>(null);
 
   const fetchConnectivity = async () => {
     setLoadingConnectivity(true);
@@ -86,19 +96,28 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
     setError(false);
   };
 
-  const handleSubmit = async () => {
+const handleSubmit = async () => {
     if (isProcessing || !email.trim() || (mode === 'password' ? !password : pin.length < 4)) return;
 
     setIsProcessing(true);
     setError(false);
     await new Promise(resolve => setTimeout(resolve, 300));
     try {
-      const success = await onLogin({
+      const result = await onLogin({
         email: email.trim(),
         ...(mode === 'password' ? { password } : { pin }),
         ...(deviceFingerprint ? { device_fingerprint: deviceFingerprint, device_name: getDeviceName() } : {})
       });
-      if (success === false) {
+
+      if (result && typeof result === 'object' && result.requiresRestaurantSelection) {
+        // Password accepted, tenant not chosen yet: show the picker.
+        setSelection({ restaurants: result.restaurants, selectionToken: result.selectionToken });
+        setPassword('');
+        setIsProcessing(false);
+        return;
+      }
+
+      if (result === false) {
           throw new Error("Login failed");
       }
       if (mode === 'password' && deviceFingerprint) {
@@ -117,6 +136,40 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
     setTimeout(() => {
       setIsProcessing(false);
     }, 2000);
+  };
+
+  const handleRestaurantSelect = async (restaurantId: string) => {
+    if (!selection || isProcessing) return;
+
+    setIsProcessing(true);
+    setError(false);
+    try {
+      const result = await onLogin({
+        email: email.trim(),
+        selection_token: selection.selectionToken,
+        restaurant_id: restaurantId,
+        ...(deviceFingerprint ? { device_fingerprint: deviceFingerprint, device_name: getDeviceName() } : {})
+      });
+
+      if (result && typeof result === 'object' && result.requiresRestaurantSelection) {
+        setSelection({ restaurants: result.restaurants, selectionToken: result.selectionToken });
+        setIsProcessing(false);
+        return;
+      }
+      if (result === false) {
+        throw new Error("Restaurant selection failed");
+      }
+      setSelection(null);
+      if (deviceFingerprint) {
+        localStorage.setItem(`trusted-pin:${email.trim().toLowerCase()}`, 'true');
+        setDeviceTrusted(true);
+      }
+    } catch (err) {
+      console.error("Restaurant selection error:", err);
+      setError(true);
+      setSelection(null);
+      setIsProcessing(false);
+    }
   };
 
   return (
@@ -147,6 +200,46 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
         </div>
 
         <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-800 p-6 md:p-6 rounded-3xl shadow-2xl w-full max-w-md mx-auto">
+          {selection ? (
+            <div>
+              <div className="text-center mb-6">
+                <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-gold-500/10 border border-gold-500/30 mb-3">
+                  <Store size={20} className="text-gold-500" />
+                </div>
+                <h2 className="text-white text-lg font-bold tracking-wide">Select Restaurant</h2>
+                <p className="text-slate-500 text-[9px] uppercase font-black tracking-widest mt-1">
+                  {selection.restaurants.length} workspaces on this account
+                </p>
+              </div>
+
+              <div className="space-y-2 mb-5">
+                {selection.restaurants.map((r) => (
+                  <button
+                    key={r.restaurant_id}
+                    type="button"
+                    onClick={() => handleRestaurantSelect(r.restaurant_id)}
+                    disabled={isProcessing}
+                    className="w-full text-left px-4 py-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-gold-500/50 transition-all flex items-center justify-between gap-3 disabled:opacity-50"
+                  >
+                    <span className="min-w-0">
+                      <span className="block text-white text-sm font-medium truncate">{r.name}</span>
+                      <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{r.role}</span>
+                    </span>
+                    <ArrowRight size={16} className="text-gold-500 shrink-0" />
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => { setSelection(null); setError(false); }}
+                className="w-full py-2 rounded-xl text-[10px] uppercase font-black tracking-widest text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Sign in with a different account
+              </button>
+            </div>
+          ) : (
+          <>
           <div className="text-center mb-6">
             <div className="lg:hidden mb-3 inline-flex items-center justify-center w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 text-gold-500">
               <Shield size={20} />
@@ -236,6 +329,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName })
             <Wifi size={14} />
             Connect Mobile
           </button>
+          </>
+          )}
 
         </div>
       </div>

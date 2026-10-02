@@ -40,6 +40,7 @@ import { AuthController } from './controllers/AuthController';
 import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { refreshTokenService } from './services/auth/RefreshTokenService';
+import { userSessionService } from './services/auth/UserSessionService';
 import { authMiddleware, requireRole } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
@@ -598,6 +599,8 @@ const verifyPinLimiter = rateLimit({
  */
 // M035 Phase 2: Delegated to AuthController (supports Email+Password primary mode and PIN fast-auth)
 app.post('/api/auth/login', loginLimiter, authController.login.bind(authController));
+// Cloud-identity second step for accounts with more than one restaurant.
+app.post('/api/auth/select-restaurant', loginLimiter, authController.selectRestaurant.bind(authController));
 app.post('/api/auth/register', authMiddleware, requireRole('MANAGER', 'ADMIN', 'SUPER_ADMIN'), authController.register.bind(authController));
 app.post('/api/auth/verify-email', authController.verifyEmail.bind(authController));
 app.post('/api/auth/resend-verification', authController.resendVerification.bind(authController));
@@ -1486,6 +1489,106 @@ app.post('/api/auth/verify-pin', verifyPinLimiter, authMiddleware, async (req, r
 });
 
 /**
+ * Owner session refresh (`user_sessions`), keyed by the httpOnly cookie.
+ *
+ * Rotates inside the token family; replaying a rotated token revokes the whole
+ * family and forces a fresh sign-in. The raw token never appears in the body.
+ */
+async function handleUserSessionRefresh(req: any, res: any, cookieToken: string): Promise<void> {
+    try {
+        const result = await userSessionService.rotateUserRefreshToken(cookieToken);
+
+        if ('error' in result) {
+            if (result.error === 'TOKEN_REUSE_DETECTED') {
+                userSessionService.clearRefreshCookie(res);
+                await prisma.system_logs.create({
+                    data: {
+                        level: 'WARN',
+                        service: 'auth',
+                        action: 'USER_REFRESH_TOKEN_REUSE',
+                        metadata: { ip_address: req.ip || 'unknown' },
+                    },
+                }).catch(() => { });
+                return res.status(401).json({
+                    error: 'Refresh token reuse detected. All sessions have been revoked.',
+                    code: 'TOKEN_REUSE_DETECTED',
+                });
+            }
+            return res.status(401).json({
+                error: 'Invalid or expired refresh token',
+                code: 'INVALID_REFRESH_TOKEN',
+            });
+        }
+
+        const user = await prisma.users.findUnique({
+            where: { id: result.session.userId },
+            select: { id: true, email: true, name: true, is_active: true, email_verified_at: true },
+        });
+
+        if (!user || !user.is_active) {
+            return res.status(401).json({ error: 'Account is no longer active', code: 'ACCOUNT_INACTIVE' });
+        }
+        if (!user.email_verified_at) {
+            return res.status(401).json({ error: 'Please verify your email address before logging in.', code: 'EMAIL_NOT_VERIFIED' });
+        }
+
+        // TODO(Task 04 / schema): `user_sessions` has no restaurant column, so the
+        // tenant is re-resolved from memberships on every refresh. For an account
+        // with several restaurants this picks the most recently updated one; a
+        // restaurant_id on user_sessions would make the choice explicit.
+        const memberships = await prisma.memberships.findMany({
+            where: { user_id: user.id },
+            include: { restaurant: { select: { id: true, is_active: true } } },
+            orderBy: { updated_at: 'desc' },
+        });
+
+        if (memberships.length === 0) {
+            return res.status(403).json({ error: 'This account is not a member of any restaurant yet.', code: 'NO_MEMBERSHIP' });
+        }
+
+        const membership = memberships[0];
+        if (!membership.staff_id) {
+            return res.status(403).json({
+                error: 'This account is not linked to a staff profile in this restaurant yet.',
+                code: 'STAFF_LINK_MISSING',
+            });
+        }
+        if (!membership.restaurant.is_active) {
+            return res.status(403).json({ error: 'Restaurant is inactive', code: 'RESTAURANT_INACTIVE' });
+        }
+
+        const staff = await prisma.staff.findUnique({
+            where: { id: membership.staff_id },
+            select: { id: true, restaurant_id: true, name: true, role: true, status: true },
+        });
+
+        if (!staff || staff.restaurant_id !== membership.restaurant_id || staff.status !== 'active') {
+            return res.status(401).json({ error: 'The staff profile linked to this membership is no longer active.', code: 'STAFF_INACTIVE' });
+        }
+
+        const accessToken = jwtService.generateAccessToken(staff.id, membership.restaurant_id, staff.role, staff.name);
+
+        userSessionService.setRefreshCookie(res, result.token);
+
+        await prisma.audit_logs.create({
+            data: {
+                restaurant_id: membership.restaurant_id,
+                staff_id: staff.id,
+                action_type: 'USER_SESSION_ROTATED',
+                entity_type: 'USER',
+                entity_id: user.id,
+                details: { token_family_id: result.session.tokenFamilyId },
+            },
+        }).catch(() => { });
+
+        res.json({ access_token: accessToken, expires_in: 15 * 60 });
+    } catch (error: any) {
+        console.error('[ERROR] /api/auth/refresh (user session):', error.message);
+        res.status(500).json({ error: 'Token refresh failed' });
+    }
+}
+
+/**
  * POST /api/auth/refresh
  * Generate new access token using refresh token
  * 
@@ -1501,7 +1604,13 @@ app.post('/api/auth/verify-pin', verifyPinLimiter, authMiddleware, async (req, r
 app.post('/api/auth/refresh', async (req, res) => {
     const { refresh_token } = req.body;
 
-    if (!refresh_token || typeof refresh_token !== 'string') {
+    // Owner sessions carry their refresh token in an httpOnly cookie.
+    if (!refresh_token) {
+        const cookieToken = userSessionService.readRefreshCookie(req);
+        if (cookieToken) {
+            await handleUserSessionRefresh(req, res, cookieToken);
+            return;
+        }
         return res.status(400).json({ error: 'Missing refresh_token' });
     }
 
@@ -1626,6 +1735,14 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
     }
 
     try {
+        // Owner sessions: revoke the session carried by the httpOnly cookie.
+        const userCookieToken = userSessionService.readRefreshCookie(req);
+        let userSessionRevoked = false;
+        if (userCookieToken) {
+            userSessionRevoked = await userSessionService.revokeUserSession(userCookieToken);
+            userSessionService.clearRefreshCookie(res);
+        }
+
         // Mission 016B (F-SEC-4): logout is authoritative server-side. Revoke
         // the caller's active refresh-token family regardless of what the
         // client sends; an explicitly supplied refresh_token is revoked too.
@@ -1653,6 +1770,7 @@ app.post('/api/auth/logout', authMiddleware, async (req, res) => {
                     timestamp: new Date().toISOString(),
                     refresh_token_revoked: !!refresh_token,
                     family_revoked_sessions: familyRevokedCount,
+                    user_session_revoked: userSessionRevoked,
                 }
             }
         });

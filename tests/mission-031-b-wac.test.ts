@@ -1,7 +1,12 @@
 /**
  * M031-B Inventory Phase B Regression Tests
  * 14-item test matrix: WAC, soft-negative, SERVED consumption, exactly-once COGS, count WAC, cross-tenant.
+ *
+ * This suite wipes every restaurant (see teardown), so the global test-DB guard
+ * is imported first: it refuses to start unless DATABASE_URL points at a
+ * disposable test database.
  */
+import './_test-db-guard';
 import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { stockMovementService } from '../src/api/services/inventory/StockMovementService';

@@ -4,6 +4,19 @@
 
 export type UserRole = 'ADMIN' | 'SUPER_ADMIN' | 'MANAGER' | 'CASHIER' | 'SERVER' | 'WAITER' | 'CHEF' | 'RIDER';
 
+/**
+ * Result of a sign-in attempt. `false` means the credentials were rejected; an
+ * object with `requiresRestaurantSelection` means the password check passed but
+ * the owner belongs to more than one restaurant and must pick one.
+ */
+export type LoginResult =
+    | boolean
+    | {
+        requiresRestaurantSelection: true;
+        restaurants: Array<{ restaurant_id: string; name: string; slug: string; role: string }>;
+        selectionToken: string;
+    };
+
 export type SectionType = 'DINING' | 'DELIVERY' | 'TAKEAWAY' | 'HIDDEN';
 
 export type OrderType = 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY' | 'RESERVATION';
@@ -702,7 +715,7 @@ export interface AppContextType {
     orderToEdit?: Order;
     setActiveView: (view: string) => void;
     setOrderToEdit: (order: Order | null) => void;
-    login: (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string }) => Promise<boolean>;
+    login: (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string; selection_token?: string; restaurant_id?: string }) => Promise<LoginResult>;
     logout: () => void;
     addNotification: (type: 'success' | 'error' | 'info' | 'warning', msg: string, action?: { label: string, onClick: () => void }) => void;
     removeNotification: (id: string) => void;
