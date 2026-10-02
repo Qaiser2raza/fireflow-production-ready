@@ -5,10 +5,10 @@
 | Attribute | Value |
 |---|---|
 | **Branch** | `main` |
-| **Ahead of remote** | 1 commit (unpublished) |
-| **Working tree** | Modified: `.env.example`, `prisma/migrations/20260606092315_fix_printers_local_support/migration.sql`, `prisma/migrations/migration_lock.toml`, `src/api/server.ts` |
-| **Untracked** | `prisma/migrations/20260816071149_add_qr_order_type/` |
-| **Latest commit** | `c049769 fix: clear TypeScript validation errors` |
+| **Ahead of remote** | 0 commits |
+| **Working tree** | Clean except untracked `scripts/dev-set-owner-password.ts` |
+| **Untracked** | `scripts/dev-set-owner-password.ts` (DEV ONLY helper, not committed) |
+| **Latest commit** | `81e2bb5 feat(identity): cloud identity tables, financial FK hardening, drift cleanup` |
 | **Node engines** | >=18.0.0 |
 | **Database** | PostgreSQL via Prisma Client 6 |
 | **Frontend** | React 19 + Vite 6 + Tailwind CSS 4 |
@@ -147,17 +147,62 @@
 
 | File | Nature |
 |---|---|
-| `prisma/migrations/20260816071149_add_qr_order_type/` | New migration adding `QR` to `OrderType` and `PENDING_APPROVAL` to `OrderStatus` |
-| `src/api/server.ts` | Added `import 'dotenv/config'` at top |
-| `src/api/routes/inventoryRoutes.ts` | M033-D stock count API routes (lines, finalize, delete line) |
-| `src/shared/lib/inventoryService.ts` | M033-D stock count client service methods |
-| `src/shared/types.ts` | M033-D StockCount, StockCountLine, adjustment types |
-| `src/client/App.tsx` | M033-D Stock Count view routing + nav/command palette |
-| `src/client/operations/inventory/StockCountListView.tsx` | M033-D stock count list UI |
-| `src/client/operations/inventory/StockCountDetailView.tsx` | M033-D stock count detail UI |
-| `tests/mission-033-d-stock-count-client.test.ts` | M033-D 33-assertion client contract test |
-| `.env.example` | Contains live Supabase credentials |
-| `prisma/migrations/20260606092315_fix_printers_local_support/migration.sql` | BOM/whitespace fix |
+| `scripts/dev-set-owner-password.ts` | DEV ONLY, never deploy. Sets `staff.email` / `password_hash` / `is_email_verified=true` on a signup owner. Refuses to run when `NODE_ENV=production` or `DATABASE_URL` is not localhost/127.0.0.1. Reads `OWNER_EMAIL` and `NEW_PASSWORD` from env only. Still useful for owners provisioned before Task 02. |
+| `src/features/onboarding/RestaurantLanding.tsx` | Task 02 — signup form collects Password + Confirm password. |
+| `src/features/onboarding/SetupTokenDisplay.tsx` | Task 02 — "Check your email" confirmation, PIN relabelled as the POS PIN for staff devices. |
+| `src/api/server.ts` | Task 02 — `/api/onboarding/start` requires a password, rejects duplicate account emails with 409, per-IP signup limiter, `GET /api/auth/verify-email` link endpoint. |
+| `src/api/services/onboarding/RestaurantProvisioningService.ts` | Task 02 — `ownerPassword` support, `users` + `memberships` creation, TEMP `staff` credential dual-write, duplicate-email rejection, sanitized owner projection. |
+| `src/api/controllers/AuthController.ts` | Task 02 — exported `BCRYPT_COST`, shared `applyVerification` (sets `users.email_verified_at` and `staff.is_email_verified`), `verifyEmailLink` GET handler. |
+| `src/api/services/EmailVerificationService.ts` | Task 02 — `logDevVerificationLink` (local dev only, silent in staging/production and when an email provider is configured). |
+| `tests/signup-owner-password.test.ts` | Task 02 — 46 assertions, self-cleaning by id. |
+
+**TEMP markers to remove in Task 03**: the `staff.email` / `staff.password_hash` / `staff.is_email_verified`
+dual-write in `RestaurantProvisioningService`, and the `staff.is_email_verified` write in
+`AuthController.applyVerification`.
+
+---
+
+## 2026-10-02 — Task 02: signup with owner-chosen password
+
+**Flow now**: signup form asks for password + confirmation (min 10, must match, must not equal the
+email) -> `POST /api/onboarding/start` validates again server-side -> one transaction creates the
+restaurant, the owner `staff` row, `users`, `memberships` (OWNER, linked to the owner staff row), the
+`owner_invites` row and the single-use `email_verification_tokens` row -> the response carries only
+restaurant id/slug/name, the setup token and the one-time POS PIN (`verification_required: true`) ->
+in local development the verification URL is printed to the server console -> opening
+`GET /api/auth/verify-email?token=...` sets `users.email_verified_at` and `staff.is_email_verified`
+and marks the invite VERIFIED -> Email & Password login then succeeds.
+
+**Identity model**: provisioning paths that pass no password (super admin vault, demo tenant) keep
+their PIN-only behaviour and create no `users` row. A second signup with an existing account email is
+rejected (`409 EMAIL_ALREADY_REGISTERED`) before any tenant row is created; adding a workspace to an
+existing account remains a later task.
+
+**Verified**: `npx prisma validate` passes; `npx tsc --noEmit -p tsconfig.json` reports 0 errors;
+`tests/signup-owner-password.test.ts` = 46 passed / 0 failed and leaves zero rows behind
+(`scratch/check-signup-residue.cjs`). Known pre-existing failure, untouched by this task:
+`tests/onboarding-saas.test.ts` "PIN is hashed in DB" expects the plaintext PIN in `staff.pin`, which
+the Phase 1 hash-only design deliberately does not store.
+
+**Next**: Task 03 — move login onto `users` + `user_sessions`, delete the TEMP `staff` dual-writes,
+and decide how staff sessions and user sessions relate.
+
+---
+
+## 2026-10-02 — Task 1: dev owner password helper
+
+**Changed**: `scripts/dev-set-owner-password.ts` (new, untracked). Owner lookup order: unique
+`owner_invites.email` -> that restaurant's single `MANAGER` staff; fallback `staff.email`; last
+resort only when the database holds exactly one restaurant. Any ambiguity prints the reason and
+exits. bcrypt cost 14 (same as `AuthController`). Also clears `failed_login_count` / `locked_until`
+and sets `must_change_password = false`.
+
+**Verified**: `npx tsc --noEmit` on the file is clean; `npx prisma validate` passes. No schema change,
+so no migration and no drift check required.
+
+**Next**: Task 2 (CTO to write) — signup lets the owner choose their own password and verify email;
+move owner login onto `users` + `memberships`. The `users`, `memberships`, `user_sessions` tables
+exist but are still unused by code.
 
 ---
 

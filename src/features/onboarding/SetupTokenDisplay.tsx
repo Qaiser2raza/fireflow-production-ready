@@ -49,8 +49,13 @@ const [showPin, setShowPin] = useState(false);
                         Workspace Created{restaurantName ? `, ${restaurantName}` : ''}
                     </h1>
                     <p className="text-slate-500 text-xs font-black uppercase tracking-widest mt-2">
-                        One-time handover — save these now
+                        Check your email to verify your account
                     </p>
+                </div>
+
+                <div className="mb-6 bg-sky-500/10 border border-sky-500/25 text-sky-200 text-sm rounded-2xl px-4 py-3 leading-relaxed">
+                    We sent a verification link to your email address. Open it to activate your
+                    account, then sign in with your email and password.
                 </div>
 
                 <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-3xl shadow-2xl p-8">
@@ -65,7 +70,7 @@ const [showPin, setShowPin] = useState(false);
                         <div>
                             <div className="flex items-center justify-between mb-2">
                                 <label className="text-xs font-black text-slate-600 uppercase tracking-wider">
-                                    Temporary PIN
+                                    POS PIN for Staff Devices
                                 </label>
                                 <button
                                     type="button"
@@ -99,7 +104,8 @@ const [showPin, setShowPin] = useState(false);
                                 </div>
                             )}
                             <p className="text-[10px] text-slate-600 mt-2">
-                                This PIN is shown once. It will be required at first login and must be changed immediately.
+                                This is your POS PIN for staff devices, not your sign-in password. It is shown
+                                once and must be changed at first login.
                             </p>
                         </div>
 
@@ -130,7 +136,7 @@ const [showPin, setShowPin] = useState(false);
                                 onClick={handleProceed}
                                 className="w-full py-3.5 rounded-xl font-bold uppercase tracking-widest text-sm flex items-center justify-center gap-2 bg-gold-500 hover:bg-gold-400 text-slate-950 shadow-lg transition-all"
                             >
-                                Continue to login <ArrowRight size={16} />
+                                Go to sign in <ArrowRight size={16} />
                             </button>
                         </div>
                     </div>

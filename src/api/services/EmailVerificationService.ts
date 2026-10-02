@@ -68,6 +68,38 @@ export class EmailVerificationService {
   }
 
   /**
+   * Returns true when a transactional email provider is configured. Nothing is
+   * sent today; the flag exists so the development console link below can never
+   * become a second delivery channel in an environment that does send mail.
+   */
+  private static hasEmailProvider(): boolean {
+    return Boolean(
+      process.env.EMAIL_PROVIDER ||
+      process.env.SMTP_URL ||
+      process.env.SMTP_HOST ||
+      process.env.RESEND_API_KEY ||
+      process.env.SENDGRID_API_KEY
+    );
+  }
+
+  /**
+   * Development only: prints the verification link to the server console so a
+   * developer can complete the flow without a mail provider. Silent in
+   * production and staging, and whenever an email provider is configured. The
+   * token is never written to any log outside local development, and this is
+   * the only place a verification link is ever emitted.
+   */
+  static logDevVerificationLink(email: string, token: string): void {
+    const env = process.env.NODE_ENV;
+    if (env === 'production' || env === 'staging') return;
+    if (this.hasEmailProvider()) return;
+
+    const base = process.env.PUBLIC_API_URL || 'http://localhost:3001';
+    const url = `${base.replace(/\/$/, '')}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
+    console.log(`[EMAIL_VERIFY] dev link for ${email}: ${url}`);
+  }
+
+  /**
    * Finds an unused, non-expired verification token record.
    */
   static async findActiveToken(token: string) {

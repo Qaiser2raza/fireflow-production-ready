@@ -3,17 +3,56 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { platformAuthService } from '../platform/PlatformAuthService';
 import { EmailVerificationService } from '../EmailVerificationService';
+import { BCRYPT_COST } from '../../controllers/AuthController';
 import { prisma } from '../../../shared/lib/prisma';
+
+/** Owner-chosen password minimum length (matches the signup form rules). */
+export const OWNER_PASSWORD_MIN_LENGTH = 10;
+
+export const DUPLICATE_OWNER_EMAIL_CODE = 'EMAIL_ALREADY_REGISTERED';
+export const DUPLICATE_OWNER_EMAIL_MESSAGE = 'This email already has an account. Sign in instead.';
+
+/** Error carrying a machine-readable provisioning failure code. */
+export class ProvisioningError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'ProvisioningError';
+    this.code = code;
+  }
+}
 
 export interface ProvisioningResult {
   success: boolean;
   restaurant?: any;
+  /** Sanitized owner projection. Never carries a password or a PIN hash. */
   ownerStaff?: any;
   ownerInviteId?: string;
+  /** Single-use verification token. Never sent in an HTTP response. */
+  verificationToken?: string;
+  errorCode?: string;
   error?: string;
 }
 
 export class RestaurantProvisioningService {
+  /**
+   * Server-side mirror of the signup form rules. Returns a human-readable
+   * error, or null when the password is acceptable. The password value is
+   * never logged, echoed back, or persisted in plaintext.
+   */
+  static validateOwnerPassword(password: unknown, email: string): string | null {
+    if (typeof password !== 'string' || password.length === 0) {
+      return 'Password is required';
+    }
+    if (password.length < OWNER_PASSWORD_MIN_LENGTH) {
+      return `Password must be at least ${OWNER_PASSWORD_MIN_LENGTH} characters`;
+    }
+    if (password.trim().toLowerCase() === email.trim().toLowerCase()) {
+      return 'Password must not be the same as your email';
+    }
+    return null;
+  }
+
   async provisionRestaurant(data: {
     name: string;
     slug?: string;
@@ -26,6 +65,14 @@ export class RestaurantProvisioningService {
     ownerEmail: string;
     ownerPhone?: string;
     actorId?: string;
+    /**
+     * Owner-chosen password (self-service signup). When provided, the same
+     * transaction also creates the `users` + `memberships` identity rows and
+     * dual-writes credentials onto `staff` for the current login path.
+     * Provisioning paths that do not collect a password (super admin vault,
+     * demo tenant) keep their PIN-only behaviour.
+     */
+    ownerPassword?: string;
   }): Promise<ProvisioningResult> {
     const normalizedEmail = platformAuthService.normalizeEmail(data.ownerEmail);
     const slug = data.slug || this.generateSlug(data.name);
@@ -40,10 +87,22 @@ export class RestaurantProvisioningService {
     const subscriptionExpiresAt = new Date(now);
     subscriptionExpiresAt.setMonth(subscriptionExpiresAt.getMonth() + 1);
 
+    // A supplied password must be valid before any work is done.
+    const ownsIdentity = data.ownerPassword !== undefined;
+    if (ownsIdentity) {
+      const passwordError = RestaurantProvisioningService.validateOwnerPassword(data.ownerPassword, normalizedEmail);
+      if (passwordError) {
+        return { success: false, error: passwordError };
+      }
+    }
+
     // Pre-compute bcrypt hash outside the transaction to avoid PG transaction
     // timeout (default 5s). bcrypt with 12 rounds can take >1s on modest hardware.
     const ownerPin = this.generateSecurePin();
     const ownerPinHash = await bcrypt.hash(ownerPin, 12);
+
+    // Same shared cost as every other credential hash in the system.
+    const ownerPasswordHash = ownsIdentity ? await bcrypt.hash(data.ownerPassword as string, BCRYPT_COST) : null;
 
     try {
       const result = await prisma.$transaction(async (tx) => {
@@ -84,8 +143,48 @@ export class RestaurantProvisioningService {
             pin_expires_at: pinExpiresAt,
             status: 'active',
             created_at: now,
+            // TEMP: remove in Task 03 — credential dual-write onto `staff`.
+            // Login still reads `staff.email`; Task 03 moves it to `users`.
+            ...(ownsIdentity
+              ? {
+                  email: normalizedEmail,
+                  password_hash: ownerPasswordHash,
+                  is_email_verified: false,
+                }
+              : {}),
           },
         });
+
+        if (ownsIdentity) {
+          // One identity per email. A second workspace for an existing account
+          // is a later task; signup must not create a duplicate user or tenant.
+          const existingUser = await tx.users.findUnique({
+            where: { email: normalizedEmail },
+            select: { id: true },
+          });
+          if (existingUser) {
+            throw new ProvisioningError(DUPLICATE_OWNER_EMAIL_CODE, DUPLICATE_OWNER_EMAIL_MESSAGE);
+          }
+
+          const ownerUser = await tx.users.create({
+            data: {
+              email: normalizedEmail,
+              password_hash: ownerPasswordHash as string,
+              name: data.ownerName,
+              email_verified_at: null,
+              is_active: true,
+            },
+          });
+
+          await tx.memberships.create({
+            data: {
+              user_id: ownerUser.id,
+              restaurant_id: restaurant.id,
+              role: 'OWNER',
+              staff_id: ownerStaff.id,
+            },
+          });
+        }
 
         // Owner invite state row: durable compensation ledger for the cloud side.
         // The Supabase invitation itself happens OUTSIDE this transaction (dispatcher).
@@ -227,23 +326,38 @@ export class RestaurantProvisioningService {
         return {
           restaurant,
           ownerStaff: {
-            ...ownerStaff,
+            id: ownerStaff.id,
+            restaurant_id: ownerStaff.restaurant_id,
+            name: ownerStaff.name,
+            role: ownerStaff.role,
+            status: ownerStaff.status,
+            must_change_pin: ownerStaff.must_change_pin,
+            pin_expires_at: ownerStaff.pin_expires_at,
             temporary_pin: ownerPin,
           },
           ownerInviteId: ownerInvite.id,
+          verificationToken,
         };
       });
+
+      // Development convenience only: no-ops in production and whenever an
+      // email provider is configured. The token never leaves the server.
+      if (result.verificationToken) {
+        EmailVerificationService.logDevVerificationLink(normalizedEmail, result.verificationToken);
+      }
 
       return {
         success: true,
         restaurant: result.restaurant,
         ownerStaff: result.ownerStaff,
         ownerInviteId: result.ownerInviteId,
+        verificationToken: result.verificationToken,
       };
     } catch (error: any) {
       console.error('[PROVISIONING] Error:', error.message);
       return {
         success: false,
+        errorCode: error instanceof ProvisioningError ? error.code : undefined,
         error: error.message || 'Provisioning failed',
       };
     }

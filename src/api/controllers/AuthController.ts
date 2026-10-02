@@ -8,7 +8,9 @@ import { EmailVerificationService } from '../services/EmailVerificationService';
 import { refreshTokenService } from '../services/auth/RefreshTokenService';
 import { StaffDeviceService } from '../services/auth/StaffDeviceService';
 
-const BCRYPT_COST = 14;
+// Shared bcrypt cost for every credential hash in the system (login, reset,
+// provisioning). Provisioning imports this so identity hashes cannot drift.
+export const BCRYPT_COST = 14;
 const DUMMY_PIN_HASH = '$2b$12$GYLhc.xEurgMkyT0l46AZumEF7vrGJ0zgcZPyfk3OvFc6d0jY2CJy';
 
 // In-memory rate limiting trackers
@@ -36,6 +38,7 @@ export class AuthController {
     this.register = this.register.bind(this);
     this.login = this.login.bind(this);
     this.verifyEmail = this.verifyEmail.bind(this);
+    this.verifyEmailLink = this.verifyEmailLink.bind(this);
     this.resendVerification = this.resendVerification.bind(this);
     this.changePassword = this.changePassword.bind(this);
     this.requestPasswordReset = this.requestPasswordReset.bind(this);
@@ -443,6 +446,48 @@ export class AuthController {
   }
 
   /**
+   * Applies the result of a successful token verification.
+   *
+   * A verified email means BOTH the cloud identity row (`users`) and the
+   * tenant row (`staff`) are marked verified, so Email + Password login works
+   * whichever of them the next auth layer reads.
+   */
+  private async applyVerification(email: string, staffId?: string | null): Promise<void> {
+    const normalizedEmail = email.toLowerCase();
+
+    // Owner invite state row (cloud provisioning ledger).
+    await this.prisma.owner_invites.updateMany({
+      where: {
+        email: normalizedEmail,
+        state: 'INVITE_PENDING'
+      },
+      data: {
+        state: 'VERIFIED',
+        updated_at: new Date()
+      }
+    });
+
+    // TEMP: staff.is_email_verified dual-write — remove in Task 03 when login
+    // moves to users + user_sessions.
+    if (staffId) {
+      await this.prisma.staff.update({
+        where: { id: staffId },
+        data: { is_email_verified: true }
+      }).catch(() => {});
+    } else {
+      await this.prisma.staff.updateMany({
+        where: { email: normalizedEmail },
+        data: { is_email_verified: true }
+      }).catch(() => {});
+    }
+
+    await this.prisma.users.update({
+      where: { email: normalizedEmail },
+      data: { email_verified_at: new Date() }
+    }).catch(() => {});
+  }
+
+  /**
    * POST /api/auth/verify-email
    */
   async verifyEmail(req: Request, res: Response): Promise<void> {
@@ -459,30 +504,7 @@ export class AuthController {
         return;
       }
 
-      // Update matching owner_invites
-      await this.prisma.owner_invites.updateMany({
-        where: {
-          email: result.email.toLowerCase(),
-          state: 'INVITE_PENDING'
-        },
-        data: {
-          state: 'VERIFIED',
-          updated_at: new Date()
-        }
-      });
-
-      // Update matching staff record
-      if (result.staffId) {
-        await this.prisma.staff.update({
-          where: { id: result.staffId },
-          data: { is_email_verified: true }
-        }).catch(() => {});
-      } else {
-        await this.prisma.staff.updateMany({
-          where: { email: result.email.toLowerCase() },
-          data: { is_email_verified: true }
-        }).catch(() => {});
-      }
+      await this.applyVerification(result.email, result.staffId);
 
       res.json({
         success: true,
@@ -492,6 +514,37 @@ export class AuthController {
     } catch (err: any) {
       console.error('[AUTH_CONTROLLER] verifyEmail error:', err);
       res.status(500).json({ error: 'Email verification failed' });
+    }
+  }
+
+  /**
+   * GET /api/auth/verify-email?token=...
+   * Browser entry point for the verification link printed in development.
+   * Consumes the same single-use token as the POST endpoint and renders a
+   * minimal confirmation page. Never echoes the token back in the response.
+   */
+  async verifyEmailLink(req: Request, res: Response): Promise<void> {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    const page = (title: string, message: string, ok: boolean) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body style="font-family:system-ui,sans-serif;background:#020617;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0"><main style="max-width:32rem;padding:2rem;border:1px solid #1e293b;border-radius:1rem;background:#0f172a"><h1 style="font-size:1.25rem;margin:0 0 .75rem;color:${ok ? '#34d399' : '#f87171'}">${title}</h1><p style="font-size:.875rem;line-height:1.6;margin:0">${message}</p></main></body></html>`;
+
+    try {
+      if (!token) {
+        res.status(400).send(page('Verification link invalid', 'This link is missing its verification token.', false));
+        return;
+      }
+
+      const result = await this.emailVerificationService.verifyToken(token);
+      if (!result.valid || !result.email) {
+        res.status(400).send(page('Verification failed', result.error || 'This verification link is invalid or has expired. Request a new one from the sign-in screen.', false));
+        return;
+      }
+
+      await this.applyVerification(result.email, result.staffId);
+
+      res.status(200).send(page('Email verified', 'Your account is verified. You can now sign in with your email and password.', true));
+    } catch (err: any) {
+      console.error('[AUTH_CONTROLLER] verifyEmailLink error:', err.message);
+      res.status(500).send(page('Verification failed', 'Something went wrong while verifying your account.', false));
     }
   }
 

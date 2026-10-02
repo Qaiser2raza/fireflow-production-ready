@@ -35,6 +35,7 @@ import { platformAuthMiddleware, requirePlatformRole } from './middleware/platfo
 import { platformAuthService } from './services/platform/PlatformAuthService';
 import { platformJwtService } from './services/platform/PlatformJwtService';
 import { EmailVerificationService } from './services/EmailVerificationService';
+import { RestaurantProvisioningService } from './services/onboarding/RestaurantProvisioningService';
 import { AuthController } from './controllers/AuthController';
 import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
@@ -612,6 +613,11 @@ app.delete('/api/auth/staff/:staffId/devices/:deviceId', authMiddleware, authCon
  * POST /onboarding/start
  * Public, idempotent entry point for self-service tenant creation.
  *
+ * The owner chooses their own password. The provisioning transaction creates
+ * the cloud identity rows (`users` + `memberships` with role OWNER) and
+ * dual-writes the credentials onto `staff` so Email + Password login works
+ * today (TEMP; removed in Task 03).
+ *
  * Idempotency: client supplies an `Idempotency-Key` (UUIDv4) header OR the
  * server derives one from the owner email. Same key → returns existing tenant.
  * The entire provisioning happens inside the atomic tx in
@@ -619,14 +625,66 @@ app.delete('/api/auth/staff/:staffId/devices/:deviceId', authMiddleware, authCon
  *
  * Returns: tenant slug, setup-token (= owner_invites.id), and a one-time PIN
  * shown in the browser exactly once (never persisted in plaintext, never emailed).
+ * The verification token is NEVER returned; outside production it is printed
+ * to the server console by EmailVerificationService instead.
  */
-app.post('/api/onboarding/start', async (req, res) => {
+// Signup is per-IP abuse controlled. Follow-up: move these in-memory counters
+// to a shared store when the API runs on more than one instance.
+const signupLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: Number(process.env.SIGNUP_RATE_LIMIT_MAX) || 5, // signups per window per IP
+    keyGenerator: (req) => {
+        const ip = req.ip || req.connection.remoteAddress || 'unknown';
+        return `signup:${ip}`;
+    },
+    message: 'Too many signups from this network, please try again later',
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === 'test',
+});
+
+const verifyEmailLinkLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: Number(process.env.VERIFY_EMAIL_RATE_LIMIT_MAX) || 20,
+    keyGenerator: (req) => {
+        const ip = req.ip || req.connection.remoteAddress || 'unknown';
+        return `verify-email-link:${ip}`;
+    },
+    message: 'Too many verification attempts, please try again later',
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === 'test',
+});
+
+// Browser entry point for the verification link. Same single-use token as the
+// POST endpoint; it is never echoed back in the response.
+app.get('/api/auth/verify-email', verifyEmailLinkLimiter, authController.verifyEmailLink.bind(authController));
+
+app.post('/api/onboarding/start', signupLimiter, async (req, res) => {
     try {
-        const { name, slug, phone, address, city, owner_name, owner_email, owner_phone } = req.body;
+        const { name, slug, phone, address, city, owner_name, owner_email, owner_phone, password } = req.body;
 
         if (!name) return res.status(400).json({ error: 'Restaurant name is required' });
         if (!owner_name || !owner_email) return res.status(400).json({ error: 'Owner name and email are required' });
         if (name.length < 2) return res.status(400).json({ error: 'Restaurant name must be at least 2 characters' });
+
+        // The owner chooses their own password; same rules as the form.
+        const normalizedEmail = String(owner_email).trim().toLowerCase();
+        const passwordError = RestaurantProvisioningService.validateOwnerPassword(password, normalizedEmail);
+        if (passwordError) return res.status(400).json({ error: passwordError });
+
+        // One identity per email. An existing account must sign in, never sign
+        // up again; checked before any tenant row is created.
+        const existingUser = await prisma.users.findUnique({
+            where: { email: normalizedEmail },
+            select: { id: true }
+        });
+        if (existingUser) {
+            return res.status(409).json({
+                error: 'This email already has an account. Sign in instead.',
+                code: 'EMAIL_ALREADY_REGISTERED',
+            });
+        }
 
         // Idempotency: look up an existing provisioning for this owner email.
         // Per M034-B §5, the key is the client Idempotency-Key header OR derived
@@ -662,9 +720,13 @@ app.post('/api/onboarding/start', async (req, res) => {
             ownerName: owner_name,
             ownerEmail: owner_email,
             ownerPhone: owner_phone,
+            ownerPassword: password,
         });
 
         if (!result.success) {
+            if (result.errorCode === 'EMAIL_ALREADY_REGISTERED') {
+                return res.status(409).json({ error: result.error, code: result.errorCode });
+            }
             return res.status(400).json({ error: result.error || 'Provisioning failed' });
         }
 
@@ -677,6 +739,7 @@ app.post('/api/onboarding/start', async (req, res) => {
             },
             setup_token: result.ownerInviteId,
             temporary_pin: result.ownerStaff.temporary_pin,
+            verification_required: true,
         });
     } catch (error: any) {
         console.error('[ERROR] POST /onboarding/start:', error.message);

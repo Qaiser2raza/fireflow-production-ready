@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { Store, Mail, User, Phone, MapPin, Lock, ArrowRight, Shield } from 'lucide-react';
+import { Store, Mail, User, Phone, MapPin, Lock, ArrowRight, Shield, KeyRound } from 'lucide-react';
+
+const PASSWORD_MIN_LENGTH = 10;
 
 interface RestaurantLandingProps {
   onAccountCreated: (data: { restaurant_id: string; setup_token: string; temporary_pin: string }) => void;
@@ -12,6 +14,8 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
         ownerEmail: '',
         address: '',
         phone: '',
+        password: '',
+        confirmPassword: '',
     });
     const [isProvisioning, setIsProvisioning] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -32,6 +36,18 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
             setError('A valid email address is required');
             return;
         }
+        if (formData.password.length < PASSWORD_MIN_LENGTH) {
+            setError(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
+            return;
+        }
+        if (formData.password !== formData.confirmPassword) {
+            setError('Passwords do not match');
+            return;
+        }
+        if (formData.password.trim().toLowerCase() === formData.ownerEmail.trim().toLowerCase()) {
+            setError('Password must not be the same as your email');
+            return;
+        }
 
         setIsProvisioning(true);
         setError(null);
@@ -46,6 +62,7 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
                     owner_email: formData.ownerEmail,
                     address: formData.address,
                     phone: formData.phone,
+                    password: formData.password,
                 }),
             });
 
@@ -53,6 +70,10 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
                 const data = await res.json().catch(() => ({}));
                 if (res.status === 200 && data.already_exists) {
                     setError('An account with this email already exists. Please log in instead.');
+                    return;
+                }
+                if (res.status === 409) {
+                    setError('This email already has an account. Sign in instead.');
                     return;
                 }
                 throw new Error(data.error || `Provisioning failed (${res.status})`);
@@ -86,7 +107,8 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
                         <span className="text-transparent bg-clip-text bg-gradient-to-r from-gold-400 to-gold-600">Create Your Workspace</span>
                     </h1>
                     <p className="text-slate-400 text-sm max-w-sm leading-relaxed mb-6">
-                        Set up your restaurant's secure operating workspace. One-time PIN is displayed once for handover — never stored or emailed.
+                        Set up your restaurant's secure operating workspace. You choose your own password
+                        and verify your email before your first sign-in.
                     </p>
                     <div className="flex items-center gap-3 text-xs font-medium text-slate-500">
                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800">
@@ -196,6 +218,42 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
                             </div>
                         </div>
 
+                        <div>
+                            <label className="text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5 block">
+                                Password
+                            </label>
+                            <div className="relative">
+                                <KeyRound size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+                                <input
+                                    type="password"
+                                    placeholder={`At least ${PASSWORD_MIN_LENGTH} characters`}
+                                    value={formData.password}
+                                    onChange={e => setFormData({ ...formData, password: e.target.value })}
+                                    disabled={isProvisioning}
+                                    autoComplete="new-password"
+                                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white text-sm outline-none focus:border-gold-500/50 pl-10 transition-colors"
+                                />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-xs font-black text-slate-600 uppercase tracking-wider mb-1.5 block">
+                                Confirm Password
+                            </label>
+                            <div className="relative">
+                                <KeyRound size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+                                <input
+                                    type="password"
+                                    placeholder="Re-enter your password"
+                                    value={formData.confirmPassword}
+                                    onChange={e => setFormData({ ...formData, confirmPassword: e.target.value })}
+                                    disabled={isProvisioning}
+                                    autoComplete="new-password"
+                                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white text-sm outline-none focus:border-gold-500/50 pl-10 transition-colors"
+                                />
+                            </div>
+                        </div>
+
                         <button
                             type="submit"
                             disabled={isProvisioning}
@@ -210,7 +268,8 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
                     </form>
 
                     <p className="text-[10px] text-slate-600 mt-6 text-center leading-relaxed">
-                        By creating a workspace, you agree to FireFlow's terms. A one-time PIN will be displayed for handover — store it securely.
+                        By creating a workspace, you agree to FireFlow's terms. A one-time POS PIN is displayed afterwards for
+                        staff devices — store it securely.
                     </p>
                 </div>
             </div>
