@@ -158,7 +158,8 @@ export abstract class BaseOrderService implements IOrderService {
 
     // Inside BaseOrderService.ts
     async updateOrder(restaurantId: string, id: string, data: UpdateOrderDTO): Promise<orders> {
-        return await prisma.$transaction(async (tx) => {
+        try {
+            return await prisma.$transaction(async (tx) => {
             // 1. Fetch current state with tenant verification
             const currentOrder = await tx.orders.findUnique({
                 where: { id },
@@ -338,18 +339,24 @@ export abstract class BaseOrderService implements IOrderService {
                     where: { id: { in: newMenuItemsIds as string[] } }
                 }) : [];
 
-                for (const item of itemsToUpdate) {
-                    // Smart Matching: First try exact ID match
-                    let existing = item.id ? existingItems.find(ei => ei.id === item.id) : null;
-                    
-                    // Fallback: ONLY for items with NO id (legacy clients).
-                    if (!existing && !item.id) {
-                        existing = existingItems.find(ei => 
-                            ei.menu_item_id === item.menu_item_id && 
-                            !claimedIds.has(ei.id) &&
-                            (statusWeight[ei.item_status!] < 4) // Only adopt non-terminal states
-                        );
-                    }
+                // Task 04b closure: resolve the item matching BEFORE any write, so an
+                // unauthorized skip is refused up front instead of being discovered after
+                // this transaction has already updated other items. `matches` is computed
+                // with the identical rule the loop below uses (exact id, then the legacy
+                // id-less fallback, with the same evolving claimedIds) so the two can
+                // never disagree about which line a submitted row refers to.
+                const matches = this.resolveItemMatches(itemsToUpdate, existingItems, statusWeight);
+
+                this.assertNoUnapprovedSkip({
+                    orderId: id,
+                    itemsToUpdate,
+                    existingItems,
+                    matches,
+                    actorId: (data as any).authorized_by || (data as any).manager_id || null
+                });
+
+                for (const [index, item] of itemsToUpdate.entries()) {
+                    const existing = matches.get(index) || null;
 
                     const incomingWeight = statusWeight[item.item_status] ?? 1;
                     const dbWeight = existing ? (statusWeight[existing.item_status as string] ?? 0) : 0;
@@ -358,10 +365,6 @@ export abstract class BaseOrderService implements IOrderService {
                     let finalStatus = dbWeight > incomingWeight 
                         ? existing!.item_status as string
                         : (item.item_status || 'PENDING');
-
-                    if (existing && item.quantity === 0 && ['DONE', 'SERVED'].includes(existing.item_status as string)) {
-                        finalStatus = 'SKIPPED';
-                    }
 
                     if (existing) {
                         claimedIds.add(existing.id);
@@ -422,28 +425,15 @@ export abstract class BaseOrderService implements IOrderService {
                         if (statusWeight[existing.item_status as string] === 0) { // Only delete DRAFT
                             await tx.order_items.delete({ where: { id: existing.id } });
                         } else if (['DONE', 'SERVED'].includes(existing.item_status as string)) {
-                            await tx.audit_logs.create({
-                                data: {
-                                    restaurant_id: currentOrder.restaurant_id,
-                                    action_type: 'ITEM_QUANTITY_REDUCED',
-                                    entity_type: 'ORDER_ITEM',
-                                    entity_id: existing.id,
-                                    details: {
-                                        item_name: existing.item_name,
-                                        old_quantity: existing.quantity,
-                                        new_quantity: 0,
-                                        order_id: id
-                                    }
-                                }
-                            });
-                            await tx.order_items.update({
-                                where: { id: existing.id },
-                                data: {
-                                    item_status: 'SKIPPED' as any,
-                                    quantity: 0,
-                                    total_price: 0
-                                }
-                            });
+                            // Task 04b closure: omitting a served line silently zeroed it to
+                            // SKIPPED, a third way to skip without approval. assertNoUnapprovedSkip
+                            // has already refused this payload before any write, so reaching
+                            // here means the gate was bypassed — refuse rather than skip.
+                            throw this.skipApprovalRequired(
+                                'omitted_served_item',
+                                existing.id,
+                                { order_id: id, from_state: existing.item_status, actor_id: (data as any).authorized_by || (data as any).manager_id || null }
+                            );
                         }
                     }
                 }
@@ -484,7 +474,18 @@ export abstract class BaseOrderService implements IOrderService {
             });
             if (!finalOrder) throw new Error('Order lost after update');
             return finalOrder as orders;
-        }, { timeout: 20000, maxWait: 20000 });
+            }, { timeout: 20000, maxWait: 20000 });
+        } catch (error: any) {
+            // Task 04b closure: the refusal is thrown inside the transaction so that
+            // NOTHING is persisted — not the skip, and not the unrelated edits that
+            // were requested alongside it. The audit row is written here, after the
+            // rollback, because an audit written in the aborted transaction would be
+            // discarded together with everything else.
+            if (error?.audit?.reason) {
+                await this.auditRefusedSkip(restaurantId, id, error.audit);
+            }
+            throw error;
+        }
     }
 
     protected mapStatusToPrisma(status: string | undefined): any {
@@ -498,6 +499,145 @@ export abstract class BaseOrderService implements IOrderService {
             'VOID': 'VOIDED'
         };
         return (map[status] || status) as any;
+    }
+
+    /**
+     * Task 04b closure: resolve which stored line each submitted row refers to.
+     *
+     * Pure and side-effect free, replicating the historical matching rule exactly
+     * (exact id first, then the legacy id-less fallback against the not-yet-claimed
+     * set, only for non-terminal stored states) so the authorization pre-flight and
+     * the write loop below can never disagree about the same payload.
+     */
+    private resolveItemMatches(
+        itemsToUpdate: any[],
+        existingItems: any[],
+        statusWeight: { [key: string]: number }
+    ): Map<number, any> {
+        const matches = new Map<number, any>();
+        const claimed = new Set<string>();
+
+        itemsToUpdate.forEach((item, index) => {
+            let existing = item.id ? existingItems.find(ei => ei.id === item.id) : null;
+
+            if (!existing && !item.id) {
+                existing = existingItems.find(ei =>
+                    ei.menu_item_id === item.menu_item_id &&
+                    !claimed.has(ei.id) &&
+                    (statusWeight[ei.item_status!] < 4) // Only adopt non-terminal states
+                );
+            }
+
+            matches.set(index, existing);
+            if (existing) claimed.add(existing.id);
+        });
+
+        return matches;
+    }
+
+    /**
+     * Task 04b closure: refuse every way the generic order-update path could reach
+     * `SKIPPED`, before this transaction writes anything.
+     *
+     * A skip is an approval-gated business fact, so it may only be produced by the
+     * approval workflow (own manager PIN, tenant-scoped, no self-approval). This path
+     * never approves anything: it refuses, and the refusal is audited durably by the
+     * caller. Three ways in, all closed here:
+     *   1. `item_status: 'SKIPPED'` supplied by the caller (the status weight of 7
+     *      beats every stored weight, so it would be written verbatim).
+     *   2. a served line zeroed by quantity.
+     *   3. a served line simply omitted from the payload, which used to be zeroed to
+     *      SKIPPED implicitly.
+     */
+    private assertNoUnapprovedSkip(input: {
+        orderId: string;
+        itemsToUpdate: any[];
+        existingItems: any[];
+        matches: Map<number, any>;
+        actorId: string | null;
+    }): void {
+        const { orderId, itemsToUpdate, existingItems, matches, actorId } = input;
+
+        // 1. Caller-supplied SKIPPED.
+        for (const [index, item] of itemsToUpdate.entries()) {
+            if (item.item_status === 'SKIPPED') {
+                const existing = matches.get(index);
+                throw this.skipApprovalRequired(
+                    'caller_supplied_skipped_status',
+                    existing?.id || null,
+                    { order_id: orderId, submitted_item_id: item.id || null, from_state: existing?.item_status || null, actor_id: actorId }
+                );
+            }
+        }
+
+        // 2. A served line zeroed by quantity.
+        for (const [index, item] of itemsToUpdate.entries()) {
+            const existing = matches.get(index);
+            if (existing && item.quantity === 0 && ['DONE', 'SERVED'].includes(existing.item_status as string)) {
+                throw this.skipApprovalRequired(
+                    'zeroed_served_item',
+                    existing.id,
+                    { order_id: orderId, from_state: existing.item_status, actor_id: actorId }
+                );
+            }
+        }
+
+        // 3. A served line omitted from the payload.
+        const claimedIds = new Set<string>([...matches.values()].filter(Boolean).map((ei: any) => ei.id));
+        for (const existing of existingItems) {
+            if (!claimedIds.has(existing.id) && ['DONE', 'SERVED'].includes(existing.item_status as string)) {
+                throw this.skipApprovalRequired(
+                    'omitted_served_item',
+                    existing.id,
+                    { order_id: orderId, from_state: existing.item_status, actor_id: actorId }
+                );
+            }
+        }
+    }
+
+    /**
+     * Build the refusal. The `audit` payload survives the rollback of the enclosing
+     * transaction and is written by the caller, so a refused skip is never silent.
+     */
+    private skipApprovalRequired(
+        reason: string,
+        orderItemId: string | null,
+        details: Record<string, unknown>
+    ): any {
+        return {
+            statusCode: 403,
+            code: 'SKIP_APPROVAL_REQUIRED',
+            message: 'Skipping an item requires manager approval: use the skip approval endpoint',
+            audit: { reason, order_item_id: orderItemId, details }
+        };
+    }
+
+    /** Durable record of a skip refused by the generic order-update path. */
+    private async auditRefusedSkip(
+        restaurantId: string,
+        orderId: string,
+        audit: { reason: string; order_item_id: string | null; details?: Record<string, unknown> }
+    ): Promise<void> {
+        try {
+            await prisma.audit_logs.create({
+                data: {
+                    restaurant_id: restaurantId,
+                    staff_id: (audit.details?.actor_id as string) || null,
+                    action_type: 'SKIP_APPROVAL_DENIED',
+                    entity_type: audit.order_item_id ? 'order_item' : 'ORDER',
+                    entity_id: audit.order_item_id || orderId,
+                    details: {
+                        reason: audit.reason,
+                        source: 'order_update',
+                        order_id: orderId,
+                        ...(audit.details || {})
+                    },
+                    created_at: new Date()
+                }
+            });
+        } catch {
+            // An audit write must never mask the refusal that is being returned.
+        }
     }
 
     async getOrderDetails(id: string, restaurantId: string): Promise<orders | null> {

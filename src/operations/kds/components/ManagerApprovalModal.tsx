@@ -73,14 +73,16 @@ export const ManagerApprovalModal: React.FC<ManagerApprovalModalProps> = ({
     setLastError(null);
     setSuccessMessage(null);
 
-    // In a real implementation, the PIN would be validated server-side
-    // For now, we're just passing it as part of the audit trail
+    // Task 04b: the approver's own PIN is now verified server-side as
+    // re-authentication. It is sent in the request body, never trusted from the
+    // reason text.
     const result = await approveSkip(
       orderItemId,
       approvalAction,
-      `PIN-verified: ${reason}`,
+      reason,
       sessionId,
-      terminalId
+      terminalId,
+      managerPin
     );
 
     if (result) {

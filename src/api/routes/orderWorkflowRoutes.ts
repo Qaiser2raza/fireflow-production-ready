@@ -1,15 +1,18 @@
 /**
  * orderRoutes.ts
- * 
+ *
  * API endpoints for FireFlow order workflow:
  * - POST /api/orders/:orderId/fire
  * - POST /api/orders/:orderId/recall/:fireBatchId
- * - PUT /api/orders/:orderId/items/:itemId/status
- * - POST /api/approvals/skip-approval
+ * - PATCH /api/orders/:orderId/items/:itemId/status
+ * - POST /api/orders/skip-approval
+ *
+ * This router is mounted on the authenticated API router, so `req.staffId`,
+ * `req.restaurantId` and `req.role` come from the verified token.
  */
 
 import { Router, Request, Response } from 'express';
-import { orderWorkflowService } from '../services/OrderWorkflowService';
+import { orderWorkflowService, SKIP_APPROVAL_ROLES } from '../services/OrderWorkflowService';
 
 import { ItemStatus, SkipReason, PrismaClient } from '@prisma/client';
 
@@ -305,32 +308,33 @@ router.patch(
 );
 
 /**
- * POST /api/approvals/skip-approval
- * Manager approval for skip or void operations
- * 
+ * POST /api/orders/skip-approval
+ * Manager approval for skip operations (Task 04b).
+ *
  * Body:
  * {
  *   "orderItemId": "uuid",
  *   "approvalAction": "APPROVE_SKIP" | "DENY_SKIP",
+ *   "managerPin": "123456",     // the APPROVER'S OWN pin — required
  *   "reason": "Manager notes"
  * }
- * 
- * Headers required:
- * - Authorization: Bearer <jwt>
- * - x-session-id: <sessionId>
- * - x-terminal-id: <terminalId>
+ *
+ * Auth: Authorization Bearer (MANAGER | ADMIN | SUPER_ADMIN) + own manager PIN.
+ * `x-session-id` is an attribution reference only: it is never an authentication
+ * factor, and the service proves it is a cashier session of the caller's own
+ * restaurant before writing it into `approval_logs.approved_by_session_id`.
  */
 router.post(
   '/skip-approval',
   async (req: Request, res: Response) => {
     try {
-      const { orderItemId, approvalAction, reason } = req.body;
+      const { orderItemId, approvalAction, reason, managerPin } = req.body;
       const sessionId = req.headers['x-session-id'] as string;
       const managerId = req.staffId;
       const restaurantId = req.restaurantId;
 
-      // Validate manager role
-      if (req.role !== 'MANAGER' && req.role !== 'ADMIN' && req.role !== 'SUPER_ADMIN') {
+      // Role gate is server-side (from the verified token), never from the body.
+      if (!SKIP_APPROVAL_ROLES.includes((req.role || '').toUpperCase() as any)) {
         return res.status(403).json({
           error: 'Manager permission required',
           code: 'INSUFFICIENT_PERMISSION'
@@ -341,6 +345,16 @@ router.post(
         return res.status(400).json({
           error: 'Missing required parameters',
           code: 'MISSING_PARAMS'
+        });
+      }
+
+      // x-session-id is attribution, never an authentication factor. A non-UUID
+      // value can never resolve to a cashier_sessions row, so it is rejected here
+      // rather than surfacing as a foreign-key violation.
+      if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(sessionId)) {
+        return res.status(400).json({
+          error: 'Invalid session reference',
+          code: 'INVALID_SESSION_REFERENCE'
         });
       }
 
@@ -357,7 +371,8 @@ router.post(
         managerId,
         sessionId,
         reason || 'No reason provided',
-        restaurantId
+        restaurantId,
+        managerPin
       );
 
       res.status(200).json({

@@ -9,10 +9,21 @@
  */
 
 import { prisma } from '../../shared/lib/prisma';
+import bcrypt from 'bcrypt';
 import { 
   ItemStatus, 
   SkipReason 
 } from '@prisma/client';
+
+/** Task 04b: which staff may approve a skip, and with what credential. */
+export const SKIP_APPROVAL_ROLES = ['MANAGER', 'ADMIN', 'SUPER_ADMIN'] as const;
+
+/** Statuses an item may be in when a manager approves a skip. */
+const SKIPPABLE_FROM: ItemStatus[] = ['DRAFT', 'PENDING', 'PREPARING', 'DONE', 'SERVED'];
+
+/** Wrong manager PIN attempts before the account is locked out of approvals. */
+const APPROVAL_PIN_MAX_ATTEMPTS = 5;
+const APPROVAL_PIN_LOCK_MINUTES = 30;
 
 export interface FireResult {
   fire_batch_id: string;
@@ -396,6 +407,11 @@ export class OrderWorkflowService {
       }
 
       // 5. Handle SKIP transitions
+      // Task 04b: an item becoming SKIPPED is approval-sensitive in EVERY state,
+      // not only from SERVED. Otherwise a caller simply skips earlier in the
+      // lifecycle and never reaches the approval gate. The status endpoint now
+      // only reports that approval is required; the mutation happens exclusively
+      // in approveSkipOrVoid (own-PIN, tenant-scoped, no self-approval).
       if (newStatus === 'SKIPPED') {
         if (!skipReason) {
           throw { 
@@ -405,14 +421,11 @@ export class OrderWorkflowService {
           };
         }
 
-        // Special: SERVED→SKIP requires manager approval
-        if (currentStatus === 'SERVED') {
-          return {
-            status: 'SERVED',
-            approval_required: true,
-            timestamp: new Date().toISOString()
-          };
-        }
+        return {
+          status: currentStatus,
+          approval_required: true,
+          timestamp: new Date().toISOString()
+        };
       }
 
       // 6. Update item
@@ -423,7 +436,8 @@ export class OrderWorkflowService {
           item_status: newStatus,
           status_updated_by: staffId,
           status_updated_at: now,
-          ...(newStatus === 'SKIPPED' && { skip_reason: skipReason }),
+          // Task 04b: SKIPPED never reaches this update — it is handled by
+          // approveSkipOrVoid, which records skip_reason itself.
           ...(newStatus === 'PREPARING' && { started_at: now }),
           ...(newStatus === 'DONE' && { completed_at: now }),
           ...(newStatus === 'SERVED' && { served_at: now })
@@ -462,7 +476,17 @@ export class OrderWorkflowService {
   }
 
   /**
-   * Manager approval for skip or void operations
+   * Manager approval for skip or void operations.
+   *
+   * Task 04b gates (all enforced here, so every caller is protected):
+   *  - the approver re-authenticates with THEIR OWN manager PIN (tenant-bound
+   *    staff lookup + bcrypt against hashed_pin; the plaintext `pin` column is
+   *    never read), reusing the RefundService override pattern
+   *  - the target order item must belong to the approver's restaurant
+   *  - the approver may not be the person who last moved the item
+   *    (self-approval). Comparison against the ORDER CREATOR is explicitly
+   *    deferred: no creator identity is recorded on `orders` today.
+   *  - a wrong PIN counts towards the existing staff lockout and is audited
    */
   async approveSkipOrVoid(
     orderItemId: string,
@@ -470,10 +494,23 @@ export class OrderWorkflowService {
     managerId: string,
     managerSessionId: string,
     reason: string,
-    restaurantId: string
+    restaurantId: string,
+    managerPin?: string
   ): Promise<ApprovalResult> {
-    return await prisma.$transaction(async (tx) => {
-      // 1. Fetch item
+    // 1. Authenticate the actor with their own PIN before anything is read.
+    await this.verifyApprovalPin(managerId, restaurantId, managerPin);
+
+    // 1b. The approver's session reference must resolve to a real cashier session
+    //     of THIS restaurant. `approval_logs.approved_by_session_id` is a foreign
+    //     key to `cashier_sessions.id`, so an unverified client header would either
+    //     crash the insert (FK violation) or attribute the approval to another
+    //     tenant's session. It stays non-authoritative: it never grants anything.
+    await this.verifyApprovalSession(managerSessionId, restaurantId, managerId, orderItemId);
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+      // 2. Fetch item, then tenant-scope it explicitly so a cross-tenant id is
+      //    rejected instead of silently mutating another restaurant's order.
       const item = await tx.order_items.findUnique({
         where: { id: orderItemId },
         include: { orders: true }
@@ -487,18 +524,43 @@ export class OrderWorkflowService {
         };
       }
 
-      // 2. Check item is SERVED (approval only for SERVED→SKIP)
-      if (item.item_status !== 'SERVED') {
-        throw { 
-          statusCode: 400, 
-          code: 'INVALID_APPROVAL_ITEM', 
-          message: 'Approval only valid for SERVED items' 
-        };
+      if (item.orders.restaurant_id !== restaurantId) {
+        throw this.denial(
+          403,
+          'CROSS_TENANT_APPROVAL',
+          'Order item belongs to a different restaurant',
+          'cross_tenant_target',
+          {}
+        );
+      }
+
+      const currentStatus = item.item_status as ItemStatus;
+
+      // 3. Self-approval: the person who last moved the item cannot approve it.
+      if (item.status_updated_by && item.status_updated_by === managerId) {
+        throw this.denial(
+          403,
+          'SELF_APPROVAL_FORBIDDEN',
+          'You cannot approve a skip on an item you last updated yourself',
+          'self_approval',
+          { from_state: currentStatus }
+        );
+      }
+
+      // 4. Only skippable states may be approved.
+      if (approvalAction === 'APPROVE_SKIP' && !SKIPPABLE_FROM.includes(currentStatus)) {
+        throw this.denial(
+          400,
+          'INVALID_APPROVAL_ITEM',
+          `Cannot skip an item in state ${currentStatus}`,
+          'invalid_source_state',
+          { from_state: currentStatus }
+        );
       }
 
       const now = new Date();
 
-      // 3. Handle approval
+      // 5. Handle approval
       if (approvalAction === 'APPROVE_SKIP') {
         // Update item to SKIPPED
         await tx.order_items.update({
@@ -554,8 +616,8 @@ export class OrderWorkflowService {
           action_type: `MANAGER_${approvalAction}`,
           entity_type: 'order_item',
           entity_id: orderItemId,
-          from_state: 'SERVED',
-          to_state: approvalAction === 'APPROVE_SKIP' ? 'SKIPPED' : 'SERVED',
+          from_state: currentStatus,
+          to_state: approvalAction === 'APPROVE_SKIP' ? 'SKIPPED' : currentStatus,
           session_id: managerSessionId,
           performed_by_role: 'MANAGER',
           details: { reason },
@@ -570,7 +632,196 @@ export class OrderWorkflowService {
         approved: approvalAction === 'APPROVE_SKIP',
         timestamp: now.toISOString()
       };
+      });
+    } catch (error: any) {
+      // Denials must survive the rollback: writing the audit inside the aborted
+      // transaction silently discarded every record of a refused approval.
+      if (error?.audit?.reason) {
+        await this.auditApprovalDenial(
+          restaurantId,
+          managerId,
+          orderItemId,
+          error.audit.reason,
+          error.audit.details || {}
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Build a denial error that carries its own audit payload.
+   */
+  private denial(
+    statusCode: number,
+    code: string,
+    message: string,
+    auditReason: string,
+    details: Record<string, unknown> = {}
+  ): any {
+    return { statusCode, code, message, audit: { reason: auditReason, details } };
+  }
+
+  /** Refused skip approvals are never silent, even though the tx rolled back. */
+  private async auditApprovalDenial(
+    restaurantId: string,
+    staffId: string,
+    orderItemId: string,
+    reason: string,
+    details: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      await prisma.audit_logs.create({
+        data: {
+          restaurant_id: restaurantId,
+          staff_id: staffId,
+          action_type: 'SKIP_APPROVAL_DENIED',
+          entity_type: 'order_item',
+          entity_id: orderItemId,
+          details: { reason, ...details },
+          created_at: new Date(),
+        },
+      });
+    } catch {
+      // An audit write must never mask the denial that is being returned.
+    }
+  }
+
+  /**
+   * Task 04b: resolve the approver's session reference against real data.
+   *
+   * `approval_logs.approved_by_session_id` is a foreign key to
+   * `cashier_sessions.id`, so a client-supplied `x-session-id` is untrusted input
+   * that must be proven to be a session of THIS restaurant before it is persisted.
+   * This is attribution integrity, not authentication: the JWT and the approver's
+   * own PIN remain the only authorization factors.
+   */
+  private async verifyApprovalSession(
+    sessionId: string,
+    restaurantId: string,
+    approverId: string,
+    orderItemId: string
+  ): Promise<void> {
+    const invalid = async () => {
+      await this.auditApprovalDenial(restaurantId, approverId, orderItemId, 'unknown_session_reference', {});
+      return {
+        statusCode: 400,
+        code: 'INVALID_SESSION_REFERENCE',
+        message: 'Approval session does not belong to this restaurant',
+      };
+    };
+
+    if (typeof sessionId !== 'string' || !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(sessionId)) {
+      throw await invalid();
+    }
+
+    const session = await prisma.cashier_sessions.findFirst({
+      where: { id: sessionId, restaurant_id: restaurantId },
+      select: { id: true },
     });
+
+    if (!session) {
+      throw await invalid();
+    }
+  }
+
+  /**
+   * Task 04b: re-authenticate the approving actor with their OWN manager PIN.
+   *
+   * Deliberately mirrors the RefundService override pattern (staff loaded by
+   * `{ id, restaurant_id }`, bcrypt against `hashed_pin`, plaintext `pin` never
+   * read) instead of /api/auth/verify-pin, whose `requiredRole` comes from the
+   * request body and whose candidate search would accept another manager's PIN.
+   * Wrong PINs feed the existing staff lockout and are audited.
+   */
+  private async verifyApprovalPin(
+    managerId: string,
+    restaurantId: string,
+    managerPin?: string
+  ): Promise<void> {
+    const invalid = (statusCode: number, code: string, message: string, details?: Record<string, unknown>) => ({
+      statusCode,
+      code,
+      message,
+      details,
+    });
+
+    if (typeof managerPin !== 'string' || !/^\d{6}$/.test(managerPin)) {
+      await this.auditPinFailure(managerId, restaurantId, 'invalid_pin_format');
+      throw invalid(401, 'APPROVAL_PIN_REQUIRED', 'A valid manager PIN is required for this approval');
+    }
+
+    const manager = await prisma.staff.findFirst({
+      where: { id: managerId, restaurant_id: restaurantId },
+      select: {
+        id: true,
+        status: true,
+        hashed_pin: true,
+        failed_login_count: true,
+        locked_until: true,
+      },
+    });
+
+    const now = new Date();
+
+    if (!manager || !manager.hashed_pin || (manager.status || '').toLowerCase() !== 'active') {
+      await this.auditPinFailure(managerId, restaurantId, 'approver_not_eligible');
+      throw invalid(401, 'INVALID_APPROVER', 'Approver is not an active staff member of this restaurant');
+    }
+
+    if (manager.locked_until && manager.locked_until > now) {
+      await this.auditPinFailure(managerId, restaurantId, 'approver_locked');
+      throw invalid(423, 'APPROVER_LOCKED', 'Too many failed approval attempts. Try again later.');
+    }
+
+    const matches = await bcrypt.compare(managerPin, manager.hashed_pin);
+
+    if (!matches) {
+      const failedCount = (manager.failed_login_count || 0) + 1;
+      const updateData: any = { failed_login_count: failedCount };
+
+      if (failedCount >= APPROVAL_PIN_MAX_ATTEMPTS) {
+        updateData.locked_until = new Date(now.getTime() + APPROVAL_PIN_LOCK_MINUTES * 60 * 1000);
+      }
+
+      await prisma.staff.update({ where: { id: manager.id }, data: updateData });
+      await this.auditPinFailure(managerId, restaurantId, 'invalid_pin', {
+        failed_count: failedCount,
+        locked_until: updateData.locked_until ? updateData.locked_until.toISOString() : null,
+      });
+
+      throw invalid(401, 'INVALID_APPROVAL_PIN', 'Invalid manager PIN');
+    }
+
+    // Successful re-auth clears the counter, exactly like a normal PIN login.
+    await prisma.staff.update({
+      where: { id: manager.id },
+      data: { failed_login_count: 0, locked_until: null },
+    });
+  }
+
+  /** Failed approval-PIN attempts are never silent. */
+  private async auditPinFailure(
+    staffId: string,
+    restaurantId: string,
+    reason: string,
+    details: Record<string, unknown> = {}
+  ): Promise<void> {
+    try {
+      await prisma.audit_logs.create({
+        data: {
+          restaurant_id: restaurantId,
+          staff_id: staffId,
+          action_type: 'APPROVAL_PIN_FAILED',
+          entity_type: 'STAFF',
+          entity_id: staffId,
+          details: { reason, context: 'skip_approval', ...details },
+          created_at: new Date(),
+        },
+      });
+    } catch {
+      // An audit write must never turn into a 500 that hides the auth failure.
+    }
   }
 
   /**

@@ -155,7 +155,13 @@ export function useOrderWorkflow() {
   );
 
   /**
-   * Manager approval/denial for a skip request on a SERVED item.
+   * Manager approval/denial for a skip request.
+   *
+   * Task 04b: the server requires the APPROVER'S OWN manager PIN on
+   * `POST /api/orders/skip-approval`. Without it every call is refused with
+   * `401 APPROVAL_PIN_REQUIRED`. The PIN is re-authentication, never authorization
+   * by itself: the JWT still decides who is calling and `x-session-id` stays
+   * attribution-only.
    */
   const approveSkip = useCallback(
     async (
@@ -163,7 +169,8 @@ export function useOrderWorkflow() {
       approvalAction: 'APPROVE_SKIP' | 'DENY_SKIP',
       reason: string,
       sessionId: string,
-      terminalId: string
+      terminalId: string,
+      managerPin?: string
     ): Promise<ApprovalResult | null> => {
       setLoading(true);
       setError(null);
@@ -175,7 +182,7 @@ export function useOrderWorkflow() {
             'x-session-id': sessionId,
             'x-terminal-id': terminalId,
           },
-          body: JSON.stringify({ orderItemId, approvalAction, reason }),
+          body: JSON.stringify({ orderItemId, approvalAction, reason, managerPin }),
         });
         const body = await res.json();
         if (!res.ok) {
