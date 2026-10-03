@@ -1,6 +1,15 @@
 // src/api/services/EmailVerificationService.ts
 import crypto from 'crypto';
+import type { PrismaClient } from '@prisma/client';
 import { prisma } from '../../shared/lib/prisma';
+
+/**
+ * A real client or a transaction client. The advisory lock below is only
+ * meaningful inside a transaction, so this is deliberately the structural
+ * capability (`email_verification_tokens` + raw access) rather than the full
+ * PrismaClient, which keeps a `Prisma.TransactionClient` assignable to it.
+ */
+type VerificationDb = Pick<PrismaClient, 'email_verification_tokens' | '$executeRaw'>;
 
 export interface EmailVerificationTokenResult {
   id: string;
@@ -32,37 +41,73 @@ export class EmailVerificationService {
   /**
    * Creates an email verification token record in the database.
    * Invalidates any prior active tokens for this email to prevent concurrent replay.
+   *
+   * Task 05 commit 1: invalidation and creation were two independent writes, so
+   * two concurrent resends could both invalidate, both create, and leave TWO live
+   * tokens for one address — each of which then verifies successfully. Both now
+   * run in ONE transaction that first takes a transaction-scoped advisory lock
+   * keyed on the normalized address, so concurrent callers for the same address
+   * serialize instead of interleaving. The last writer wins and is the only
+   * survivor, which is the intended behaviour.
+   *
+   * `pg_advisory_xact_lock` is released at transaction end, so an aborted mint
+   * cannot strand it.
+   *
+   * The lock only serializes when it is taken in a transaction. A caller that
+   * already holds one passes its client in; a caller that does not gets a fresh
+   * transaction here. Passing the base client rather than a transaction client
+   * would take the lock in an implicit single-statement transaction and
+   * serialize nothing.
    */
   static async createVerificationEmail(
     email: string,
     staffId?: string | null,
-    restaurantId?: string | null
+    restaurantId?: string | null,
+    db?: VerificationDb
   ): Promise<string> {
     const normalizedEmail = email.toLowerCase().trim();
     const token = this.generateToken();
     const expiresAt = this.getTokenExpiry();
 
-    // Invalidate existing unused tokens for this email
-    await prisma.email_verification_tokens.updateMany({
-      where: {
-        email: normalizedEmail,
-        used: false,
-      },
-      data: {
-        used: true,
-      },
-    });
+    const invalidateThenCreate = async (client: VerificationDb): Promise<void> => {
+      // Serialize every mint for this address. hashtextextended gives a stable
+      // 64-bit key; the lock namespace is per-database, so the key is prefixed
+      // with the feature name to keep it out of the way of any other advisory
+      // lock in this database.
+      //
+      // $executeRaw, not $queryRaw: pg_advisory_xact_lock returns void, which
+      // Prisma cannot deserialize into a row. $executeRaw only reports how many
+      // rows the statement touched, which is all we need.
+      const lockKey = `email_verification:${normalizedEmail}`;
+      await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
-    await prisma.email_verification_tokens.create({
-      data: {
-        email: normalizedEmail,
-        staff_id: staffId || null,
-        restaurant_id: restaurantId || null,
-        token,
-        expires_at: expiresAt,
-        used: false,
-      },
-    });
+      await client.email_verification_tokens.updateMany({
+        where: {
+          email: normalizedEmail,
+          used: false,
+        },
+        data: {
+          used: true,
+        },
+      });
+
+      await client.email_verification_tokens.create({
+        data: {
+          email: normalizedEmail,
+          staff_id: staffId || null,
+          restaurant_id: restaurantId || null,
+          token,
+          expires_at: expiresAt,
+          used: false,
+        },
+      });
+    };
+
+    if (db) {
+      await invalidateThenCreate(db);
+    } else {
+      await prisma.$transaction((tx) => invalidateThenCreate(tx));
+    }
 
     return token;
   }

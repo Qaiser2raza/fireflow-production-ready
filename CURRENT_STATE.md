@@ -6,9 +6,9 @@
 |---|---|
 | **Branch** | `main` |
 | **Ahead of remote** | 0 commits |
-| **Working tree** | Clean except untracked `scripts/dev-set-owner-password.ts` |
-| **Untracked** | `scripts/dev-set-owner-password.ts` (DEV ONLY helper, not committed) |
-| **Latest commit** | `81e2bb5 feat(identity): cloud identity tables, financial FK hardening, drift cleanup` |
+| **Working tree** | Modified: `src/api/services/EmailVerificationService.ts`, `CURRENT_STATE.md`; new `tests/email-verification-token-race.test.ts`, `scratch/verify-verification-token-race.ts` (Task 05 commit 1, uncommitted) |
+| **Untracked** | `scripts/dev-set-owner-password.ts` (DEV ONLY helper, not committed); `tests/email-verification-token-race.test.ts`, `scratch/verify-verification-token-race.ts` |
+| **Latest commit** | `7301db9 fix(auth): derive token expiry from the JWT and treat refresh races as plain losers` |
 | **Node engines** | >=18.0.0 |
 | **Database** | PostgreSQL via Prisma Client 6 |
 | **Frontend** | React 19 + Vite 6 + Tailwind CSS 4 |
@@ -172,6 +172,9 @@
 | `src/shared/lib/ownerSession.ts`, `src/client/App.tsx` | Task 03g (P1) — `readAccessTokenExpiry` / `storeAccessToken`: the stored access token's expiry now comes from the JWT's own `exp`; a stored token is never re-armed to now + 15 min, and a missing/invalid `exp` fails closed. |
 | `src/shared/lib/authInterceptor.ts` | Task 03g (P2) — 410 now takes the same one-refresh/one-retry path as 401 (via an inner `send()` that cannot recurse); `session:expired` fires only when the refresh actually fails, at most once per dead session. |
 | `tests/owner-client-token-lifecycle.test.ts` | Task 03g — NEW. 34 assertions, browser globals stubbed, no server/DB: expired stored JWT, missing `exp`, unreadable token, re-arm regression, 410?refresh?retry, failed refresh ? exactly one `session:expired`, 401 regression, no-loop guard. |
+| `src/api/services/EmailVerificationService.ts` | Task 05 commit 1 — UNCOMMITTED. `createVerificationEmail` takes an optional injected client and now runs invalidate-then-create in ONE transaction behind `pg_advisory_xact_lock(hashtextextended(email, 0))`. Closes the concurrent-resend race that left two live tokens for one address. No schema change, no email infrastructure. |
+| `tests/email-verification-token-race.test.ts` | Task 05 commit 1 — NEW. 28 assertions: 10 concurrent resends leave exactly one live token, the pre-existing token is invalidated, the survivor verifies once and cannot be replayed, superseded tokens never verify, and a caller-supplied transaction joins the same lock. |
+| `scratch/verify-verification-token-race.ts` | Task 05 commit 1 — evidence helper (throwaway). Replays the PRE-FIX sequence 10x concurrently against the test database: reproduced 2 live tokens in 2 of 6 runs, which is why the defect survived review. Guarded by `tests/_test-db-guard.ts`. |
 
 ---
 
