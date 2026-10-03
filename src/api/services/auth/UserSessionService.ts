@@ -31,6 +31,8 @@ export interface UserSessionRecord {
   userId: string;
   jti: string;
   tokenFamilyId: string;
+  /** Task 03b: the restaurant this session is bound to. NULL = pre-03b row, invalid. */
+  restaurantId: string | null;
   expiresAt: Date;
   revokedAt: Date | null;
 }
@@ -56,6 +58,7 @@ export class UserSessionService {
   /** Creates the first session of a family and returns the raw token once. */
   async createUserSession(input: {
     userId: string;
+    restaurantId: string;
     userAgent?: string | null;
     ipAddress?: string | null;
     familyId?: string;
@@ -68,6 +71,7 @@ export class UserSessionService {
     const created = await prisma.user_sessions.create({
       data: {
         user_id: input.userId,
+        restaurant_id: input.restaurantId,
         jti: crypto.randomUUID(),
         token_family_id: familyId,
         refresh_token_hash: tokenHash,
@@ -78,6 +82,7 @@ export class UserSessionService {
       select: {
         id: true,
         user_id: true,
+        restaurant_id: true,
         jti: true,
         token_family_id: true,
         expires_at: true,
@@ -90,6 +95,7 @@ export class UserSessionService {
       session: {
         id: created.id,
         userId: created.user_id,
+        restaurantId: created.restaurant_id,
         jti: created.jti,
         tokenFamilyId: created.token_family_id,
         expiresAt: created.expires_at,
@@ -105,6 +111,7 @@ export class UserSessionService {
       select: {
         id: true,
         user_id: true,
+        restaurant_id: true,
         jti: true,
         token_family_id: true,
         expires_at: true,
@@ -115,6 +122,7 @@ export class UserSessionService {
     return {
       id: record.id,
       userId: record.user_id,
+      restaurantId: record.restaurant_id,
       jti: record.jti,
       tokenFamilyId: record.token_family_id,
       expiresAt: record.expires_at,
@@ -128,12 +136,13 @@ export class UserSessionService {
    * - unknown token      -> { error: 'INVALID_REFRESH_TOKEN' }
    * - revoked token      -> whole family revoked, { error: 'TOKEN_REUSE_DETECTED' }
    * - expired token      -> { error: 'INVALID_REFRESH_TOKEN' }
+   * - unbound session    -> whole family revoked, { error: 'SESSION_RESTAURANT_UNBOUND' }
    * - valid token        -> { token, session } for the newly issued session
    */
   async rotateUserRefreshToken(
     token: string
   ): Promise<
-    | { error: 'INVALID_REFRESH_TOKEN' | 'TOKEN_REUSE_DETECTED' }
+    | { error: 'INVALID_REFRESH_TOKEN' | 'TOKEN_REUSE_DETECTED' | 'SESSION_RESTAURANT_UNBOUND' }
     | { token: string; session: UserSessionRecord }
   > {
     const existing = await this.findSessionByToken(token);
@@ -152,6 +161,14 @@ export class UserSessionService {
       return { error: 'INVALID_REFRESH_TOKEN' };
     }
 
+    // Task 03b: a session without a restaurant cannot be resolved safely (the old
+    // behaviour picked the most recently updated membership). Kill the family and
+    // force a fresh sign-in instead of guessing a tenant.
+    if (!existing.restaurantId) {
+      await this.revokeUserSessionFamily(existing.tokenFamilyId);
+      return { error: 'SESSION_RESTAURANT_UNBOUND' };
+    }
+
     const newToken = this.generateSecureToken();
     const newTokenHash = this.hashToken(newToken);
     const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -168,6 +185,7 @@ export class UserSessionService {
       return tx.user_sessions.create({
         data: {
           user_id: existing.userId,
+          restaurant_id: existing.restaurantId,
           jti: crypto.randomUUID(),
           token_family_id: existing.tokenFamilyId,
           refresh_token_hash: newTokenHash,
@@ -176,6 +194,7 @@ export class UserSessionService {
         select: {
           id: true,
           user_id: true,
+          restaurant_id: true,
           jti: true,
           token_family_id: true,
           expires_at: true,
@@ -193,6 +212,7 @@ export class UserSessionService {
       session: {
         id: created.id,
         userId: created.user_id,
+        restaurantId: created.restaurant_id,
         jti: created.jti,
         tokenFamilyId: created.token_family_id,
         expiresAt: created.expires_at,

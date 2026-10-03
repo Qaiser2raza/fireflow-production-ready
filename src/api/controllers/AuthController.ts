@@ -679,6 +679,9 @@ export class AuthController {
 
     const issued = await userSessionService.createUserSession({
       userId: user.id,
+      // Task 03b: the session is bound to the chosen restaurant, so a refresh can
+      // never silently switch tenant.
+      restaurantId: membership.restaurant_id,
       userAgent: (req.headers['user-agent'] as string) || null,
       ipAddress,
     });

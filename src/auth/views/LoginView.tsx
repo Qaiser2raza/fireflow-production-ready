@@ -8,6 +8,8 @@ import type { LoginResult } from '../../shared/types';
 interface LoginViewProps {
   onLogin: (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string; selection_token?: string; restaurant_id?: string }) => Promise<LoginResult | void> | void;
   restaurantName?: string;
+  /** Shown only when provided: lets a returning owner go back to onboarding. */
+  onCreateNew?: () => void;
 }
 
 /** Owner accounts with more than one workspace pick a restaurant after the password check. */
@@ -18,7 +20,7 @@ interface RestaurantChoice {
   role: string;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLogin, restaurantName, onCreateNew }) => {
   const [mode, setMode] = useState<'password' | 'pin'>('password');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -326,9 +328,19 @@ const handleSubmit = async () => {
             onClick={() => { setShowConnectModal(true); fetchConnectivity(); }}
             className="w-full py-2 mt-2 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all text-slate-500 hover:text-gold-400 text-[10px] border border-dashed border-slate-800 hover:border-gold-500/50"
           >
-            <Wifi size={14} />
+            <            Wifi size={14} />
             Connect Mobile
           </button>
+
+          {onCreateNew && (
+            <button
+              type="button"
+              onClick={onCreateNew}
+              className="w-full py-2 mt-1 rounded-xl text-[10px] uppercase font-black tracking-widest text-slate-500 hover:text-gold-400 transition-colors"
+            >
+              Create a new restaurant
+            </button>
+          )}
           </>
           )}
 

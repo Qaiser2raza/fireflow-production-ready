@@ -41,6 +41,7 @@ import { toUTCRange } from '../shared/utils/dateUtils';
 import { jwtService } from './services/auth/JwtService';
 import { refreshTokenService } from './services/auth/RefreshTokenService';
 import { userSessionService } from './services/auth/UserSessionService';
+import { resolveOwnerRefreshTarget, buildOwnerSessionPayload } from './services/auth/ownerSessionRefresh';
 import { authMiddleware, requireRole } from './middleware/authMiddleware';
 import { sessionGateMiddleware } from './middleware/sessionGate';
 import { sendPaymentVerified, sendPaymentRejected } from './services/notificationService.js';
@@ -1514,65 +1515,69 @@ async function handleUserSessionRefresh(req: any, res: any, cookieToken: string)
                     code: 'TOKEN_REUSE_DETECTED',
                 });
             }
+            if (result.error === 'SESSION_RESTAURANT_UNBOUND') {
+                // Task 03b: pre-03b session row. Already revoked with its family.
+                userSessionService.clearRefreshCookie(res);
+                await prisma.system_logs.create({
+                    data: {
+                        level: 'WARN',
+                        service: 'auth',
+                        action: 'USER_SESSION_RESTAURANT_UNBOUND',
+                        metadata: { ip_address: req.ip || 'unknown' },
+                    },
+                }).catch(() => { });
+                return res.status(401).json({
+                    error: 'Session is not bound to a restaurant. Please sign in again.',
+                    code: 'SESSION_RESTAURANT_UNBOUND',
+                });
+            }
             return res.status(401).json({
                 error: 'Invalid or expired refresh token',
                 code: 'INVALID_REFRESH_TOKEN',
             });
         }
 
-        const user = await prisma.users.findUnique({
-            where: { id: result.session.userId },
-            select: { id: true, email: true, name: true, is_active: true, email_verified_at: true },
-        });
+        // Task 03b: the tenant comes from the session row, never from
+        // "most recently updated membership". The rule itself lives in
+        // resolveOwnerRefreshTarget so it can be tested without booting the API.
+        const resolution = await resolveOwnerRefreshTarget(prisma, result.session);
 
-        if (!user || !user.is_active) {
-            return res.status(401).json({ error: 'Account is no longer active', code: 'ACCOUNT_INACTIVE' });
-        }
-        if (!user.email_verified_at) {
-            return res.status(401).json({ error: 'Please verify your email address before logging in.', code: 'EMAIL_NOT_VERIFIED' });
-        }
-
-        // TODO(Task 04 / schema): `user_sessions` has no restaurant column, so the
-        // tenant is re-resolved from memberships on every refresh. For an account
-        // with several restaurants this picks the most recently updated one; a
-        // restaurant_id on user_sessions would make the choice explicit.
-        const memberships = await prisma.memberships.findMany({
-            where: { user_id: user.id },
-            include: { restaurant: { select: { id: true, is_active: true } } },
-            orderBy: { updated_at: 'desc' },
-        });
-
-        if (memberships.length === 0) {
-            return res.status(403).json({ error: 'This account is not a member of any restaurant yet.', code: 'NO_MEMBERSHIP' });
+        if (!resolution.ok) {
+            if (resolution.revokeFamily) {
+                userSessionService.clearRefreshCookie(res);
+                await userSessionService.revokeUserSessionFamily(result.session.tokenFamilyId);
+                await prisma.system_logs.create({
+                    data: {
+                        level: 'WARN',
+                        service: 'auth',
+                        action: `USER_REFRESH_${resolution.code}`,
+                        metadata: { ip_address: req.ip || 'unknown', token_family_id: result.session.tokenFamilyId },
+                    },
+                }).catch(() => { });
+            }
+            return res.status(resolution.status).json({ error: resolution.error, code: resolution.code });
         }
 
-        const membership = memberships[0];
-        if (!membership.staff_id) {
-            return res.status(403).json({
-                error: 'This account is not linked to a staff profile in this restaurant yet.',
-                code: 'STAFF_LINK_MISSING',
-            });
-        }
-        if (!membership.restaurant.is_active) {
-            return res.status(403).json({ error: 'Restaurant is inactive', code: 'RESTAURANT_INACTIVE' });
-        }
+        const { user, staff } = resolution;
 
-        const staff = await prisma.staff.findUnique({
-            where: { id: membership.staff_id },
-            select: { id: true, restaurant_id: true, name: true, role: true, status: true },
-        });
-
-        if (!staff || staff.restaurant_id !== membership.restaurant_id || staff.status !== 'active') {
-            return res.status(401).json({ error: 'The staff profile linked to this membership is no longer active.', code: 'STAFF_INACTIVE' });
-        }
-
-        const accessToken = jwtService.generateAccessToken(staff.id, membership.restaurant_id, staff.role, staff.name);
+        const accessToken = jwtService.generateAccessToken(staff.id, resolution.restaurantId, staff.role, staff.name);
 
         userSessionService.setRefreshCookie(res, result.token);
 
+        // Task 03f: same shape as the login response so the client can reuse
+        // completeLogin() and stay signed in across a reload. The raw refresh
+        // token stays in the cookie; nothing sensitive is in the body.
+        const payload = buildOwnerSessionPayload({
+            accessToken,
+            email: user.email,
+            staff,
+            restaurant: resolution.restaurant,
+            lastLogin: staff.last_login,
+        });
+
         await prisma.audit_logs.create({
             data: {
-                restaurant_id: membership.restaurant_id,
+                restaurant_id: resolution.restaurantId,
                 staff_id: staff.id,
                 action_type: 'USER_SESSION_ROTATED',
                 entity_type: 'USER',
@@ -1581,7 +1586,8 @@ async function handleUserSessionRefresh(req: any, res: any, cookieToken: string)
             },
         }).catch(() => { });
 
-        res.json({ access_token: accessToken, expires_in: 15 * 60 });
+        // Task 03f: the login-shaped payload (access_token is kept for older clients).
+        res.json({ ...payload, access_token: accessToken, expires_in: 15 * 60 });
     } catch (error: any) {
         console.error('[ERROR] /api/auth/refresh (user session):', error.message);
         res.status(500).json({ error: 'Token refresh failed' });

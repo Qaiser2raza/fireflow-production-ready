@@ -694,6 +694,8 @@ export interface AppContextType {
     openSession: (openingFloat: number) => Promise<boolean>;
     closeSession: (actualCash: number, notes: string) => Promise<boolean>;
     currentUser: Staff | null;
+    /** Task 03f: true while the silent session bootstrap is still running. */
+    sessionBootstrapping: boolean;
     currentRestaurant: any | null;
     setupRequired: { pinChangeRequired: boolean; onboardingStatus: string } | null;
     clearSetupRequired: () => void;

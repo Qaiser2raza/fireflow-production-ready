@@ -17,6 +17,7 @@ import { AuthController, BCRYPT_COST, resetLoginRateLimitTrackersForTests } from
 import { JwtService } from '../src/api/services/auth/JwtService';
 import { EmailVerificationService } from '../src/api/services/EmailVerificationService';
 import { userSessionService, USER_REFRESH_COOKIE } from '../src/api/services/auth/UserSessionService';
+import { resolveOwnerRefreshTarget } from '../src/api/services/auth/ownerSessionRefresh';
 
 const prisma = new PrismaClient();
 const jwtService = new JwtService();
@@ -388,7 +389,128 @@ async function main() {
     console.log(`\n=== OWNER LOGIN SESSIONS: ${passed} passed, ${failed} failed ===`);
 }
 
+// ---------- 11. TASK 03b: THE SESSION IS BOUND TO ONE RESTAURANT ----------
+/** Maps a raw user_sessions row onto the service record shape. */
+function sessionRecord(row: any) {
+    return {
+        id: row.id,
+        userId: row.user_id,
+        restaurantId: row.restaurant_id as string | null,
+        jti: row.jti,
+        tokenFamilyId: row.token_family_id,
+        expiresAt: row.expires_at,
+        revokedAt: row.revoked_at,
+    };
+}
+
+async function task03bSessionBinding() {
+    // 11a. Selecting restaurant A records A on the session row.
+    resetLoginRateLimitTrackersForTests();
+    const bound = await makeOwner({ memberships: 2 });
+    const [restaurantA, restaurantB] = bound.restaurantIds;
+
+    const loginRes = makeRes();
+    await controller.login(loginReq({ email: bound.email, password: OWNER_PASSWORD }), loginRes);
+    const selectionToken: string = loginRes.body.selection_token;
+
+    const selectRes = makeRes();
+    await controller.selectRestaurant(loginReq({ selection_token: selectionToken, restaurant_id: restaurantA }), selectRes);
+    assert('03b: selecting A issues a session', selectRes.statusCode === 200, JSON.stringify(selectRes.body).slice(0, 160));
+
+    const boundSession = await prisma.user_sessions.findFirst({ where: { user_id: bound.user.id, revoked_at: null } });
+    assert('03b: session row stores the selected restaurant', boundSession?.restaurant_id === restaurantA, String(boundSession?.restaurant_id));
+    assert('03b: no session exists for the other restaurant',
+        (await prisma.user_sessions.count({ where: { user_id: bound.user.id, restaurant_id: restaurantB } })) === 0);
+
+    // 11b. Touching B's membership more recently must NOT switch the session.
+    await prisma.memberships.update({
+        where: { user_id_restaurant_id: { user_id: bound.user.id, restaurant_id: restaurantB } },
+        data: { role: 'OWNER' },
+    });
+    const newestMembership = await prisma.memberships.findFirst({
+        where: { user_id: bound.user.id },
+        orderBy: { updated_at: 'desc' },
+        select: { restaurant_id: true },
+    });
+    assert('03b: B is now the most recently updated membership', newestMembership?.restaurant_id === restaurantB, String(newestMembership?.restaurant_id));
+
+    const rawRefresh = selectRes.cookies.find((c: any) => c.name === USER_REFRESH_COOKIE)!.value;
+    const rotation = await userSessionService.rotateUserRefreshToken(rawRefresh);
+    assert('03b: refresh of a bound session rotates', !('error' in rotation), JSON.stringify(rotation));
+    const rotatedSession = ('session' in rotation ? rotation.session : null);
+    assert('03b: rotation keeps the session bound to A', rotatedSession?.restaurantId === restaurantA, String(rotatedSession?.restaurantId));
+
+    const resolutionA = await resolveOwnerRefreshTarget(prisma as any, rotatedSession!);
+    assert('03b: refresh resolves tenant A, not the newest membership',
+        resolutionA.ok === true && resolutionA.restaurantId === restaurantA, JSON.stringify(resolutionA).slice(0, 200));
+    assert('03b: access token for the refresh belongs to A',
+        jwtService.verifyToken(jwtService.generateAccessToken(
+            resolutionA.ok ? resolutionA.staff.id : '', resolutionA.ok ? resolutionA.restaurantId : '', 'MANAGER', 'x'
+        )).payload?.restaurantId === restaurantA);
+
+    // 11c. Removing the membership for A kills the refresh.
+    const membershipA = await prisma.memberships.findUnique({
+        where: { user_id_restaurant_id: { user_id: bound.user.id, restaurant_id: restaurantA } },
+        select: { id: true },
+    });
+    await prisma.memberships.delete({ where: { id: membershipA!.id } });
+
+    const resolutionAfterRemoval = await resolveOwnerRefreshTarget(prisma as any, rotatedSession!);
+    assert('03b: refresh fails once the membership for A is removed',
+        resolutionAfterRemoval.ok === false && resolutionAfterRemoval.code === 'MEMBERSHIP_REVOKED',
+        JSON.stringify(resolutionAfterRemoval).slice(0, 160));
+    assert('03b: losing access revokes the family', resolutionAfterRemoval.ok === false && resolutionAfterRemoval.revokeFamily === true);
+    const familyAfterRemoval = await prisma.user_sessions.count({ where: { user_id: bound.user.id, revoked_at: null } });
+    assert('03b: a membership removal requires a fresh sign-in (B is not used instead)', familyAfterRemoval === 1, String(familyAfterRemoval));
+
+    // 11d. A pre-03b session (NULL restaurant_id) is invalid.
+    const legacy = await makeOwner();
+    const legacyLogin = makeRes();
+    resetLoginRateLimitTrackersForTests();
+    await controller.login(loginReq({ email: legacy.email, password: OWNER_PASSWORD }), legacyLogin);
+    const legacySession = await prisma.user_sessions.findFirst({ where: { user_id: legacy.user.id, revoked_at: null } });
+    const legacyRaw = legacyLogin.cookies.find((c: any) => c.name === USER_REFRESH_COOKIE)!.value;
+
+    await prisma.user_sessions.update({ where: { id: legacySession!.id }, data: { restaurant_id: null } });
+    const legacyResolution = await resolveOwnerRefreshTarget(prisma as any, { ...legacySession, restaurantId: null });
+    assert('03b: a NULL-restaurant session is refused',
+        legacyResolution.ok === false && legacyResolution.code === 'SESSION_RESTAURANT_UNBOUND',
+        JSON.stringify(legacyResolution).slice(0, 160));
+    assert('03b: a NULL-restaurant session revokes the family', legacyResolution.ok === false && legacyResolution.revokeFamily === true);
+
+    const legacyRotation = await userSessionService.rotateUserRefreshToken(legacyRaw);
+    assert('03b: rotating a NULL-restaurant session is refused',
+        'error' in legacyRotation && legacyRotation.error === 'SESSION_RESTAURANT_UNBOUND', JSON.stringify(legacyRotation));
+    assert('03b: rotating a NULL-restaurant session kills the family',
+        (await prisma.user_sessions.count({ where: { user_id: legacy.user.id, revoked_at: null } })) === 0);
+
+    // 11e. Inactive account and revoked staff still fail closed.
+    const inactiveOwner = await makeOwner();
+    const inactiveLogin = makeRes();
+    resetLoginRateLimitTrackersForTests();
+    await controller.login(loginReq({ email: inactiveOwner.email, password: OWNER_PASSWORD }), inactiveLogin);
+    const inactiveSession = await prisma.user_sessions.findFirst({ where: { user_id: inactiveOwner.user.id, revoked_at: null } });
+    await prisma.users.update({ where: { id: inactiveOwner.user.id }, data: { is_active: false } });
+    const inactiveResolution = await resolveOwnerRefreshTarget(prisma as any, sessionRecord(inactiveSession));
+    assert('03b: a deactivated account cannot refresh',
+        inactiveResolution.ok === false && inactiveResolution.code === 'ACCOUNT_INACTIVE', JSON.stringify(inactiveResolution).slice(0, 140));
+    await prisma.users.update({ where: { id: inactiveOwner.user.id }, data: { is_active: true } });
+
+    const staffOwner = await makeOwner();
+    const staffLogin = makeRes();
+    resetLoginRateLimitTrackersForTests();
+    await controller.login(loginReq({ email: staffOwner.email, password: OWNER_PASSWORD }), staffLogin);
+    const staffSession = await prisma.user_sessions.findFirst({ where: { user_id: staffOwner.user.id, revoked_at: null } });
+    await prisma.staff.updateMany({ where: { restaurant_id: staffOwner.restaurantIds[0] }, data: { status: 'inactive' } });
+    const staffResolution = await resolveOwnerRefreshTarget(prisma as any, sessionRecord(staffSession));
+    assert('03b: an inactive staff profile cannot refresh',
+        staffResolution.ok === false && staffResolution.code === 'STAFF_INACTIVE', JSON.stringify(staffResolution).slice(0, 140));
+
+    console.log(`\n=== TASK 03b SESSION BINDING: ${passed} passed, ${failed} failed (cumulative) ===`);
+}
+
 main()
+    .then(task03bSessionBinding)
     .catch((e) => { console.error('FATAL:', e); process.exitCode = 1; })
     .finally(async () => {
         await teardown();

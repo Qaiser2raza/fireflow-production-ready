@@ -2,71 +2,36 @@
  * Auth Interceptor - Handles token inclusion and refreshing for all API calls
  */
 
+import {
+  getValidAccessToken,
+  refreshOwnerSession,
+  markSessionTerminated,
+} from './ownerSession';
+
 const API_URL = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
 /**
- * Refresh access token using refresh token
+ * Refresh the access token and return the new one.
+ *
+ * Task 03f: delegates to the single-flight refresh in `ownerSession`, so a
+ * cookie-only owner session (nothing in storage) can still be refreshed and
+ * StrictMode's double mount cannot send two refreshes with the same cookie.
  */
-let refreshPromise: Promise<string | null> | null = null;
-
 async function refreshAccessToken(): Promise<string | null> {
-  if (refreshPromise) {
-    return refreshPromise;
-  }
-
-  refreshPromise = (async () => {
-    try {
-      const refreshToken = localStorage.getItem('refreshToken');
-
-      // Owner sessions keep the refresh token in an httpOnly cookie, so there
-      // is nothing in storage for them: the request is made without a body and
-      // the browser attaches the cookie.
-      if (!refreshToken && !localStorage.getItem('accessToken')) {
-        return null;
-      }
-
-      const response = await fetch(`${API_URL}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {})
-      });
-
-      if (!response.ok) {
-        return null;
-      }
-
-      const data = await response.json();
-      localStorage.setItem('accessToken', data.access_token);
-      if (data.refresh_token) {
-        localStorage.setItem('refreshToken', data.refresh_token);
-      }
-      const expiryTime = Date.now() + (data.expires_in * 1000);
-      localStorage.setItem('accessTokenExpiry', expiryTime.toString());
-      return data.access_token;
-    } catch (err) {
-      return null;
-    } finally {
-      refreshPromise = null;
-    }
-  })();
-
-  return refreshPromise;
+  const data = await refreshOwnerSession();
+  if (!data) return null;
+  return (data.access_token || data.accessToken || null) as string | null;
 }
+
 
 /**
  * Get current access token
  */
 function getAccessToken(): string | null {
-  const token = localStorage.getItem('accessToken');
-  const expiry = localStorage.getItem('accessTokenExpiry');
-
-  // Check if token is expired
-  if (expiry && Date.now() > parseInt(expiry)) {
-    console.log('[Auth] Token expired');
-    return null;
+  const token = getValidAccessToken();
+  if (!token) {
+    console.log('[Auth] No valid access token');
   }
-
   return token;
 }
 
@@ -127,7 +92,7 @@ export async function fetchWithAuth(
 
   let response = await fetch(url, { ...options, headers });
 
-  // If we get 401, try to refresh token and retry once
+  // If we get 401, refresh once and retry the request exactly once.
   if (response.status === 401) {
     console.log('[Auth] Got 401, attempting token refresh...');
     const newToken = await refreshAccessToken();
@@ -136,10 +101,8 @@ export async function fetchWithAuth(
       headers['Authorization'] = `Bearer ${newToken}`;
       response = await fetch(url, { ...options, headers });
     } else {
-      // Refresh failed, clear session
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
-      localStorage.removeItem('accessTokenExpiry');
+      // Refresh failed: end the session and stop any in-flight bootstrap.
+      markSessionTerminated();
       console.error('[Auth] Token refresh failed, session cleared');
     }
   }
@@ -147,9 +110,7 @@ export async function fetchWithAuth(
   // Handle 410 Gone (Session Expired)
   if (response.status === 410) {
     console.error('[Auth] Session expired (410)');
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('accessTokenExpiry');
+    markSessionTerminated();
     window.dispatchEvent(new CustomEvent('session:expired'));
     return response;
   }
@@ -175,9 +136,9 @@ export async function clearAuthSession(): Promise<void> {
     }); // Ignore errors
     }
   } finally {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('accessTokenExpiry');
+    // Bumps the session generation so a bootstrap that is already in flight
+    // cannot restore the session the user just ended.
+    markSessionTerminated();
     localStorage.removeItem('restaurant_id');
     localStorage.removeItem('currentRestaurant');
   }

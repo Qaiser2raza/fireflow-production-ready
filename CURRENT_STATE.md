@@ -165,6 +165,97 @@
 
 ---
 
+## 2026-10-02 — Task 03b: user sessions are bound to one restaurant
+
+**Schema**: `user_sessions.restaurant_id UUID NULL` + `@@index([restaurant_id])` + FK to `restaurants`
+`onDelete: Cascade` (sessions are disposable), back-relation `restaurants.user_sessions[]`
+(`prisma/schema.prisma:879,1804-1818`). Nullable only so pre-03b rows can exist during rollout; a NULL
+row is treated as invalid, never resolved from memberships. Migration
+`prisma/migrations/20261002231500_bind_user_sessions_to_restaurant/migration.sql` — additive only, no
+existing migration touched, no data rewritten.
+
+**Issuance**: `AuthController.issueOwnerSession` stores the chosen `restaurant_id` on the row
+(`src/api/controllers/AuthController.ts:680-688`), so the selection made at login is what every later
+refresh uses. `UserSessionService.rotateUserRefreshToken` carries `restaurant_id` across rotations and
+refuses an unbound row with the new `SESSION_RESTAURANT_UNBOUND` error, revoking the whole family first
+(`src/api/services/auth/UserSessionService.ts:133-215`).
+
+**Refresh**: the tenant comes from the session row, never from "most recently updated membership". The
+rule was extracted from `handleUserSessionRefresh` into the testable
+`resolveOwnerRefreshTarget` (`src/api/services/auth/ownerSessionRefresh.ts`), which re-checks that the
+account is still active and verified and that the user **still holds a membership for that exact
+restaurant**; otherwise it clears the cookie, revokes the family and forces re-login with
+`MEMBERSHIP_REVOKED` / `ACCOUNT_INACTIVE` / `STAFF_INACTIVE`. `src/api/server.ts:1539-1571` now only maps
+that verdict to an HTTP response.
+
+**Verified**: `npx prisma validate` passes; `prisma migrate diff --from-migrations … --to-schema-datamodel
+… --shadow-database-url …/fireflow_shadow --script` is empty ("This is an empty migration");
+`npx tsc --noEmit` 0 errors; migration applied to `fireflow_test` with `npx prisma migrate deploy`;
+`npm run test:safe -- tests/owner-login-sessions.test.ts` = 65/65 + 17 new 03b assertions = 82/82,
+`tests/signup-owner-password.test.ts` = 43/43. New tests prove: the session row stores the selected
+restaurant; after B's membership is touched more recently the refresh still resolves A; removing A's
+membership fails the refresh with `MEMBERSHIP_REVOKED` instead of falling back to B; a NULL-restaurant
+session is refused and its family revoked (both at resolve time and at rotation); a deactivated account
+and an inactive staff profile fail closed.
+
+**Next**: Task 04 — tenant status / trial check in `issueOwnerSession` and in
+`resolveOwnerRefreshTarget` (after the membership is resolved, before the session/token is issued); the
+TODO marker is at `AuthController.ts:670-671`. Then 04b (self-approval in
+`orderWorkflowRoutes.ts:323-381`).
+
+---
+
+## 2026-10-02 — Task 03f: owners stay signed in across a page reload
+
+**Cause**: the owner refresh token lives in the httpOnly `ff_user_refresh` cookie, so a reload starts with
+no access token and no stored refresh token, and nothing ever re-established the session: the mount effect
+only inspected `accessToken`/`accessTokenExpiry` (`src/client/App.tsx`, old lines 375-384) and
+`setCurrentUser` was only ever called at login. The interceptor also bailed out before trying a cookie
+refresh when storage was empty (old `authInterceptor.ts:24`).
+
+**Single flight**: new `src/shared/lib/ownerSession.ts` owns the session refresh: a module-level promise
+(`refreshOwnerSession`) means the bootstrap effect, React StrictMode's double mount and the interceptor all
+share ONE `POST /api/auth/refresh` with `credentials: 'include'`, so a duplicated cookie can never look
+like replay. `markSessionTerminated()` (logout, refresh failure, 410) bumps a generation counter so a
+refresh that was already in flight cannot write its result or resurrect a logged-out session.
+
+**One completion path**: `completeLogin(data)` in `src/client/App.tsx` holds everything login did after
+the response (tenant storage, context restaurant, tokens + expiry, `staff`, `currentUser`, forced-setup
+wizard, role default view, debounced initial data fetch). `login()` and `bootstrapSession()` both call it —
+no duplicated logic. `bootstrapSession()` runs once on mount: with a still-valid access token it re-hydrates
+from the stored identity, otherwise it refreshes once and completes the login. No `window.location.reload()`.
+While `sessionBootstrapping` is true and there is no user, `AppContent` renders a neutral "Restoring your
+session…" screen (`src/client/App.tsx`) instead of flashing the login form.
+
+**Server**: `POST /api/auth/refresh` now returns the same shape as login — `buildOwnerSessionPayload` in
+`src/api/services/auth/ownerSessionRefresh.ts` is shared by the refresh route (`src/api/server.ts`) and the
+client can therefore use one code path. It returns `success`, `accessToken`, `staff`, `restaurant`,
+`tokens.access_token`, `tokens.expires_in` plus the legacy `access_token`/`expires_in`. No hash, PIN or raw
+token is ever in the body; the raw refresh token stays in the cookie. Rotation logic, schema and the PIN
+flow are untouched.
+
+**Logout**: now revokes server-side first (`POST /api/auth/logout` with `credentials: 'include'`), then
+`markSessionTerminated()` + localStorage clear + state reset. The interceptor's 401 path refreshes and
+retries the request exactly once, then ends the session.
+
+**Verified**: `npx tsc --noEmit` 0 errors; `npm run test:safe -- tests/owner-session-refresh.test.ts`
+(new, 16/16) proves the refresh response is login-shaped, carries the tenant/role/email, keeps the legacy
+fields, and contains no raw refresh token, no password, no bcrypt hash, no PIN and no session token hash;
+`tests/owner-login-sessions.test.ts` = 65/65 + 17 (03b) = 82/82; `tests/signup-owner-password.test.ts` =
+43/43. Manual browser reload was not run (no server started).
+
+**Multi-tab follow-up (NOT implemented)**: two tabs rotating the same cookie at the same instant can still
+trip replay detection and revoke the whole family. The small server-side fix is a ~10 second rotation
+leeway: in `rotateUserRefreshToken`, when the presented token is already revoked, accept it as a retry if
+`revoked_at` is younger than the leeway and issue a fresh token instead of calling
+`revokeUserSessionFamily`. It needs its own task, a cap on retries, and an audit event.
+
+**Next**: Task 04 — tenant status / trial check after membership resolution, in `issueOwnerSession`
+(`AuthController.ts:670`) and in `resolveOwnerRefreshTarget`. Then 04b (self-approval in
+`orderWorkflowRoutes.ts:323-381`).
+
+---
+
 ## 2026-10-02 — Task 03c: test-database safety boundary + non-destructive seed
 
 **Why**: suites and the seed sweep data with broad `deleteMany` calls (`tests/mission-031-b-wac.test.ts`

@@ -13,6 +13,7 @@ declare global {
 }
 
 // --- COMPONENT IMPORTS ---
+import { useLocation, useNavigate } from 'react-router-dom';
 import { LoginView } from '../auth/views/LoginView';
 import { SessionExpiredView } from '../auth/views/SessionExpiredView';
 import { POSView } from '../operations/pos/POSView';
@@ -49,6 +50,12 @@ import { RestaurantProvider, useRestaurant } from './RestaurantContext';
 import { tableService } from '../shared/lib/tableService';
 import { socketIO } from '../shared/lib/socketClient';
 import { fetchWithAuth } from '../shared/lib/authInterceptor';
+import {
+  getValidAccessToken,
+  hasValidAccessToken,
+  markSessionTerminated,
+  refreshOwnerSession,
+} from '../shared/lib/ownerSession';
 
 // --- 1. CONTEXT DEFINITION ---
 import { AppContext, useAppContext } from './contexts/AppContext';
@@ -60,6 +67,9 @@ export { useAppContext };
 // --- 2. PROVIDER (The Logic Layer) ---
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<Staff | null>(null);
+  // Task 03f: true until the silent session bootstrap settles, so the app shows
+  // a neutral loading screen instead of flashing the login form on a reload.
+  const [sessionBootstrapping, setSessionBootstrapping] = useState(true);
   const [setupRequired, setSetupRequired] = useState<{ pinChangeRequired: boolean; onboardingStatus: string } | null>(null);
   const [onboardingState, setOnboardingState] = useState<{ restaurantId: string; setupToken: string; temporaryPin: string; restaurantName: string } | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -263,6 +273,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 300);
   };
 
+  /** Last successful auth response, kept so a reload can re-hydrate the shell. */
+  function readStoredStaff(): any | null {
+    try { return JSON.parse(localStorage.getItem('staff') || 'null'); } catch { return null; }
+  }
+  function readStoredRestaurant(): any | null {
+    try { return JSON.parse(localStorage.getItem('currentRestaurant') || 'null'); } catch { return null; }
+  }
+
+  /**
+   * Task 03f: the single place that turns a successful auth response into a live
+   * client session. Used by `login()` and by `bootstrapSession()` (silent
+   * refresh on reload) so the two paths cannot drift.
+   *
+   * `data` is the login/refresh response: { accessToken, staff, restaurant, tokens }.
+   */
+  const completeLogin = (data: any) => {
+    const user = data.staff;
+    const restaurant = data.restaurant;
+
+    // Store restaurant info
+    if (restaurant) {
+      localStorage.setItem('currentRestaurant', JSON.stringify(restaurant));
+      localStorage.setItem('restaurant_id', restaurant.id);
+    }
+    // F-V15: hydrate context from the server response — never by re-reading
+    // storage. Overwrites any previous tenant on account switch.
+    setContextRestaurant(restaurant || null);
+
+    // Owner sessions keep their refresh token in an httpOnly cookie, so
+    // `refreshToken` is absent there and the session module refreshes with the
+    // cookie instead.
+    if (data.accessToken) {
+      localStorage.setItem('accessToken', data.accessToken);
+      if (data.refreshToken) {
+        localStorage.setItem('refreshToken', data.refreshToken);
+      }
+      localStorage.setItem('staff', JSON.stringify(user));
+      const expiryTime = Date.now() + ((data.tokens?.expires_in || 15 * 60) * 1000);
+      localStorage.setItem('accessTokenExpiry', expiryTime.toString());
+    }
+
+    // Phase 2b: forced-setup sessions go to the wizard instead of the app.
+    // SUPER_ADMIN (HQ) accounts are never provisioned through this flow and
+    // bypass the server gate; they keep their normal path.
+    const pinChangeRequired = user?.must_change_pin === true;
+    const setupIncomplete = data.restaurant?.onboarding_status === 'SETUP_INCOMPLETE';
+    setCurrentUser(user);
+    if ((pinChangeRequired || setupIncomplete) && user.role !== 'SUPER_ADMIN') {
+      setSetupRequired({ pinChangeRequired, onboardingStatus: data.restaurant?.onboarding_status || 'ACTIVE' });
+      return true;
+    }
+    if (user.role === 'SUPER_ADMIN') {
+      setActiveView('SUPER_ADMIN');
+    } else if (user.role === 'CASHIER' || user.role === 'SERVER' || user.role === 'WAITER') {
+      setActiveView('ORDER_HUB');
+    } else if (user.role === 'CHEF') {
+      setActiveView('KITCHEN');
+    } else if (user.role === 'RIDER') {
+      setActiveView('LOGISTICS');
+    } else {
+      setActiveView('DASHBOARD');
+    }
+
+    // Use debounced fetch so rapid back-to-back calls collapse into one request.
+    debouncedFetchInitialData(user);
+
+    return true;
+  };
+
   const login = async (credentials: { email: string; password?: string; pin?: string; device_fingerprint?: string; device_name?: string; selection_token?: string; restaurant_id?: string }) => {
     try {
       // Owner accounts with more than one restaurant finish in a second step:
@@ -292,94 +371,78 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
-      const user = data.staff;
-      const restaurant = data.restaurant;
-
-      // Store restaurant info
-      if (restaurant) {
-        localStorage.setItem('currentRestaurant', JSON.stringify(restaurant));
-        localStorage.setItem('restaurant_id', restaurant.id);
-      }
-      // F-V15: hydrate context from the server response — never by re-reading
-      // storage. Overwrites any previous tenant on account switch.
-      setContextRestaurant(restaurant || null);
-
-      // ✅ Phase 2b: Store JWT tokens if present. Owner sessions keep their
-      // refresh token in an httpOnly cookie, so `refreshToken` is absent there
-      // and the interceptor refreshes with the cookie instead.
-      if (data.accessToken) {
-        localStorage.setItem('accessToken', data.accessToken);
-        if (data.refreshToken) {
-          localStorage.setItem('refreshToken', data.refreshToken);
-        }
-        localStorage.setItem('staff', JSON.stringify(data.staff));
-        const expiryTime = Date.now() + ((data.tokens?.expires_in || 15 * 60) * 1000);
-        localStorage.setItem('accessTokenExpiry', expiryTime.toString());
-      }
-
-      // ✅ Phase 2: forced-setup sessions go to the wizard instead of the app.
-      // SUPER_ADMIN (HQ) accounts are never provisioned through this flow and
-      // bypass the server gate; they keep their normal path.
-      const pinChangeRequired = data.staff?.must_change_pin === true;
-      const setupIncomplete = data.restaurant?.onboarding_status === 'SETUP_INCOMPLETE';
-      setCurrentUser(user);
-      if ((pinChangeRequired || setupIncomplete) && user.role !== 'SUPER_ADMIN') {
-        setSetupRequired({ pinChangeRequired, onboardingStatus: data.restaurant?.onboarding_status || 'ACTIVE' });
-        return true;
-      }
-      if (user.role === 'SUPER_ADMIN') {
-        setActiveView('SUPER_ADMIN');
-      } else if (user.role === 'CASHIER' || user.role === 'SERVER' || user.role === 'WAITER') {
-        setActiveView('ORDER_HUB');
-      } else if (user.role === 'CHEF') {
-        setActiveView('KITCHEN');
-      } else if (user.role === 'RIDER') {
-        setActiveView('LOGISTICS');
-      } else {
-        setActiveView('DASHBOARD');
-      }
-      
-      // Use debounced fetch so rapid back-to-back login calls collapse into one request.
-      debouncedFetchInitialData(user);
-      
-      return true;
+      return completeLogin(data);
     } catch (err) {
       addNotification('error', err instanceof Error ? `Authentication Failed: ${err.message}` : 'Authentication failed');
       return false;
     }
   };
 
-  const logout = () => {
-    // F-V15/F-V1 contract: logout clears SESSION secrets only. The tenant
-    // binding (currentRestaurant / restaurant_id) survives as untrusted
-    // device configuration — it must NOT be cleared here, because
-    // RestaurantContext mirrors every context change into storage and a
-    // context clear would erase the binding and reintroduce F-V1
-    // (unbootable terminal). The binding is never rendered pre-auth
-    // (LoginView takes no tenant props) and is overwritten from the next
-    // login response. Phase 5-6 device-bound-context decision owns this.
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('accessTokenExpiry');
-    // Clear app state
-    setCurrentUser(null);
-    setSetupRequired(null);
-    setOrders([]);
-    setActiveView('DASHBOARD');
-    localStorage.removeItem('saved_pin');
+  const logout = async () => {
+    // Task 03f: revoke the server session (owner cookie session or staff
+    // refresh token) before dropping local state, and stop an in-flight
+    // bootstrap from resurrecting the session.
+    markSessionTerminated();
+    try {
+      const accessToken = localStorage.getItem('accessToken');
+      await fetch(`${API_URL}/auth/logout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        credentials: 'include',
+      }).catch(() => { });
+    } finally {
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+      localStorage.removeItem('accessTokenExpiry');
+      // Clear app state
+      setCurrentUser(null);
+      setSetupRequired(null);
+      setOrders([]);
+      setActiveView('DASHBOARD');
+      localStorage.removeItem('saved_pin');
+    }
   };
 
-  // AUTO-LOGIN: Run exactly once on mount using stored JWT tokens.
-  // NOTE: Plaintext PIN auto-login via saved_pin has been removed for security.
-  useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    const expiry = localStorage.getItem('accessTokenExpiry');
-    
-    if (token && expiry) {
-      if (Date.now() > parseInt(expiry)) {
-        logout();
+  /**
+   * Task 03f: silent session bootstrap. On app mount, if there is no current
+   * user and no valid access token, refresh once (single flight, cookie only)
+   * and hand the response to the same completeLogin() the login form uses.
+   * No window.location.reload(): the shell renders straight into the app.
+   */
+  const bootstrapSession = async () => {
+    try {
+      if (currentUser) return;
+
+      if (hasValidAccessToken()) {
+        // Access token is still good: re-hydrate identity from the last response.
+        const staff = readStoredStaff();
+        const restaurant = readStoredRestaurant();
+        if (staff && restaurant) {
+          completeLogin({ accessToken: getValidAccessToken(), staff, restaurant, tokens: { expires_in: 15 * 60 } });
+        }
+        return;
       }
+
+      const data = await refreshOwnerSession();
+      if (!data || !data.staff) return;
+      completeLogin({
+        ...data,
+        accessToken: data.access_token || data.accessToken,
+      });
+    } catch (err) {
+      console.warn('[Auth] Session bootstrap failed:', err);
+    } finally {
+      setSessionBootstrapping(false);
     }
+  };
+
+  useEffect(() => {
+    bootstrapSession();
+    // Mount only: bootstrap must never re-run on a state change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -696,6 +759,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       currentUser, orders, drivers, tables, sections, servers, transactions, expenses, reservations, menuItems, menuCategories, customers, vendors,
+      sessionBootstrapping,
       setupRequired, clearSetupRequired: () => setSetupRequired(null),
       onboardingState, setOnboardingState,
       connectionStatus, lastSyncAt, notifications, activeView, loading, isRestaurantLoading, orderToEdit,
@@ -983,7 +1047,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 // --- 3. THE UI CONTENT WRAPPER ---
 const AppContent = () => {
-  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, activeSession, setupRequired, clearSetupRequired, onboardingState, setOnboardingState } = useAppContext();
+  const { currentUser, activeView, setActiveView, login, logout, notifications, fetchInitialData, loading, orders, tables, activeSession, setupRequired, clearSetupRequired, onboardingState, setOnboardingState, sessionBootstrapping } = useAppContext();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  // Public pre-auth routes. '/' is onboarding, '/login' is owner sign-in.
+  const publicRoute = (pathname || '/').replace(/\/+$/, '') || '/';
   const isMobile = useIsMobile();
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [showSessionModal, setShowSessionModal] = useState(false);
@@ -1068,10 +1136,35 @@ const AppContent = () => {
 
   if (!currentUser) {
     const existingRestaurantId = localStorage.getItem('restaurant_id');
+
+    // Task 03f: while the silent session bootstrap runs, show a neutral loading
+    // screen — never the login form, which would flash on every reload.
+    if (sessionBootstrapping) {
+      return (
+        <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center gap-4">
+          <div className="w-10 h-10 rounded-full border-2 border-slate-800 border-t-gold-500 animate-spin" />
+          <p className="text-xs uppercase tracking-widest text-slate-500">Restoring your session…</p>
+        </div>
+      );
+    }
+
+    // #/login — owner sign-in for a returning owner on a fresh browser. Owner
+    // login resolves the tenant from users + memberships, so no stored tenant is
+    // required; a 2+ membership account still gets the restaurant picker.
+    if (publicRoute === '/login') {
+      return (
+        <LoginView
+          onLogin={login}
+          onCreateNew={() => navigate('/')}
+        />
+      );
+    }
+
     if (!existingRestaurantId) {
       // No tenant context — show self-service onboarding landing page
       return (
           <RestaurantLanding
+              onSignIn={() => navigate('/login')}
               onAccountCreated={(data) => {
                   setOnboardingState({
                       restaurantId: data.restaurant_id,

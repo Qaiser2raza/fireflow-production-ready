@@ -876,6 +876,7 @@ model restaurants {
   stock_movements         stock_movements[]
   stock_counts            stock_counts[]
   memberships             memberships[]
+  user_sessions           user_sessions[]
   outbox                  outbox[]
 
   @@index([slug])
@@ -1801,11 +1802,17 @@ model user_sessions {
   created_at            DateTime            @default(now()) @db.Timestamp(6)
   user_agent            String?             @db.VarChar(255)
   ip_address            String?             @db.VarChar(45)
+  // Task 03b: the session is bound to exactly one restaurant. Nullable only so
+  // pre-03b rows can exist during rollout; a NULL row is treated as invalid and
+  // forces re-login (never resolved from memberships).
+  restaurant_id         String?             @db.Uuid
 
   user                  users               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  restaurant            restaurants?        @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
   @@index([token_family_id])
   @@index([refresh_token_hash])
+  @@index([restaurant_id])
 }
 

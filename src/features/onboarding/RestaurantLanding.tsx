@@ -5,9 +5,11 @@ const PASSWORD_MIN_LENGTH = 10;
 
 interface RestaurantLandingProps {
   onAccountCreated: (data: { restaurant_id: string; setup_token: string; temporary_pin: string }) => void;
+  /** Shown only when provided: returning owners sign in instead of re-onboarding. */
+  onSignIn?: () => void;
 }
 
-export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountCreated }) => {
+export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountCreated, onSignIn }) => {
     const [formData, setFormData] = useState({
         restaurantName: '',
         ownerName: '',
@@ -271,6 +273,19 @@ export const RestaurantLanding: React.FC<RestaurantLandingProps> = ({ onAccountC
                         By creating a workspace, you agree to FireFlow's terms. A one-time POS PIN is displayed afterwards for
                         staff devices — store it securely.
                     </p>
+
+                    {onSignIn && (
+                        <div className="mt-4 pt-4 border-t border-slate-800 text-center">
+                            <span className="text-xs text-slate-500">Already have an account?</span>{' '}
+                            <button
+                                type="button"
+                                onClick={onSignIn}
+                                className="text-xs font-bold text-gold-500 hover:text-gold-400 transition-colors"
+                            >
+                                Sign in
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
