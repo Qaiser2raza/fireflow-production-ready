@@ -138,6 +138,27 @@ export class UserSessionService {
    * - expired token      -> { error: 'INVALID_REFRESH_TOKEN' }
    * - unbound session    -> whole family revoked, { error: 'SESSION_RESTAURANT_UNBOUND' }
    * - valid token        -> { token, session } for the newly issued session
+   *
+   * Task 03g (Phase B fix): the theft decision may no longer come from an
+   * unlocked pre-transaction read, because that read can land AFTER a
+   * concurrent rotation has committed — which made a legitimate duplicate
+   * (two tabs, StrictMode double mount, dev HMR) look like a stolen token and
+   * revoke the family, killing the successor that had just been created.
+   *
+   * The rotation itself stays authoritative: inside the transaction a
+   * conditional `updateMany ... where revoked_at = null` decides the single
+   * winner. The classification now separates the two cases by ORDERING, not by
+   * a grace window:
+   *
+   *   revoked BEFORE this request arrived  -> genuine replay: family revoked
+   *   revoked AT/AFTER this request arrived -> I raced a rotation that
+   *                                          succeeded: plain loser, no token
+   *
+   * The loser path issues nothing and touches nothing, so misclassifying an
+   * attacker who replays inside the same millisecond costs no access; the
+   * next attempt with the stale token is detected as replay as usual. There is
+   * no leeway, no flag and no extra column: replay of a token that was rotated
+   * before the request started still revokes the whole family.
    */
   async rotateUserRefreshToken(
     token: string
@@ -145,6 +166,9 @@ export class UserSessionService {
     | { error: 'INVALID_REFRESH_TOKEN' | 'TOKEN_REUSE_DETECTED' | 'SESSION_RESTAURANT_UNBOUND' }
     | { token: string; session: UserSessionRecord }
   > {
+    // Captured before any database work: everything below is "this request".
+    const requestStartedAt = new Date();
+
     const existing = await this.findSessionByToken(token);
 
     if (!existing) {
@@ -152,7 +176,15 @@ export class UserSessionService {
     }
 
     if (existing.revokedAt) {
-      // Replay of a rotated token: assume theft and kill the family.
+      const racedSuccessfulRotation = existing.revokedAt.getTime() >= requestStartedAt.getTime();
+      if (racedSuccessfulRotation) {
+        // Lost the race: another request rotated this token while mine was in
+        // flight. It holds the successor; I get nothing and the family lives.
+        return { error: 'INVALID_REFRESH_TOKEN' };
+      }
+
+      // Replay of a token that was already revoked when this request arrived:
+      // assume theft and kill the family.
       await this.revokeUserSessionFamily(existing.tokenFamilyId);
       return { error: 'TOKEN_REUSE_DETECTED' };
     }
@@ -174,6 +206,9 @@ export class UserSessionService {
     const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
     const created = await prisma.$transaction(async (tx) => {
+      // Authoritative single-winner claim: only the transaction that flips
+      // revoked_at from NULL may create the successor. A concurrent loser gets
+      // count === 0 and leaves the family untouched.
       const revoked = await tx.user_sessions.updateMany({
         where: { id: existing.id, revoked_at: null },
         data: { revoked_at: new Date() },

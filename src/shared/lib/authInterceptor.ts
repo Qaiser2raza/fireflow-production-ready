@@ -36,6 +36,24 @@ function getAccessToken(): string | null {
 }
 
 /**
+ * Task 03g (P2): a 410 means "this access token expired", not "the session is
+ * dead". It therefore enters the same single-refresh/single-retry path as a 401
+ * and only ends the session when that refresh actually fails.
+ *
+ * `session:expired` is emitted at most once per dead session, so a page full of
+ * parallel requests cannot spam the event (and re-trigger the logout UI).
+ */
+let sessionExpiredEmitted = false;
+
+function terminateSession(reason: string): void {
+  markSessionTerminated();
+  if (sessionExpiredEmitted) return;
+  sessionExpiredEmitted = true;
+  console.error(`[Auth] Session terminated: ${reason}`);
+  window.dispatchEvent(new CustomEvent('session:expired'));
+}
+
+/**
  * SUPER_ADMIN: Set the target restaurant for subsequent API calls.
  * When set, all fetchWithAuth calls will include the x-target-restaurant header,
  * allowing SUPER_ADMIN to act on behalf of any restaurant.
@@ -70,10 +88,6 @@ export async function fetchWithAuth(
     ...(options.headers as Record<string, string>)
   };
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
   // SUPER_ADMIN: attach target restaurant header if set
   if (targetRestaurantId) {
     headers['x-target-restaurant'] = targetRestaurantId;
@@ -82,7 +96,7 @@ export async function fetchWithAuth(
   // Cashier Session Audit Headers
   const sessionId = localStorage.getItem('x-session-id');
   const terminalId = localStorage.getItem('x-terminal-id') || sessionStorage.getItem('x-terminal-id');
-  
+
   if (sessionId) {
     headers['x-session-id'] = sessionId;
   }
@@ -90,29 +104,37 @@ export async function fetchWithAuth(
     headers['x-terminal-id'] = terminalId;
   }
 
-  let response = await fetch(url, { ...options, headers });
+  // Plain fetch, never this function: the retry below must not recurse.
+  const send = (bearer: string | null): Promise<Response> => {
+    const attemptHeaders = { ...headers };
+    if (bearer) {
+      attemptHeaders['Authorization'] = `Bearer ${bearer}`;
+    } else {
+      delete attemptHeaders['Authorization'];
+    }
+    return fetch(url, { ...options, headers: attemptHeaders });
+  };
 
-  // If we get 401, refresh once and retry the request exactly once.
-  if (response.status === 401) {
-    console.log('[Auth] Got 401, attempting token refresh...');
+  let response = await send(token);
+
+  // 401 (invalid/missing credentials) and 410 (access token expired) mean the
+  // same thing to this client: get one new access token and try once more.
+  // Exactly one refresh per call, so a dead session cannot loop.
+  if (response.status === 401 || response.status === 410) {
+    const expired = response.status === 410;
+    console.log(`[Auth] Got ${response.status}, attempting token refresh...`);
+
     const newToken = await refreshAccessToken();
 
     if (newToken) {
-      headers['Authorization'] = `Bearer ${newToken}`;
-      response = await fetch(url, { ...options, headers });
+      // A live session again: the earlier expiry notice no longer applies.
+      sessionExpiredEmitted = false;
+      token = newToken;
+      response = await send(token);
     } else {
-      // Refresh failed: end the session and stop any in-flight bootstrap.
-      markSessionTerminated();
-      console.error('[Auth] Token refresh failed, session cleared');
+      // Refresh failed: the session really is over.
+      terminateSession(expired ? 'refresh rejected after token expiry' : 'refresh rejected');
     }
-  }
-
-  // Handle 410 Gone (Session Expired)
-  if (response.status === 410) {
-    console.error('[Auth] Session expired (410)');
-    markSessionTerminated();
-    window.dispatchEvent(new CustomEvent('session:expired'));
-    return response;
   }
 
   return response;
@@ -139,6 +161,7 @@ export async function clearAuthSession(): Promise<void> {
     // Bumps the session generation so a bootstrap that is already in flight
     // cannot restore the session the user just ended.
     markSessionTerminated();
+    sessionExpiredEmitted = false;
     localStorage.removeItem('restaurant_id');
     localStorage.removeItem('currentRestaurant');
   }

@@ -35,21 +35,73 @@ export interface OwnerSessionPayload {
 let inflightRefresh: Promise<OwnerSessionPayload | null> | null = null;
 let sessionGeneration = 0;
 
-/** Returns the stored access token only while it is still inside its window. */
+/**
+ * Reads the `exp` claim of an access token WITHOUT verifying the signature.
+ *
+ * The server is always the authority on validity; this only tells the client
+ * when to stop sending a token. A token whose payload cannot be read, or that
+ * carries no `exp`, is treated as unusable — never as "probably fine".
+ */
+export function readAccessTokenExpiry(token: string | null | undefined): number | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(normalized));
+    const exp = payload?.exp;
+    if (typeof exp !== 'number' || !Number.isFinite(exp)) return null;
+    return exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stores an access token with the expiry the TOKEN itself declares.
+ *
+ * Task 03g (P1): a token found in storage must never be re-armed to
+ * "now + 15 minutes". The old code did exactly that on every mount, so an
+ * already-expired JWT kept being sent and the server answered 410 forever.
+ * A token with no readable `exp` is not stored at all (fail closed).
+ */
+export function storeAccessToken(token: string | null | undefined): boolean {
+  const expiry = readAccessTokenExpiry(token);
+  if (!token || expiry === null) {
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+    localStorage.removeItem(ACCESS_EXPIRY_KEY);
+    return false;
+  }
+  localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  localStorage.setItem(ACCESS_EXPIRY_KEY, String(expiry));
+  return true;
+}
+
+/**
+ * Returns the stored access token only while the token itself says it is alive.
+ * A missing `accessTokenExpiry` is treated as expired, not as "valid forever".
+ */
 export function getValidAccessToken(): string | null {
   const token = localStorage.getItem(ACCESS_TOKEN_KEY);
   if (!token) return null;
-  const expiry = localStorage.getItem(ACCESS_EXPIRY_KEY);
-  if (expiry && Date.now() > parseInt(expiry)) return null;
+
+  const tokenExpiry = readAccessTokenExpiry(token);
+  if (tokenExpiry === null) return null;
+  if (Date.now() >= tokenExpiry) return null;
+
+  // A stored hint may only shorten the window, never extend it.
+  const hint = localStorage.getItem(ACCESS_EXPIRY_KEY);
+  if (hint) {
+    const hintMs = Number(hint);
+    if (Number.isFinite(hintMs) && Date.now() >= hintMs) return null;
+  }
   return token;
 }
 
 function storeTokens(payload: OwnerSessionPayload): void {
   const token = payload.access_token || payload.accessToken;
   if (typeof token === 'string' && token) {
-    localStorage.setItem(ACCESS_TOKEN_KEY, token);
-    const expiresIn = typeof payload.expires_in === 'number' ? payload.expires_in : 15 * 60;
-    localStorage.setItem(ACCESS_EXPIRY_KEY, String(Date.now() + expiresIn * 1000));
+    storeAccessToken(token);
   }
   if (typeof payload.refresh_token === 'string' && payload.refresh_token) {
     localStorage.setItem(REFRESH_TOKEN_KEY, payload.refresh_token);

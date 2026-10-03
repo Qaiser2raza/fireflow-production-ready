@@ -55,6 +55,7 @@ import {
   hasValidAccessToken,
   markSessionTerminated,
   refreshOwnerSession,
+  storeAccessToken,
 } from '../shared/lib/ownerSession';
 
 // --- 1. CONTEXT DEFINITION ---
@@ -305,13 +306,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // `refreshToken` is absent there and the session module refreshes with the
     // cookie instead.
     if (data.accessToken) {
-      localStorage.setItem('accessToken', data.accessToken);
+      // Task 03g (P1): the session module derives the stored expiry from the
+      // token's own `exp`. Re-arming it to "now + 15 minutes" here is what made
+      // an expired JWT keep being sent (server 410) after every reload.
+      storeAccessToken(data.accessToken);
       if (data.refreshToken) {
         localStorage.setItem('refreshToken', data.refreshToken);
       }
       localStorage.setItem('staff', JSON.stringify(user));
-      const expiryTime = Date.now() + ((data.tokens?.expires_in || 15 * 60) * 1000);
-      localStorage.setItem('accessTokenExpiry', expiryTime.toString());
     }
 
     // Phase 2b: forced-setup sessions go to the wizard instead of the app.
@@ -418,10 +420,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (hasValidAccessToken()) {
         // Access token is still good: re-hydrate identity from the last response.
+        // No synthetic `expires_in` here — a stored token is re-stored with the
+        // expiry it declares, never with a fresh 15-minute window (Task 03g).
         const staff = readStoredStaff();
         const restaurant = readStoredRestaurant();
         if (staff && restaurant) {
-          completeLogin({ accessToken: getValidAccessToken(), staff, restaurant, tokens: { expires_in: 15 * 60 } });
+          completeLogin({ accessToken: getValidAccessToken(), staff, restaurant });
         }
         return;
       }
