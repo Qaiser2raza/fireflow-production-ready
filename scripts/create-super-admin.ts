@@ -15,7 +15,7 @@ async function createSuperAdmin() {
             address: 'System Management',
             phone: '0000000000',
             is_active: true,
-            subscription_status: 'active',
+            subscription_status: 'ACTIVE',
             subscription_plan: 'PREMIUM',
         },
     });

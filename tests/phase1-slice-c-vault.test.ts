@@ -8,6 +8,7 @@
 //  - invite rows carry exactly the fields the Vault renders
 //  - retry authorization: MANAGER rejected; already-SENT refused
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 
@@ -55,8 +56,8 @@ async function main() {
 
     // ========== 2. LIVE CONTRACT SHAPES ==========
     const ts = Date.now();
-    const rVault = await prisma.restaurants.create({ data: { name: `P1C_VAULT_${ts}`, slug: `p1c-vault-${ts}`, subscription_status: 'active' } });
-    const rMgr = await prisma.restaurants.create({ data: { name: `P1C_MGR_${ts}`, slug: `p1c-mgr-${ts}`, subscription_status: 'active' } });
+    const rVault = await prisma.restaurants.create({ data: { name: `P1C_VAULT_${ts}`, slug: `p1c-vault-${ts}`, subscription_status: ACTIVE } });
+    const rMgr = await prisma.restaurants.create({ data: { name: `P1C_MGR_${ts}`, slug: `p1c-mgr-${ts}`, subscription_status: ACTIVE } });
     const sa = await prisma.staff.create({ data: { restaurant_id: rVault.id, name: 'SuperC', role: 'SUPER_ADMIN', pin: '', hashed_pin: await bcrypt.hash('121212', 10), status: 'active' } });
     const mgr = await prisma.staff.create({ data: { restaurant_id: rMgr.id, name: 'MgrC', role: 'MANAGER', pin: '', hashed_pin: await bcrypt.hash('333444', 10), status: 'active' } });
 

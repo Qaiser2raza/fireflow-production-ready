@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { CashierSessionService } from '../src/api/services/finance/CashierSessionService.js';
@@ -18,7 +19,7 @@ async function main() {
     console.log('--- STARTING F-06 SESSION-CLOSE JOURNAL BLOCKING ---');
     const ts = Date.now();
     const restaurant = await prisma.restaurants.create({
-        data: { name: 'F06 Test', slug: `f06-${ts}`, currency: 'PKR', phone: '03000000000', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: 'ACTIVE' }
+        data: { name: 'F06 Test', slug: `f06-${ts}`, currency: 'PKR', phone: '03000000000', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: ACTIVE }
     });
     const rid = restaurant.id;
     const hash = await bcrypt.hash('111111', 10);

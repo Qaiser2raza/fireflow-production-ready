@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
@@ -35,7 +36,7 @@ async function setupFixtures() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             subscription_plan: 'BASIC',
-            subscription_status: 'ACTIVE'
+            subscription_status: ACTIVE
         }
     });
 
@@ -48,7 +49,7 @@ async function setupFixtures() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             subscription_plan: 'BASIC',
-            subscription_status: 'ACTIVE'
+            subscription_status: ACTIVE
         }
     });
 

@@ -8,6 +8,7 @@
  */
 
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 process.env.NODE_ENV = 'test';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
@@ -74,7 +75,7 @@ async function setup() {
         name: 'M033-B Tenant',
         slug: `m033b-tenant-${Date.now()}`,
         subscriptionPlan: 'BASIC',
-        subscriptionStatus: 'active',
+        subscriptionStatus: ACTIVE,
         ownerName: 'Owner M033B',
         ownerEmail: `m033b-${Date.now()}@test.fireflow`,
     });

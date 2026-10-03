@@ -160,7 +160,7 @@ async function main() {
 
         // Ensure tenant exists (foreign key requirement)
         let rA = await prisma.restaurants.findUnique({ where: { id: LICENSED_TENANT } });
-        if (!rA) rA = await prisma.restaurants.create({ data: { id: LICENSED_TENANT, name: 'Fireflow Restaurant', slug: 'fireflow-restaurant-' + Date.now(), subscription_status: 'active' } });
+        if (!rA) rA = await prisma.restaurants.create({ data: { id: LICENSED_TENANT, name: 'Fireflow Restaurant', slug: 'fireflow-restaurant-' + Date.now(), subscription_status: 'ACTIVE' } });
 
         // Ensure manager exists with PIN '654321'
         const existingStaff = await prisma.staff.findFirst({

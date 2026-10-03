@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { Request, Response } from 'express';
 import { authMiddleware, requireRole } from '../src/api/middleware/authMiddleware';
 import { platformAuthMiddleware, requirePlatformRole } from '../src/api/middleware/platformAuthMiddleware';
@@ -69,7 +70,7 @@ async function runTests() {
         name: 'Boundary Test Restaurant',
         slug: 'boundary-test-' + Date.now(),
         subscriptionPlan: 'BASIC',
-        subscriptionStatus: 'active',
+        subscriptionStatus: ACTIVE,
         ownerName: 'Boundary Owner',
         ownerEmail: `boundary-${Date.now()}@test.fireflow`,
     });

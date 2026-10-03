@@ -7,6 +7,7 @@
 //  - authoritative logout revocation + preserved token-family reuse detection
 //  - verify-pin tenant binding from auth context (body tenant is ignored)
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
@@ -33,7 +34,7 @@ type Sockets = { sA?: any; sB?: any; sG?: any };
 
 async function main() {
     // ---------- FIXTURES ----------
-    const mk = (n: string) => prisma.restaurants.create({ data: { name: n, slug: `m016b-${n.toLowerCase()}-${Date.now()}`, subscription_status: 'active' } });
+    const mk = (n: string) => prisma.restaurants.create({ data: { name: n, slug: `m016b-${n.toLowerCase()}-${Date.now()}`, subscription_status: ACTIVE } });
     const rA = await mk('M016B_A'), rB = await mk('M016B_B');
     const hash = (p: string) => bcrypt.hash(p, 10);
     const mgrA = await prisma.staff.create({ data: { restaurant_id: rA.id, name: 'MgrA', role: 'MANAGER', pin: '', hashed_pin: await hash('654321'), status: 'active' } });

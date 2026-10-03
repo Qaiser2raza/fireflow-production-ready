@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
@@ -57,10 +58,10 @@ async function main() {
     const ts = Date.now();
 
     const rA = await prisma.restaurants.create({
-        data: { name: `M021 Alpha ${ts}`, slug: `m021-a-${ts}`, currency: 'PKR', phone: '03', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: 'ACTIVE', order_flow_mode: 'STANDARD', kitchen_gate_enforced: false },
+        data: { name: `M021 Alpha ${ts}`, slug: `m021-a-${ts}`, currency: 'PKR', phone: '03', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: ACTIVE, order_flow_mode: 'STANDARD', kitchen_gate_enforced: false },
     });
     const rB = await prisma.restaurants.create({
-        data: { name: `M021 Beta ${ts}`, slug: `m021-b-${ts}`, currency: 'PKR', phone: '03', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: 'ACTIVE', order_flow_mode: 'STANDARD', kitchen_gate_enforced: false },
+        data: { name: `M021 Beta ${ts}`, slug: `m021-b-${ts}`, currency: 'PKR', phone: '03', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: ACTIVE, order_flow_mode: 'STANDARD', kitchen_gate_enforced: false },
     });
     const ridA = rA.id;
     await seedCOA(ridA);

@@ -448,26 +448,20 @@ app.get('/api/licensing/status', async (req, res) => {
             verification = await LicenseService.evaluateUnboundLicenseStatus();
         }
 
-        // Synchronize local database meta strings on check (only when bound)
+        // Task 04: license.lic is informational only. It must not write
+        // restaurants.subscription_status — the restaurants row is the single
+        // source of truth and access is derived from dates by getTenantAccess().
+        // Only the plan/expiry the license carries are mirrored.
         if (activeRestaurant && verification.status === 'active' && verification.payload) {
-            const currentDbStatus = activeRestaurant.subscription_status;
             const currentDbPlan = activeRestaurant.subscription_plan;
 
-            if (currentDbStatus !== 'active' || currentDbPlan !== verification.payload.plan) {
+            if (currentDbPlan !== verification.payload.plan) {
                 await prisma.restaurants.update({
                     where: { id: activeRestaurant.id },
                     data: {
-                        subscription_status: 'active',
                         subscription_plan: verification.payload.plan,
                         subscription_expires_at: new Date(verification.payload.subscription_expires_at)
                     }
-                });
-            }
-        } else if (activeRestaurant && (verification.status === 'expired' || verification.status === 'tampered')) {
-            if (activeRestaurant.subscription_status !== 'expired') {
-                await prisma.restaurants.update({
-                    where: { id: activeRestaurant.id },
-                    data: { subscription_status: 'expired' }
                 });
             }
         }
@@ -539,8 +533,7 @@ app.post('/api/licensing/sync', async (req, res) => {
 
         await prisma.restaurants.update({
             where: { id: activeRestaurant.id },
-            data: { 
-                subscription_status: 'active',
+            data: {
                 subscription_plan: payload.plan,
                 subscription_expires_at: new Date(payload.subscription_expires_at)
             }
@@ -1573,6 +1566,7 @@ async function handleUserSessionRefresh(req: any, res: any, cookieToken: string)
             staff,
             restaurant: resolution.restaurant,
             lastLogin: staff.last_login,
+            tenantAccess: resolution.tenantAccess,
         });
 
         await prisma.audit_logs.create({

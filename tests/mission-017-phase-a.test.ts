@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { JwtService } from '../src/api/services/auth/JwtService.js';
@@ -59,7 +60,7 @@ async function main() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             subscription_plan: 'BASIC',
-            subscription_status: 'ACTIVE',
+            subscription_status: ACTIVE,
         },
     });
     const rid = restaurant.id;

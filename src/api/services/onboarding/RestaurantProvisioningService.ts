@@ -1,9 +1,11 @@
 // src/api/services/onboarding/RestaurantProvisioningService.ts
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
+import { SubscriptionStatus } from '@prisma/client';
 import { platformAuthService } from '../platform/PlatformAuthService';
 import { EmailVerificationService } from '../EmailVerificationService';
 import { BCRYPT_COST } from '../../controllers/AuthController';
+import { getTrialDays } from '../tenant/getTenantAccess';
 import { prisma } from '../../../shared/lib/prisma';
 
 /** Owner-chosen password minimum length (matches the signup form rules). */
@@ -60,7 +62,7 @@ export class RestaurantProvisioningService {
     address?: string;
     city?: string;
     subscriptionPlan?: 'BASIC' | 'STANDARD' | 'PREMIUM' | 'ENTERPRISE';
-    subscriptionStatus?: 'trial' | 'active';
+    subscriptionStatus?: SubscriptionStatus;
     ownerName: string;
     ownerEmail: string;
     ownerPhone?: string;
@@ -78,12 +80,19 @@ export class RestaurantProvisioningService {
     const normalizedEmail = platformAuthService.normalizeEmail(data.ownerEmail);
     const slug = data.slug || this.generateSlug(data.name);
     const subscriptionPlan = data.subscriptionPlan || 'BASIC';
-    const subscriptionStatus = data.subscriptionStatus || 'trial';
+    // Task 04: the restaurants row is the single source of truth for status. An
+    // unrecognized value from an untyped caller (e.g. a request body) can never be
+    // written; a new tenant always starts in TRIAL.
+    const subscriptionStatus =
+      data.subscriptionStatus && Object.values(SubscriptionStatus).includes(data.subscriptionStatus)
+        ? data.subscriptionStatus
+        : SubscriptionStatus.TRIAL;
     const now = new Date();
     const pinExpiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
+    // 14-day trial by default. Access is derived from this date on read.
     const trialEndsAt = new Date(now);
-    trialEndsAt.setDate(trialEndsAt.getDate() + 30);
+    trialEndsAt.setDate(trialEndsAt.getDate() + getTrialDays());
 
     const subscriptionExpiresAt = new Date(now);
     subscriptionExpiresAt.setMonth(subscriptionExpiresAt.getMonth() + 1);
@@ -126,7 +135,7 @@ export class RestaurantProvisioningService {
             onboarding_status: 'SETUP_INCOMPLETE',
             subscription_plan: subscriptionPlan,
             subscription_status: subscriptionStatus,
-            subscription_expires_at: subscriptionStatus === 'active' ? subscriptionExpiresAt : null,
+            subscription_expires_at: subscriptionStatus === SubscriptionStatus.ACTIVE ? subscriptionExpiresAt : null,
             trial_ends_at: trialEndsAt,
             created_at: now,
             updated_at: now,
@@ -363,7 +372,7 @@ export class RestaurantProvisioningService {
       address: '123 Main Street, Clifton',
       city: 'Karachi',
       subscriptionPlan: 'PREMIUM',
-      subscriptionStatus: 'active',
+      subscriptionStatus: SubscriptionStatus.ACTIVE,
       ownerName: 'Demo Owner',
       ownerEmail: 'demo@fireflow.restaurant',
       ownerPhone: '+92-300-1234567',

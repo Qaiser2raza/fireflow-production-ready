@@ -36,7 +36,7 @@ async function main() {
             slug: 'demo-restaurant',
             phone: '0300-1234567',
             address: '123 Demo Street, Tech City',
-            subscription_status: 'active',
+            subscription_status: 'ACTIVE',
             subscription_plan: 'ENTERPRISE',
             created_at: new Date(),
             updated_at: new Date()

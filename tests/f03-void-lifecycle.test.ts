@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -38,7 +39,7 @@ async function patchOrder(orderId: string, body: object, token: string) {
 async function setup() {
     const ts = Date.now();
     const restaurant = await prisma.restaurants.create({
-        data: { name: 'Void Test Restaurant', slug: `void-test-${ts}`, phone: '03001234567', address: 'Test', currency: 'PKR', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: 'ACTIVE' }
+        data: { name: 'Void Test Restaurant', slug: `void-test-${ts}`, phone: '03001234567', address: 'Test', currency: 'PKR', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: ACTIVE }
     });
     const rid = restaurant.id;
     await prisma.order_type_defaults.create({

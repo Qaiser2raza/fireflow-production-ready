@@ -13,6 +13,7 @@
 //  7. error codes stay distinct: PIN_EXPIRED ≠ PIN_CHANGE_REQUIRED ≠
 //     SETUP_INCOMPLETE ≠ ALREADY_ACTIVE
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 
@@ -37,9 +38,9 @@ async function main() {
     const ts = Date.now();
 
     // ---------- FIXTURES ----------
-    const rVault = await prisma.restaurants.create({ data: { name: `P2_VAULT_${ts}`, slug: `p2-vault-${ts}`, subscription_status: 'active' } });
-    const rMgrT = await prisma.restaurants.create({ data: { name: `P2_MGR_${ts}`, slug: `p2-mgr-${ts}`, subscription_status: 'active' } });
-    const rLegacy = await prisma.restaurants.create({ data: { name: `P2_LEGACY_${ts}`, slug: `p2-legacy-${ts}`, subscription_status: 'active' } });
+    const rVault = await prisma.restaurants.create({ data: { name: `P2_VAULT_${ts}`, slug: `p2-vault-${ts}`, subscription_status: ACTIVE } });
+    const rMgrT = await prisma.restaurants.create({ data: { name: `P2_MGR_${ts}`, slug: `p2-mgr-${ts}`, subscription_status: ACTIVE } });
+    const rLegacy = await prisma.restaurants.create({ data: { name: `P2_LEGACY_${ts}`, slug: `p2-legacy-${ts}`, subscription_status: ACTIVE } });
     const sa = await prisma.staff.create({ data: { restaurant_id: rVault.id, name: 'SuperP2', role: 'SUPER_ADMIN', pin: '', hashed_pin: await bcrypt.hash('121212', 10), status: 'active' } });
     const plainMgr = await prisma.staff.create({ data: { restaurant_id: rMgrT.id, name: 'PlainMgrP2', role: 'MANAGER', pin: '', hashed_pin: await bcrypt.hash('333444', 10), status: 'active' } });
     // Legacy-style staff on pre-migration tenant: no flags set at all

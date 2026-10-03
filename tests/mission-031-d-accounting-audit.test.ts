@@ -10,6 +10,7 @@
  * ──────────────────────────────────────────────────────────────────────────
  */
 import { PrismaClient } from '@prisma/client';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { Decimal } from '@prisma/client/runtime/library';
 import { purchaseOrderReceiveService } from '../src/api/services/inventory/PurchaseOrderReceiveService';
 import { inventoryConsumptionService } from '../src/api/services/inventory/InventoryConsumptionService';
@@ -43,7 +44,7 @@ async function setup() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             is_active: true,
-            subscription_status: 'ACTIVE',
+            subscription_status: ACTIVE,
             subscription_plan: 'BASIC',
         }
     });

@@ -7,6 +7,7 @@
  * disposable test database.
  */
 import './_test-db-guard';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { stockMovementService } from '../src/api/services/inventory/StockMovementService';
@@ -38,7 +39,7 @@ async function setup() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             is_active: true,
-            subscription_status: 'ACTIVE',
+            subscription_status: ACTIVE,
             subscription_plan: 'BASIC',
         }
     });
@@ -50,7 +51,7 @@ async function setup() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             is_active: true,
-            subscription_status: 'ACTIVE',
+            subscription_status: ACTIVE,
             subscription_plan: 'BASIC',
         }
     });

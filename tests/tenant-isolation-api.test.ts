@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { restaurantProvisioningService } from '../src/api/services/onboarding/RestaurantProvisioningService';
@@ -114,7 +115,7 @@ async function runTests() {
         name: 'Tenant Isolation A',
         slug: 'tenant-isolation-a',
         subscriptionPlan: 'BASIC',
-        subscriptionStatus: 'active',
+        subscriptionStatus: ACTIVE,
         ownerName: 'Owner A',
         ownerEmail: `isolation-a-${Date.now()}@test.fireflow`,
     });
@@ -123,7 +124,7 @@ async function runTests() {
         name: 'Tenant Isolation B',
         slug: 'tenant-isolation-b',
         subscriptionPlan: 'BASIC',
-        subscriptionStatus: 'active',
+        subscriptionStatus: ACTIVE,
         ownerName: 'Owner B',
         ownerEmail: `isolation-b-${Date.now()}@test.fireflow`,
     });

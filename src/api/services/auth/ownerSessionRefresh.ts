@@ -11,6 +11,12 @@
  * is unit-testable without booting the API server.
  */
 import { prisma as sharedPrisma } from '../../../shared/lib/prisma';
+import {
+    buildTenantAccessWarning,
+    getTenantAccess,
+    TenantNotFoundError,
+    type TenantAccess,
+} from '../tenant/getTenantAccess';
 import type { UserSessionRecord } from './UserSessionService';
 
 export type OwnerRefreshFailureCode =
@@ -20,7 +26,8 @@ export type OwnerRefreshFailureCode =
     | 'MEMBERSHIP_REVOKED'
     | 'STAFF_LINK_MISSING'
     | 'RESTAURANT_INACTIVE'
-    | 'STAFF_INACTIVE';
+    | 'STAFF_INACTIVE'
+    | 'TENANT_BLOCKED';
 
 export type OwnerRefreshResolution =
     | {
@@ -39,6 +46,8 @@ export type OwnerRefreshResolution =
             last_login: Date | null;
         };
         restaurant: { id: string; is_active: boolean; [key: string]: unknown };
+        /** Task 04: derived access for the session's tenant. */
+        tenantAccess: TenantAccess;
     }
     | {
         ok: false;
@@ -152,6 +161,36 @@ export async function resolveOwnerRefreshTarget(
         };
     }
 
+    // Task 04: tenant status / trial / grace. READ_ONLY (suspended) never rejects a
+    // refresh — the family survives so an upgraded tenant resumes without a new
+    // login. Only BLOCKED (is_active = false, or a tenant row that disappeared
+    // between the membership read and this one) ends the session.
+    let tenantAccess: TenantAccess;
+    try {
+        tenantAccess = await getTenantAccess(db, restaurantId);
+    } catch (err) {
+        if (err instanceof TenantNotFoundError) {
+            return {
+                ok: false,
+                code: 'TENANT_BLOCKED',
+                status: 403,
+                error: 'Restaurant is no longer available.',
+                revokeFamily: true,
+            };
+        }
+        throw err;
+    }
+
+    if (tenantAccess.mode === 'BLOCKED') {
+        return {
+            ok: false,
+            code: 'TENANT_BLOCKED',
+            status: 403,
+            error: 'This restaurant account is blocked. Please contact support.',
+            revokeFamily: true,
+        };
+    }
+
     return {
         ok: true,
         restaurantId,
@@ -168,6 +207,7 @@ export async function resolveOwnerRefreshTarget(
             last_login: staff.last_login,
         },
         restaurant: membership.restaurant,
+        tenantAccess,
     };
 }
 
@@ -192,7 +232,10 @@ export function buildOwnerSessionPayload(input: {
     restaurant: unknown;
     lastLogin?: Date | null;
     deviceTrusted?: boolean;
+    /** Task 04: derived tenant access. Adds a warning for GRACE / READ_ONLY. */
+    tenantAccess?: TenantAccess;
 }): Record<string, unknown> {
+    const tenantWarning = input.tenantAccess ? buildTenantAccessWarning(input.tenantAccess) : null;
     return {
         success: true,
         accessToken: input.accessToken,
@@ -210,6 +253,16 @@ export function buildOwnerSessionPayload(input: {
         },
         device: { trusted: Boolean(input.deviceTrusted), enrolled: Boolean(input.deviceTrusted) },
         restaurant: input.restaurant,
+        tenantAccess: input.tenantAccess
+            ? {
+                mode: input.tenantAccess.mode,
+                status: input.tenantAccess.status,
+                effectiveStatus: input.tenantAccess.effectiveStatus,
+                reason: input.tenantAccess.reason,
+                daysLeft: input.tenantAccess.daysLeft,
+            }
+            : null,
+        warning: tenantWarning,
         tokens: {
             access_token: input.accessToken,
             expires_in: 15 * 60,

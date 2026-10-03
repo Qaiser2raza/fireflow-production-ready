@@ -8,6 +8,11 @@ import { EmailVerificationService } from '../services/EmailVerificationService';
 import { refreshTokenService } from '../services/auth/RefreshTokenService';
 import { StaffDeviceService } from '../services/auth/StaffDeviceService';
 import { userSessionService, MAX_FAILED_LOGINS, ACCOUNT_LOCK_MINUTES } from '../services/auth/UserSessionService';
+import {
+  buildTenantAccessWarning,
+  getTenantAccess,
+  TENANT_ACCESS_BLOCKED_CODE,
+} from '../services/tenant/getTenantAccess';
 
 // Shared bcrypt cost for every credential hash in the system (login, reset,
 // provisioning). Provisioning imports this so identity hashes cannot drift.
@@ -305,6 +310,24 @@ export class AuthController {
         return;
       }
 
+      // Task 04: same tenant status / trial check as the owner paths. A suspended
+      // (READ_ONLY) tenant still signs in and sees the warning; only BLOCKED is
+      // rejected, and reads are never blocked here.
+      let tenantAccess = null;
+      try {
+        tenantAccess = await getTenantAccess(this.prisma, staff.restaurant_id);
+      } catch {
+        tenantAccess = null;
+      }
+
+      if (tenantAccess && tenantAccess.mode === 'BLOCKED') {
+        res.status(403).json({
+          error: 'This restaurant account is blocked. Please contact support.',
+          code: TENANT_ACCESS_BLOCKED_CODE,
+        });
+        return;
+      }
+
       // Check email verification status
       if (!staff.is_email_verified) {
         res.status(403).json({
@@ -429,6 +452,8 @@ export class AuthController {
         },
         device: { trusted: Boolean(device), enrolled: isPasswordMode && Boolean(device) },
         restaurant: staff.restaurants,
+        // Task 04: null for a fully entitled tenant, otherwise a banner payload.
+        warning: tenantAccess ? buildTenantAccessWarning(tenantAccess) : null,
         tokens: {
           access_token: accessToken,
           refresh_token: refreshToken,
@@ -667,8 +692,23 @@ export class AuthController {
       return;
     }
 
-    // TODO(Task 04): single tenant status / trial check belongs here — after the
-    // membership is resolved, before any session is issued.
+    // Task 04: the single tenant status / trial check — after the membership is
+    // resolved, before any session is issued. Only BLOCKED rejects; a suspended
+    // (READ_ONLY) or grace-period tenant still gets a session plus a warning.
+    let tenantAccess;
+    try {
+      tenantAccess = await getTenantAccess(this.prisma, membership.restaurant_id);
+    } catch {
+      tenantAccess = null;
+    }
+
+    if (tenantAccess && tenantAccess.mode === 'BLOCKED') {
+      res.status(403).json({
+        error: 'This restaurant account is blocked. Please contact support.',
+        code: TENANT_ACCESS_BLOCKED_CODE,
+      });
+      return;
+    }
 
     const accessToken = this.jwtService.generateAccessToken(
       staff.id,
@@ -731,6 +771,8 @@ export class AuthController {
       },
       device: { trusted: Boolean(device), enrolled: Boolean(device) },
       restaurant: membership.restaurant,
+      // Task 04: null for a fully entitled tenant, otherwise a banner payload.
+      warning: tenantAccess ? buildTenantAccessWarning(tenantAccess) : null,
       tokens: {
         access_token: accessToken,
         expires_in: 15 * 60,

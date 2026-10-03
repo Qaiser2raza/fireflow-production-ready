@@ -88,7 +88,7 @@ async function main() {
         // does not trigger the tamper lockout for an unlicensed throwaway tenant.
         const LICENSED_TENANT = 'b1972d7d-8374-4b55-9580-95a15f18f656';
         let rA = await prisma.restaurants.findUnique({ where: { id: LICENSED_TENANT } });
-        if (!rA) rA = await prisma.restaurants.create({ data: { id: LICENSED_TENANT, name: 'Fireflow Restaurant', slug: 'fireflow-restaurant', subscription_status: 'active' } });
+        if (!rA) rA = await prisma.restaurants.create({ data: { id: LICENSED_TENANT, name: 'Fireflow Restaurant', slug: 'fireflow-restaurant', subscription_status: 'ACTIVE' } });
         const smokeStaff = await prisma.staff.create({ data: { restaurant_id: rA.id, name: 'BrowseSmk Mgr', role: 'MANAGER', pin: '', hashed_pin: await bcrypt.hash('654321', 10), status: 'active' } });
 
         // ---------- launch headless Chrome ----------

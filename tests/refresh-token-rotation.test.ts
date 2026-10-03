@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { restaurantProvisioningService } from '../src/api/services/onboarding/RestaurantProvisioningService';
@@ -167,7 +168,7 @@ async function runTests() {
         name: 'Refresh Token Test Restaurant',
         slug: 'refresh-token-test-' + Date.now(),
         subscriptionPlan: 'BASIC',
-        subscriptionStatus: 'active',
+        subscriptionStatus: ACTIVE,
         ownerName: 'Refresh Owner',
         ownerEmail: `refresh-${Date.now()}@test.fireflow`,
     });
@@ -393,7 +394,7 @@ async function runTests() {
             name: 'Refresh Token Test B',
             slug: 'refresh-token-b-' + Date.now(),
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'active',
+            subscriptionStatus: ACTIVE,
             ownerName: 'Owner B',
             ownerEmail: `refresh-b-${Date.now()}@test.fireflow`,
         });

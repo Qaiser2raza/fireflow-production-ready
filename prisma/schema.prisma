@@ -790,6 +790,25 @@ model restaurant_features {
   restaurants   restaurants @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 }
 
+// Task 04: tenant lifecycle. The single source of truth is the restaurants row in
+// the main Postgres database. Supabase / license.lic never define this status.
+// TRIAL/PENDING_REVIEW/ACTIVE are FULL until their end date, GRACE is FULL with a
+// warning, SUSPENDED is READ_ONLY. Status is derived on read from
+// trial_ends_at / subscription_expires_at (see src/api/services/tenant).
+enum SubscriptionStatus {
+  TRIAL
+  PENDING_REVIEW
+  ACTIVE
+  GRACE
+  SUSPENDED
+}
+
+enum SubscriptionActorType {
+  SYSTEM
+  SUPER_ADMIN
+  OWNER
+}
+
 model restaurants {
   id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                    String
@@ -800,7 +819,7 @@ model restaurants {
   currency                String?                 @default("PKR")
   timezone                String?                 @default("Asia/Karachi")
   is_active               Boolean                 @default(true)
-  subscription_status     String                  @default("trial")
+  subscription_status     SubscriptionStatus      @default(TRIAL)
   subscription_plan       String                  @default("BASIC")
   created_at              DateTime                @default(now())
   updated_at              DateTime                @default(now())
@@ -878,8 +897,28 @@ model restaurants {
   memberships             memberships[]
   user_sessions           user_sessions[]
   outbox                  outbox[]
+  subscription_events     subscription_events[]
 
   @@index([slug])
+  @@index([subscription_status])
+}
+
+/// Task 04: append-only tenant status history. No route ever updates or deletes a
+/// row here; a status change writes the new status and its event in one transaction
+/// (setSubscriptionStatus).
+model subscription_events {
+  id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  restaurant_id  String                 @db.Uuid
+  from_status    SubscriptionStatus?
+  to_status      SubscriptionStatus
+  actor_type     SubscriptionActorType
+  actor_id       String?                @db.VarChar(255)
+  reason         String?
+  created_at     DateTime               @default(now()) @db.Timestamp(6)
+
+  restaurant     restaurants            @relation(fields: [restaurant_id], references: [id], onDelete: Restrict)
+
+  @@index([restaurant_id, created_at])
 }
 
 model rider_settlements {

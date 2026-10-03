@@ -2,6 +2,7 @@
  * M030-C Inventory Phase A Regression Tests
  */
 import { PrismaClient } from '@prisma/client';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { Decimal } from '@prisma/client/runtime/library';
 import { stockMovementService } from '../src/api/services/inventory/StockMovementService';
 import { purchaseOrderReceiveService } from '../src/api/services/inventory/PurchaseOrderReceiveService';
@@ -29,7 +30,7 @@ async function setup() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             is_active: true,
-            subscription_status: 'ACTIVE',
+            subscription_status: ACTIVE,
             subscription_plan: 'BASIC',
         }
     });
@@ -41,7 +42,7 @@ async function setup() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             is_active: true,
-            subscription_status: 'ACTIVE',
+            subscription_status: ACTIVE,
             subscription_plan: 'BASIC',
         }
     });

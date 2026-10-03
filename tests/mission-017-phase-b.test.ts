@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
@@ -41,7 +42,7 @@ async function makeTenant(name: string, ts: number) {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             subscription_plan: 'BASIC',
-            subscription_status: 'ACTIVE',
+            subscription_status: ACTIVE,
         },
     });
     const pin = '424242';

@@ -10,6 +10,7 @@
 //  - duplicate active-invitation prevention at the DB level
 //  - unbound license evaluation returns a well-formed verdict without a tenant row
 import 'dotenv/config';
+import { ACTIVE, TRIAL } from './helpers/tenantFixtures';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 
@@ -33,8 +34,8 @@ async function j(method: string, url: string, body?: any, token?: string) {
 async function main() {
     // ---------- FIXTURES ----------
     const ts = Date.now();
-    const rVault = await prisma.restaurants.create({ data: { name: `P1VAULT_${ts}`, slug: `p1-vault-${ts}`, subscription_status: 'active' } });
-    const rMgrT = await prisma.restaurants.create({ data: { name: `P1MGR_${ts}`, slug: `p1-mgr-${ts}`, subscription_status: 'active' } });
+    const rVault = await prisma.restaurants.create({ data: { name: `P1VAULT_${ts}`, slug: `p1-vault-${ts}`, subscription_status: ACTIVE } });
+    const rMgrT = await prisma.restaurants.create({ data: { name: `P1MGR_${ts}`, slug: `p1-mgr-${ts}`, subscription_status: ACTIVE } });
     const sa = await prisma.staff.create({ data: { restaurant_id: rVault.id, name: 'SuperA', role: 'SUPER_ADMIN', pin: '', hashed_pin: await bcrypt.hash('121212', 10), status: 'active' } });
     const mgr = await prisma.staff.create({ data: { restaurant_id: rMgrT.id, name: 'PlainMgr', role: 'MANAGER', pin: '', hashed_pin: await bcrypt.hash('333444', 10), status: 'active' } });
 
@@ -51,7 +52,7 @@ async function main() {
         const ok = await provision({
             name: `Phase1 Cafe ${ts}`, slug: `phase1-cafe-${ts}`,
             city: 'Karachi', owner_name: 'Cafe Owner', owner_email: ownerEmail,
-            subscription_plan: 'STANDARD', subscription_status: 'trial',
+            subscription_plan: 'STANDARD', subscription_status: TRIAL,
         }, superTok);
 
         assert('Provision returns 201', ok.status === 201, JSON.stringify(ok.data).slice(0, 200));

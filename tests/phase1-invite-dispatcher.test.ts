@@ -11,6 +11,7 @@
 //  - cloud mirror registration is idempotent per restaurant_id
 //  - SUPER_ADMIN-only retry/list routes; MANAGER rejected
 import 'dotenv/config';
+import { ACTIVE, TRIAL } from './helpers/tenantFixtures';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 
@@ -50,9 +51,9 @@ async function main() {
 
     // ---------- FIXTURES ----------
     const ts = Date.now();
-    const rVault = await prisma.restaurants.create({ data: { name: `P1B_VAULT_${ts}`, slug: `p1b-vault-${ts}`, subscription_status: 'active' } });
-    const rMgr = await prisma.restaurants.create({ data: { name: `P1B_MGR_${ts}`, slug: `p1b-mgr-${ts}`, subscription_status: 'active' } });
-    const rWork = await prisma.restaurants.create({ data: { name: `P1B_WORK_${ts}`, slug: `p1b-work-${ts}`, subscription_plan: 'STANDARD', subscription_status: 'trial' } });
+    const rVault = await prisma.restaurants.create({ data: { name: `P1B_VAULT_${ts}`, slug: `p1b-vault-${ts}`, subscription_status: ACTIVE } });
+    const rMgr = await prisma.restaurants.create({ data: { name: `P1B_MGR_${ts}`, slug: `p1b-mgr-${ts}`, subscription_status: ACTIVE } });
+    const rWork = await prisma.restaurants.create({ data: { name: `P1B_WORK_${ts}`, slug: `p1b-work-${ts}`, subscription_plan: 'STANDARD', subscription_status: TRIAL } });
     const sa = await prisma.staff.create({ data: { restaurant_id: rVault.id, name: 'SuperB', role: 'SUPER_ADMIN', pin: '', hashed_pin: await bcrypt.hash('121212', 10), status: 'active' } });
     const mgr = await prisma.staff.create({ data: { restaurant_id: rMgr.id, name: 'MgrB', role: 'MANAGER', pin: '', hashed_pin: await bcrypt.hash('333444', 10), status: 'active' } });
 

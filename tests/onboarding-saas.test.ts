@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE, TRIAL } from './helpers/tenantFixtures';
 import { PrismaClient, PlatformRole } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { restaurantProvisioningService } from '../src/api/services/onboarding/RestaurantProvisioningService';
@@ -113,7 +114,7 @@ async function runTests() {
             address: '123 Test St',
             city: 'Karachi',
             subscriptionPlan: 'STANDARD',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'Test Owner',
             ownerEmail: `provision-owner-${Date.now()}@test.fireflow`,
             ownerPhone: '+92-300-1111111',
@@ -126,8 +127,8 @@ async function runTests() {
         assert('Owner has PIN', !!result.ownerStaff?.temporary_pin, 'present', result.ownerStaff?.temporary_pin ? 'present' : 'missing');
         assert('PIN is 6 digits', result.ownerStaff?.temporary_pin?.length === 6, '6', `${result.ownerStaff?.temporary_pin?.length}`);
         assert('Subscription plan set', result.restaurant?.subscription_plan === 'STANDARD', 'STANDARD', result.restaurant?.subscription_plan);
-        assert('Trial status set', result.restaurant?.subscription_status === 'trial', 'trial', result.restaurant?.subscription_status);
-        assert('Trial ends in 30 days', !!result.restaurant?.trial_ends_at, 'present', result.restaurant?.trial_ends_at ? 'present' : 'missing');
+        assert('Trial status set', result.restaurant?.subscription_status === TRIAL, TRIAL, result.restaurant?.subscription_status);
+        assert('Trial ends in 14 days', !!result.restaurant?.trial_ends_at, 'present', result.restaurant?.trial_ends_at ? 'present' : 'missing');
 
         if (result.restaurant?.id) {
             await cleanupRestaurant(result.restaurant.id);
@@ -146,7 +147,7 @@ async function runTests() {
             name: 'Duplicate Slug Test 1',
             slug: 'duplicate-slug-test',
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'Owner 1',
             ownerEmail: `dup-slug-1-${Date.now()}@test.fireflow`,
         });
@@ -155,7 +156,7 @@ async function runTests() {
             name: 'Duplicate Slug Test 2',
             slug: 'duplicate-slug-test',
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'Owner 2',
             ownerEmail: `dup-slug-2-${Date.now()}@test.fireflow`,
         });
@@ -180,7 +181,7 @@ async function runTests() {
             name: 'Default Data Test',
             slug: 'default-data-test',
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'Default Owner',
             ownerEmail: `default-data-${Date.now()}@test.fireflow`,
         });
@@ -220,7 +221,7 @@ async function runTests() {
             name: 'Rollback Test 1',
             slug: rollbackSlug,
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'Rollback Owner 1',
             ownerEmail: `rollback-1-${Date.now()}@test.fireflow`,
         });
@@ -231,7 +232,7 @@ async function runTests() {
             name: 'Rollback Test 2',
             slug: rollbackSlug,
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'Rollback Owner 2',
             ownerEmail: `rollback-2-${Date.now()}@test.fireflow`,
         });
@@ -274,7 +275,7 @@ async function runTests() {
             assert('Demo name is correct', result.restaurant?.name === 'FireFlow Restaurant', 'FireFlow Restaurant', result.restaurant?.name);
             assert('Demo slug is correct', result.restaurant?.slug === 'fireflow-restaurant', 'fireflow-restaurant', result.restaurant?.slug);
             assert('Demo plan is PREMIUM', result.restaurant?.subscription_plan === 'PREMIUM', 'PREMIUM', result.restaurant?.subscription_plan);
-            assert('Demo status is active', result.restaurant?.subscription_status === 'active', 'active', result.restaurant?.subscription_status);
+            assert('Demo status is active', result.restaurant?.subscription_status === ACTIVE, ACTIVE, result.restaurant?.subscription_status);
 
             if (result.restaurant?.id) {
                 await cleanupRestaurant(result.restaurant.id);
@@ -294,7 +295,7 @@ async function runTests() {
             name: 'List Test Restaurant',
             slug: 'list-test-restaurant',
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'List Owner',
             ownerEmail: `list-test-${Date.now()}@test.fireflow`,
         });
@@ -325,7 +326,7 @@ async function runTests() {
             name: 'Suspend Test Restaurant',
             slug: 'suspend-test-restaurant',
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'active',
+            subscriptionStatus: ACTIVE,
             ownerName: 'Suspend Owner',
             ownerEmail: `suspend-test-${Date.now()}@test.fireflow`,
         });
@@ -367,7 +368,7 @@ async function runTests() {
             name: 'Plan Test Restaurant',
             slug: 'plan-test-restaurant',
             subscriptionPlan: 'PREMIUM',
-            subscriptionStatus: 'active',
+            subscriptionStatus: ACTIVE,
             ownerName: 'Plan Owner',
             ownerEmail: `plan-test-${Date.now()}@test.fireflow`,
         });
@@ -381,7 +382,7 @@ async function runTests() {
                 select: { subscription_plan: true, subscription_status: true },
             });
             assert('Plan persisted', restaurant?.subscription_plan === 'PREMIUM', 'PREMIUM', `${restaurant?.subscription_plan}`);
-            assert('Status persisted', restaurant?.subscription_status === 'active', 'active', `${restaurant?.subscription_status}`);
+            assert('Status persisted', restaurant?.subscription_status === ACTIVE, ACTIVE, `${restaurant?.subscription_status}`);
 
             await cleanupRestaurant(result.restaurant.id);
         }
@@ -399,7 +400,7 @@ async function runTests() {
             name: 'Audit Test Restaurant',
             slug: 'audit-test-restaurant',
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'Audit Owner',
             ownerEmail: `audit-test-${Date.now()}@test.fireflow`,
         });
@@ -435,7 +436,7 @@ async function runTests() {
             name: 'PIN Hash Test Restaurant',
             slug: 'pin-hash-test-restaurant',
             subscriptionPlan: 'BASIC',
-            subscriptionStatus: 'trial',
+            subscriptionStatus: TRIAL,
             ownerName: 'PIN Hash Owner',
             ownerEmail: `pin-hash-test-${Date.now()}@test.fireflow`,
         });

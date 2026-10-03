@@ -8,6 +8,7 @@
 //  - login payload exposes must_change_pin / onboarding_status for redirect
 //  - PIN_EXPIRED carries its distinct code for LoginView messaging
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 
@@ -51,7 +52,7 @@ async function main() {
 
     // ========== 2. LIVE CONTRACT SEQUENCE ==========
     const ts = Date.now();
-    const rVault = await prisma.restaurants.create({ data: { name: `P2W_VAULT_${ts}`, slug: `p2w-vault-${ts}`, subscription_status: 'active' } });
+    const rVault = await prisma.restaurants.create({ data: { name: `P2W_VAULT_${ts}`, slug: `p2w-vault-${ts}`, subscription_status: ACTIVE } });
     const sa = await prisma.staff.create({ data: { restaurant_id: rVault.id, name: 'SuperW', role: 'SUPER_ADMIN', pin: '', hashed_pin: await bcrypt.hash('121212', 10), status: 'active' } });
 
     const login = async (pin: string, rid: string, name?: string) =>
@@ -61,7 +62,7 @@ async function main() {
         const superTok: string = (await login('121212', rVault.id, 'SuperW')).data?.tokens?.access_token;
 
         // Expired-PIN holder on an ACTIVE legacy tenant
-        const rLegacy = await prisma.restaurants.create({ data: { name: `P2W_LEGACY_${ts}`, slug: `p2w-legacy-${ts}`, subscription_status: 'active' } });
+        const rLegacy = await prisma.restaurants.create({ data: { name: `P2W_LEGACY_${ts}`, slug: `p2w-legacy-${ts}`, subscription_status: ACTIVE } });
         const expiredStaff = await prisma.staff.create({
             data: {
                 restaurant_id: rLegacy.id, name: 'Expired Wizard Holder', role: 'CASHIER', pin: '',

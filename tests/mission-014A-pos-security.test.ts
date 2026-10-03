@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import { BaseOrderService } from '../src/api/services/orders/BaseOrderService.js';
 import { OrderServiceFactory } from '../src/api/services/orders/OrderServiceFactory.js';
@@ -38,7 +39,7 @@ async function setupFixtures() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             subscription_plan: 'BASIC',
-            subscription_status: 'ACTIVE'
+            subscription_status: ACTIVE
         }
     });
 
@@ -51,7 +52,7 @@ async function setupFixtures() {
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             subscription_plan: 'BASIC',
-            subscription_status: 'ACTIVE'
+            subscription_status: ACTIVE
         }
     });
 

@@ -39,7 +39,7 @@ async function smoke() {
     name: 'SMOKE TEST',
     slug: 'smoke-' + Date.now(),
     subscription_plan: 'BASIC',
-    subscription_status: 'trial',
+    subscription_status: 'TRIAL',
     monthly_fee: 0,
     currency: 'PKR',
   }, 'return=representation');

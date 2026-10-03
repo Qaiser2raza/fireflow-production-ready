@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ACTIVE } from './helpers/tenantFixtures';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
@@ -49,10 +50,10 @@ async function main() {
     const ts = Date.now();
 
     const restaurantA = await prisma.restaurants.create({
-        data: { name: 'M018 Audit', slug: `m018-a-${ts}`, currency: 'PKR', phone: '03000000000', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: 'ACTIVE' },
+        data: { name: 'M018 Audit', slug: `m018-a-${ts}`, currency: 'PKR', phone: '03000000000', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: ACTIVE },
     });
     const restaurantB = await prisma.restaurants.create({
-        data: { name: 'M018 Beta', slug: `m018-b-${ts}`, currency: 'PKR', phone: '03000000000', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: 'ACTIVE' },
+        data: { name: 'M018 Beta', slug: `m018-b-${ts}`, currency: 'PKR', phone: '03000000000', address: 'x', timezone: 'Asia/Karachi', subscription_plan: 'BASIC', subscription_status: ACTIVE },
     });
     const ridA = restaurantA.id;
     const ridB = restaurantB.id;
