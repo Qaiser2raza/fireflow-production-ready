@@ -25,6 +25,8 @@ interface RestaurantWithOwner {
   staffCount: number;
   orderCount: number;
   createdAt: string;
+  subscriptionExpiresAt?: string | null;
+  subscriptionStatusEnum?: string | null;
 }
 
 interface OwnerInviteRow {
@@ -42,6 +44,24 @@ interface OwnerInviteRow {
 // ==========================================
 // CONSTANTS
 // ==========================================
+
+// Task 04c: manual billing. The admin records the payment the customer actually
+// made; the backend owns every status and date decision. These lists mirror
+// MANUAL_PAYMENT_METHODS / MANUAL_PAYMENT_PERIOD_DAYS on the server.
+const PAYMENT_METHODS = [
+  { value: 'BANK_TRANSFER', label: 'Bank Transfer' },
+  { value: 'EASYPAISA', label: 'Easypaisa' },
+  { value: 'JAZZCASH', label: 'JazzCash' },
+  { value: 'CASH', label: 'Cash' },
+  { value: 'OTHER', label: 'Other' },
+] as const;
+
+const PAYMENT_PERIODS = [
+  { value: 30, label: '30 days' },
+  { value: 90, label: '90 days' },
+  { value: 180, label: '180 days' },
+  { value: 365, label: '365 days' },
+] as const;
 
 const PLAN_COSTS = {
   BASIC: 5000,
@@ -77,6 +97,17 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
   const [hardwareId, setHardwareId] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isVerifying, setIsVerifying] = useState<string | null>(null);
+
+  // Task 04c: the single manual billing form. There is deliberately no control
+  // anywhere in this panel that writes a subscription status or date directly.
+  const [confirmFor, setConfirmFor] = useState<RestaurantWithOwner | null>(null);
+  const [confirmAmount, setConfirmAmount] = useState('');
+  const [confirmMethod, setConfirmMethod] = useState<string>('BANK_TRANSFER');
+  const [confirmPeriod, setConfirmPeriod] = useState<number>(30);
+  const [confirmRef, setConfirmRef] = useState('');
+  const [confirmNote, setConfirmNote] = useState('');
+  const [confirmProof, setConfirmProof] = useState('');
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const API_BASE = (typeof window !== 'undefined' ? window.location.origin + '/api' : 'http://localhost:3001/api');
 
@@ -147,7 +178,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
         ownerName: r.staff?.[0]?.name || 'N/A',
         staffCount: r._count?.staff ?? 0,
         orderCount: r._count?.orders ?? 0,
-        createdAt: r.created_at
+        createdAt: r.created_at,
+        subscriptionExpiresAt: r.subscription_expires_at ?? null,
+        subscriptionStatusEnum: r.subscription_status ?? null
       }));
 
       setRestaurants(formatted);
@@ -185,6 +218,56 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
       alert(err.message);
     } finally {
       setIsVerifying(null);
+    }
+  };
+
+  const handleConfirmPayment = async () => {
+    if (!confirmFor) return;
+
+    const amount = Number(confirmAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert('Enter the amount actually received.');
+      return;
+    }
+
+    try {
+      setConfirmBusy(true);
+      const response = await fetchWithAuth(
+        `${API_BASE}/super-admin/tenants/${confirmFor.id}/confirm-payment`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount,
+            paymentMethod: confirmMethod,
+            periodDays: confirmPeriod,
+            transactionRef: confirmRef.trim() || undefined,
+            note: confirmNote.trim() || undefined,
+            proofReference: confirmProof.trim() || undefined,
+          })
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Payment confirmation failed');
+
+      const until = new Date(data.periodEnd).toLocaleDateString();
+      const verb = data.extendedExistingPeriod ? 'extended' : 'activated';
+      alert(
+        `Payment confirmed. ${confirmFor.name} ${verb} until ${until} ` +
+        `(${data.fromStatus} -> ${data.toStatus}).`
+      );
+
+      setConfirmFor(null);
+      setConfirmAmount('');
+      setConfirmRef('');
+      setConfirmNote('');
+      setConfirmProof('');
+      fetchData();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setConfirmBusy(false);
     }
   };
 
@@ -343,6 +426,127 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
 
         {activeTab === 'restaurants' && (
           <div className="space-y-6 animate-in fade-in duration-500">
+            {confirmFor && (
+              <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-6 space-y-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-white font-black text-lg">Confirm Payment &amp; Activate / Extend</h3>
+                    <p className="text-slate-500 text-xs mt-1">
+                      {confirmFor.name} &middot; current status{' '}
+                      <span className="text-slate-300 font-bold">{confirmFor.subscriptionStatusEnum || confirmFor.subscription_status}</span>
+                      {' '}·{' '}
+                      {confirmFor.subscriptionExpiresAt
+                        ? `expires ${new Date(confirmFor.subscriptionExpiresAt).toLocaleDateString()}`
+                        : 'no expiry on record'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setConfirmFor(null)}
+                    disabled={confirmBusy}
+                    className="text-slate-500 hover:text-white transition-colors"
+                    title="Cancel"
+                  >
+                    <XCircle size={22} />
+                  </button>
+                </div>
+
+                <p className="text-slate-500 text-xs">
+                  Record only what the customer actually paid. The server decides the new expiry:
+                  a running subscription is extended, an expired one restarts from today.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Amount received</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={confirmAmount}
+                      onChange={(e) => setConfirmAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="mt-2 w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white outline-none focus:border-emerald-500/50 transition-all"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Payment method</span>
+                    <select
+                      value={confirmMethod}
+                      onChange={(e) => setConfirmMethod(e.target.value)}
+                      className="mt-2 w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white outline-none focus:border-emerald-500/50 transition-all"
+                    >
+                      {PAYMENT_METHODS.map(m => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Subscription period</span>
+                    <select
+                      value={confirmPeriod}
+                      onChange={(e) => setConfirmPeriod(Number(e.target.value))}
+                      className="mt-2 w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white outline-none focus:border-emerald-500/50 transition-all"
+                    >
+                      {PAYMENT_PERIODS.map(p => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Reference (optional)</span>
+                    <input
+                      type="text"
+                      value={confirmRef}
+                      onChange={(e) => setConfirmRef(e.target.value)}
+                      placeholder="TX-12345"
+                      className="mt-2 w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Payment note (optional)</span>
+                    <input
+                      type="text"
+                      value={confirmNote}
+                      onChange={(e) => setConfirmNote(e.target.value)}
+                      placeholder="Paid via WhatsApp"
+                      className="mt-2 w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Proof reference (optional)</span>
+                    <input
+                      type="text"
+                      value={confirmProof}
+                      onChange={(e) => setConfirmProof(e.target.value)}
+                      placeholder="WhatsApp thread 8842"
+                      className="mt-2 w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-white outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
+                    />
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleConfirmPayment}
+                    disabled={confirmBusy}
+                    className="px-6 py-3 rounded-xl text-sm font-black bg-emerald-500 hover:bg-emerald-600 text-black transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {confirmBusy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                    Confirm Payment &amp; Activate
+                  </button>
+                  <span className="text-slate-600 text-xs">
+                    A reference can only be confirmed once.
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-between items-center gap-4">
               <div className="flex-1 relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
@@ -414,6 +618,13 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({ onEnterRestauran
                         </button>
                       );
                     })()}
+                    <button
+                      onClick={() => setConfirmFor(r)}
+                      className="px-4 py-2 rounded-lg text-sm font-black flex items-center gap-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 transition-all"
+                      title="Confirm a payment the customer made and activate or extend the subscription"
+                    >
+                      Confirm Payment
+                    </button>
                     <button
                       onClick={() => handleDeleteRestaurant(r)}
                       disabled={isDeleting === r.id}

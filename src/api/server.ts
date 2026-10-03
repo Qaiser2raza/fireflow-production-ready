@@ -3381,18 +3381,16 @@ app.use('/api/platform', platformRoutes);
 
 app.use('/api', protectedApiRouter);
 
-// Standalone subscription_payments route — queries Supabase cloud (table not in local DB)
+// Subscription payments — LOCAL PostgreSQL (Task 04c).
+// This used to query Supabase cloud on the claim that the table was not in the
+// local DB; it is (see prisma/schema.prisma), and the local restaurants row is
+// the subscription source of truth, so an admin reviewing a payment must be
+// reading the same row the activation wrote.
 app.get('/api/subscription_payments', authMiddleware, requireRole('SUPER_ADMIN'), async (_req, res) => {
     try {
-        const { getSupabaseClient } = await import('../shared/lib/cloudClient');
-        const cloud = getSupabaseClient();
-        const { data, error } = await cloud
-            .from('subscription_payments')
-            .select('*')
-            .order('created_at', { ascending: false });
-        if (error) {
-            return res.status(500).json({ error: error.message });
-        }
+        const data = await prisma.subscription_payments.findMany({
+            orderBy: { created_at: 'desc' },
+        });
         res.json(data || []);
     } catch (e: any) {
         console.error('[SUPER ADMIN] GET /subscription_payments error:', e.message);

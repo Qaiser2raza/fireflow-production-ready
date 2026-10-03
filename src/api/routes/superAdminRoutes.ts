@@ -1,13 +1,20 @@
 /**
  * Super Admin Routes
  * Handles SaaS management endpoints: licenses, payments, restaurants overview
- * License keys and payments are stored in Supabase cloud (not local Prisma).
+ * License keys are still read from Supabase cloud. Subscription PAYMENTS are
+ * local PostgreSQL records (Task 04c): the local `restaurants` row is the
+ * subscription source of truth, so payment confirmation never crosses the cloud
+ * boundary.
  */
 
 import { Router } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { superAdminService } from '../services/SuperAdminService';
+import {
+  confirmSubscriptionPayment,
+  ConfirmPaymentError,
+} from '../services/tenant/confirmSubscriptionPayment';
 import { authMiddleware, requireRole } from '../middleware/authMiddleware';
 import { prisma } from '../../shared/lib/prisma';
 
@@ -133,6 +140,55 @@ router.post('/payments/verify', async (req, res) => {
     } catch (err: any) {
         console.error('[SUPER ADMIN] POST /payments/verify error:', err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * POST /api/super-admin/tenants/:restaurantId/confirm-payment
+ *
+ * Task 04c: the single manual billing action. Records the payment the customer
+ * actually made and activates or extends the subscription through
+ * `setSubscriptionStatus`. This route never writes subscription status or dates
+ * itself, and there is deliberately no route that edits them directly.
+ *
+ * Body: {
+ *   "amount": 2500,                       // amount actually received
+ *   "paymentMethod": "BANK_TRANSFER",     // BANK_TRANSFER | EASYPAISA | JAZZCASH | CASH | OTHER
+ *   "periodDays": 30,                     // 30 | 90 | 180 | 365
+ *   "transactionRef": "TX-12345",         // optional; also the duplicate key
+ *   "note": "paid via WhatsApp",          // optional
+ *   "proofReference": "wa thread 8842",   // optional
+ *   "paymentDate": "2026-10-01"           // optional, not in the future
+ * }
+ */
+router.post('/tenants/:restaurantId/confirm-payment', async (req, res) => {
+    try {
+        // authMiddleware populates this; fail closed rather than confirming a
+        // payment on behalf of an unidentified actor.
+        if (!req.staffId) {
+            return res.status(401).json({ error: 'Authentication required', code: 'UNAUTHENTICATED' });
+        }
+        const result = await confirmSubscriptionPayment(prisma, {
+            restaurantId: req.params.restaurantId,
+            amount: req.body?.amount,
+            paymentMethod: req.body?.paymentMethod,
+            periodDays: req.body?.periodDays,
+            transactionRef: req.body?.transactionRef ?? null,
+            note: req.body?.note ?? null,
+            proofReference: req.body?.proofReference ?? null,
+            paymentDate: req.body?.paymentDate ?? null,
+            adminId: req.staffId,
+        });
+
+        res.json({ success: true, ...result });
+    } catch (err: any) {
+        if (err instanceof ConfirmPaymentError) {
+            return res.status(err.statusCode).json({ error: err.message, code: err.code });
+        }
+        // A failed activation must be loud: swallowing it here would leave a
+        // verified payment row with no corresponding subscription event.
+        console.error('[SUPER ADMIN] POST /tenants/:restaurantId/confirm-payment error:', err);
+        res.status(500).json({ error: err.message || 'Payment confirmation failed' });
     }
 });
 

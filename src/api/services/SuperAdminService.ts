@@ -1,4 +1,6 @@
 import { prisma } from '../../shared/lib/prisma';
+import { setSubscriptionStatus } from './tenant/setSubscriptionStatus';
+import { confirmSubscriptionPayment } from './tenant/confirmSubscriptionPayment';
 import { logger, LogLevel } from '../../shared/lib/logger';
 import { getSupabaseClient } from '../../shared/lib/cloudClient';
 import crypto from 'crypto';
@@ -146,11 +148,19 @@ export class SuperAdminService {
             }
         });
 
-        // Update restaurant subscription status
+        // Task 04: status goes through the single writer, so the status change and
+        // its subscription_events row are committed together.
+        await setSubscriptionStatus(prisma, {
+            restaurantId,
+            toStatus: 'ACTIVE',
+            actorType: 'SUPER_ADMIN',
+            actorId: null,
+            reason: 'license_applied',
+        });
+
         await prisma.restaurants.update({
             where: { id: restaurantId },
             data: {
-                subscription_status: 'active',
                 subscription_plan: license.license_type || 'STANDARD'
             }
         });
@@ -234,74 +244,101 @@ export class SuperAdminService {
     }
 
     /**
-     * Verify or Reject a subscription payment (stored in Supabase cloud)
+     * Verify or Reject a subscription payment.
+     *
+     * Task 04c: this used to read and write `subscription_payments` in Supabase
+     * cloud and then poke `restaurants_cloud`. Both are wrong now — the local
+     * `restaurants` row is the subscription source of truth — so the whole method
+     * is local and delegates the activating half to `confirmSubscriptionPayment`,
+     * which is the only path that may grant a period.
+     *
+     * `POST /tenants/:restaurantId/confirm-payment` is the primary action; this
+     * endpoint stays for confirming an already-filed evidence row by id and for
+     * rejecting one.
      */
     async verifyPayment(paymentId: string, status: 'verified' | 'rejected', adminId?: string) {
-        const cloud = getSupabaseClient();
+        const payment = await prisma.subscription_payments.findUnique({
+            where: { id: paymentId },
+            select: {
+                id: true,
+                restaurant_id: true,
+                amount: true,
+                payment_method: true,
+                billing_period: true,
+                status: true,
+            },
+        });
 
-        // 1. Fetch payment from cloud
-        const { data: payment, error: fetchError } = await cloud
-            .from('subscription_payments')
-            .select('*')
-            .eq('id', paymentId)
-            .single();
-
-        if (fetchError || !payment) {
-            throw new Error(`Payment not found in cloud: ${fetchError?.message || 'unknown error'}`);
+        if (!payment) {
+            throw new Error(`Payment not found: ${paymentId}`);
         }
 
-        // 2. Update payment status in cloud
-        const { data: updatedPayment, error: updateError } = await cloud
-            .from('subscription_payments')
-            .update({
-                status,
-                verified_at: new Date().toISOString(),
-                verified_by: adminId || 'SYSTEM_ADMIN'
-            })
-            .eq('id', paymentId)
-            .select()
-            .single();
+        const verifier = adminId || null;
 
-        if (updateError) {
-            throw new Error(`Failed to update payment: ${updateError.message}`);
-        }
-
-        // 3. If verified, also update cloud restaurants_cloud table + local restaurants table
-        if (status === 'verified') {
-            const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-            // Update cloud record
-            await cloud
-                .from('restaurants_cloud')
-                .update({
-                    subscription_status: 'active',
-                    subscription_expires_at: expiresAt.toISOString()
-                })
-                .eq('restaurant_id', payment.restaurant_id);
-
-            // Also update local restaurant record so the POS reflects active status
-            try {
-                await prisma.restaurants.update({
-                    where: { id: payment.restaurant_id },
-                    data: {
-                        subscription_status: 'active',
-                        subscription_expires_at: expiresAt
-                    }
-                });
-            } catch (localErr: any) {
-                console.warn('[SUPER ADMIN] Could not update local restaurant status:', localErr.message);
-            }
+        if (status === 'rejected') {
+            // A rejection is a decision about the payment only. It never changes
+            // the tenant's status.
+            const rejected = await prisma.subscription_payments.update({
+                where: { id: payment.id },
+                data: {
+                    status: 'rejected',
+                    verified_at: new Date(),
+                    ...(verifier ? { verified_by: verifier } : {}),
+                },
+            });
 
             logger.log({
                 level: LogLevel.INFO,
                 service: 'super-admin',
-                action: 'payment_verified',
+                action: 'payment_rejected',
                 restaurant_id: payment.restaurant_id,
-                metadata: { paymentId, amount: payment.amount }
+                metadata: { paymentId: payment.id }
             });
+
+            return rejected;
         }
 
-        return updatedPayment;
+        const confirmed = await confirmSubscriptionPayment(prisma, {
+            restaurantId: payment.restaurant_id,
+            amount: payment.amount.toString(),
+            paymentMethod: payment.payment_method || 'OTHER',
+            periodDays: periodDaysFromBillingPeriod(payment.billing_period),
+            transactionRef: null, // the row already exists; do not re-key it
+            adminId: verifier || 'SYSTEM_ADMIN',
+        });
+
+        logger.log({
+            level: LogLevel.INFO,
+            service: 'super-admin',
+            action: 'payment_verified',
+            restaurant_id: payment.restaurant_id,
+            metadata: { paymentId: payment.id, amount: payment.amount.toString() }
+        });
+
+        return confirmed;
+    }
+}
+
+/**
+ * Task 04c: legacy evidence rows stored a human billing period ('monthly').
+ * Only the four manual periods are grantable, so an unknown label falls back to
+ * 30 days and the admin can see the resulting dates and correct them.
+ */
+function periodDaysFromBillingPeriod(billingPeriod: string | null): 30 | 90 | 180 | 365 {
+    switch ((billingPeriod || '').trim().toLowerCase()) {
+        case '90d':
+        case 'quarterly':
+        case 'quarter':
+            return 90;
+        case '180d':
+        case 'biannual':
+            return 180;
+        case '365d':
+        case 'yearly':
+        case 'annual':
+            return 365;
+        default:
+            return 30;
     }
 }
 
